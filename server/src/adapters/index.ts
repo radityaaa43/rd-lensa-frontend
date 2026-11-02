@@ -3,17 +3,34 @@ import type { ModelId } from '../domain.ts';
 
 // Each adapter module (stealth.ts, noto.ts, zeto.ts, fabricx.ts, iroha3.ts) exports load(); null when its state file is missing.
 // `only` restricts which models are loaded (tests); `stateDir` is handed to each load().
-export async function loadAdapters(opts: { only?: ModelId[]; stateDir?: string } = {}): Promise<Partial<Record<ModelId, ModelAdapter>>> {
-  const out: Partial<Record<ModelId, ModelAdapter>> = {};
+export type Adapters = Partial<Record<ModelId, ModelAdapter>>;
+export type LoadFailures = Partial<Record<ModelId, string>>; // model -> text safe to show in the UI
+type Module = { load(stateDir?: string): Promise<ModelAdapter | null> };
+
+// A load() that throws (broken state file, missing build output…) takes only ITS model out: the others still load, the full error goes
+// to the server log, and the UI gets a fixed text (an fs error message carries the path, so only its code is shown).
+export async function loadAdaptersWithFailures(
+  opts: { only?: ModelId[]; stateDir?: string; importModule?: (m: ModelId) => Promise<Module> } = {},
+): Promise<{ adapters: Adapters; failures: LoadFailures }> {
+  const adapters: Adapters = {};
+  const failures: LoadFailures = {};
+  const importModule = opts.importModule ?? ((m: ModelId) => import(`./${m}.ts`) as Promise<Module>);
   for (const m of opts.only ?? (['stealth', 'noto', 'zeto', 'fabricx', 'iroha3'] as const)) {
     try {
-      const a = await ((await import(`./${m}.ts`)) as { load(stateDir?: string): Promise<ModelAdapter | null> }).load(opts.stateDir);
-      if (a) out[m] = a;
+      const a = await (await importModule(m)).load(opts.stateDir);
+      if (a) adapters[m] = a;
     } catch (e) {
-      if (!isMissing(e, `${m}.ts`)) throw e;
+      if (isMissing(e, `${m}.ts`)) continue;
+      console.error(`[adapters] ${m} gagal dimuat:`, e);
+      const code = (e as { code?: unknown }).code;
+      failures[m] = `Gagal dimuat: ${typeof code === 'string' && /^E[A-Z]+$/.test(code) ? `berkas tidak terbaca (${code})` : 'lihat log server'}`; // only fs error codes are shown
     }
   }
-  return out;
+  return { adapters, failures };
+}
+
+export async function loadAdapters(opts: { only?: ModelId[]; stateDir?: string } = {}): Promise<Adapters> {
+  return (await loadAdaptersWithFailures(opts)).adapters;
 }
 
 // "Not built yet" = the module file itself is absent, not one of its own imports.

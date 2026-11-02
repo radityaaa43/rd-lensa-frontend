@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
-import type { Capability, Counterparty, FlowResult, LensView, ModelAdapter, StepEvent } from '../adapter.ts';
-import { CANCELLED, LOAD_AMOUNT, NotAvailableError } from '../adapter.ts';
-import { BANKS, FLOWS, PRICE_PER_UNIT, roleOf, type BankId, type FlowId, type PartyId } from '../domain.ts';
+import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, StepEvent } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
+import { besuNetwork } from './besu-network.ts';
+import { BANKS, FLOWS, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type PartyId } from '../domain.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import type { Sample } from '../stats.ts';
 import { readState, writeState } from '../state.ts';
@@ -33,6 +34,12 @@ const TX_MS = 120_000;
 const HEALTH_MS = 2000;
 const ESCROW_TTL = 600n; // seconds; the escrow is settled right away, the window only has to outlast the run
 const NO_BALANCE = 'Saldo di satu alamat stealth tidak cukup';
+// History window (ARCHITECTURE.md §2.3). Measured 2026-11-02 against the live Besu: block time 2.0 s, head 1,965,520, a 1000-block
+// eth_getLogs page takes 5-15 ms and the announcer holds about 7 announcements per 1000 blocks. 100,000 blocks is about 2.3 days of
+// chain, 100 pages per token (about 1-2 s cold, incremental after) and about 700 announcements to scan per bank. Transactions older
+// than the window are visible to no party (the UI labels the window).
+export const STEALTH_HISTORY_BLOCKS = 100_000;
+const LOG_PAGE = 1000; // Besu rejects eth_getLogs spans of 5000 (chain.ts)
 const lc = (s: string) => s.toLowerCase();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -129,6 +136,61 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
   }
 
   const parse = (kind: 'rd' | 'bond', md: string) => (kind === 'rd' ? parseTokenMetadata(md) : parseBondMetadata(md));
+
+  // What a bank received: its stealth addresses among the announcements of the window, scanned incrementally (the cache only grows).
+  // What it sent: a bank's own sends are not in the announcement log (the memo is encrypted to the receiver); the token Transfer logs
+  // of the window show every spend. Instead of scanning every announcement ever made, only the announcements of the addresses
+  // that SPENT in the window are tested with the bank's keys (a spender is controlled by the bank iff it derives from one of them).
+  const receivedCache = new Map<BankId, { n: number; set: Set<string> }>();
+  async function receivedBy(bank: BankId, lo: number): Promise<Set<string>> {
+    const anns = await refresh();
+    const c = receivedCache.get(bank) ?? { n: Math.max(0, anns.findIndex((a) => a.blockNumber >= lo) === -1 ? anns.length : anns.findIndex((a) => a.blockNumber >= lo)), set: new Set<string>() };
+    if (c.n < anns.length) { for (const f of scan(anns.slice(c.n), banks[bank].viewKey, banks[bank].spendKey)) c.set.add(lc(f.stealthAddress)); c.n = anns.length; }
+    receivedCache.set(bank, c);
+    return c.set;
+  }
+  const spends = { upTo: -1, byTx: new Map<string, Set<string>>() }; // tx hash -> the `from` addresses of its token Transfer logs (lower-case)
+  let spendsTail: Promise<unknown> = Promise.resolve(); // one scan at a time: parallel callers would read the same pages twice
+  const spendsSince = (lo: number, head: number) => { const r = spendsTail.then(() => readSpends(lo, head)); spendsTail = r.catch(() => {}); return r; };
+  async function readSpends(lo: number, head: number) {
+    if (spends.upTo < 0) spends.upTo = lo - 1;
+    for (let from = spends.upTo + 1; from <= head; from += LOG_PAGE) {
+      const to = Math.min(from + LOG_PAGE - 1, head);
+      for (const token of [reader.rd, reader.bond]) {
+        for (const l of await token.queryFilter(token.filters.Transfer(), from, to)) {
+          const set = spends.byTx.get(l.transactionHash) ?? new Set<string>();
+          set.add(lc((l as unknown as { args: { from: string } }).args.from));
+          spends.byTx.set(l.transactionHash, set);
+        }
+      }
+      spends.upTo = Math.max(spends.upTo, to); // per page: an RPC failure later keeps what was read
+    }
+    return spends.byTx;
+  }
+  const controlled = new Map<BankId, Map<string, boolean>>(); // per bank: spender address -> derives from one of its announcements?
+  async function sentTxs(bank: BankId, lo: number, head: number): Promise<Set<string>> {
+    const byTx = await spendsSince(lo, head);
+    const known = controlled.get(bank) ?? new Map<string, boolean>();
+    for (const [k, es] of Object.entries(state.pool)) if (k.startsWith(`${bank}>`)) for (const e of es) known.set(lc(e.stealthAddress), true);
+    const unknown = new Set([...byTx.values()].flatMap((s) => [...s]).filter((x) => !known.has(x)));
+    if (unknown.size) {
+      const cands = (await refresh()).filter((a) => unknown.has(lc(a.stealthAddress)));
+      const mine = new Set(scan(cands, banks[bank].viewKey, banks[bank].spendKey).map((f) => lc(f.stealthAddress)));
+      for (const x of unknown) known.set(x, mine.has(x));
+    }
+    controlled.set(bank, known);
+    return new Set([...byTx].filter(([, es]) => [...es].some((x) => known.get(x))).map(([tx]) => tx));
+  }
+  const blockTime = new Map<number, string>(); // block times never change
+  async function atOf(block: number): Promise<string> {
+    const hit = blockTime.get(block);
+    if (hit) return hit;
+    const b = await provider.getBlock(block);
+    if (!b) throw new Error(`Block ${block} tidak ditemukan`);
+    const at = new Date(b.timestamp * 1000).toISOString();
+    blockTime.set(block, at);
+    return at;
+  }
   const txAnnouncements = async (block: number, txHash: string, kind: 'rd' | 'bond') =>
     (await announcements(provider, d, block, null, block)).filter((a) => a.txHash === txHash && parse(kind, a.metadata) !== null);
   const onChain = (txHash: string, stealthAddress: string, memo: string, amount: bigint) => [
@@ -273,6 +335,69 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
     return view(outsiderVerdict(hits, opened), md.amount, null, `scanView (${hits} hasil) + openMemo (${opened ? 'terbuka' : 'null'})`);
   }
 
+  // The party's own read of every RD / DFABI transaction in the window (ARCHITECTURE.md §2.3).
+  //   bank:   a payment it received (found with its view + spend key) or sent (a token Transfer from an address it controls) is clear;
+  //           every other announcement is partial: token and amount are public in the log, the parties are not (outsiderVerdict
+  //           still checks that its own keys read nothing). A sender cannot read the receiver's memo, so `to` of a plain send is null;
+  //           in a dvp the seller reads the RD leg paid to it and so names the buyer.
+  //   BI:     biRows with the banks' view keys -> viewkey; its own issuance (sender BI) is clear.
+  async function history(party: PartyId, limit: number): Promise<HistoryItem[]> {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error('limit harus bilangan bulat >= 1');
+    const want = Math.min(limit, HISTORY_MAX);
+    const anns = await refresh();
+    const head = anns.length ? Math.max(upTo, anns[anns.length - 1]!.blockNumber) : upTo;
+    const lo = Math.max(d.fromBlock, head - STEALTH_HISTORY_BLOCKS + 1);
+    type Group = { block: number; rd?: LoggedAnnouncement; bond?: LoggedAnnouncement };
+    const groups = new Map<string, Group>();
+    for (const a of anns) {
+      if (a.blockNumber < lo) continue;
+      const kind = lc(a.caller) === lc(d.rd) ? 'rd' : lc(a.caller) === lc(d.bond) ? 'bond' : null;
+      if (!kind) continue;
+      const g = groups.get(a.txHash) ?? { block: a.blockNumber };
+      g[kind] ??= a;
+      groups.set(a.txHash, g);
+    }
+    // newest block first; inside a block the later announcement first (the cache keeps log order)
+    const order = new Map([...groups.keys()].map((h, i) => [h, i]));
+    const newest = [...groups].sort((x, y) => y[1].block - x[1].block || order.get(y[0])! - order.get(x[0])!).slice(0, want);
+    const bank = party === 'BI' ? null : (party as BankId);
+    const mine = bank ? await receivedBy(bank, lo) : new Set<string>();
+    const sent = bank ? await sentTxs(bank, lo, head) : new Set<string>();
+
+    return Promise.all(newest.map(async ([txHash, g]): Promise<HistoryItem> => {
+      const kind = g.bond ? 'bond' : 'rd';
+      const main = (g.bond ?? g.rd)!;
+      const dvp = !!(g.rd && g.bond);
+      const md = parse(kind, main.metadata)!;
+      const amount = md.amount.toString();
+      const rdAmount = dvp ? parse('rd', g.rd!.metadata)!.amount.toString() : null;
+      const base = { id: txHash, at: await atOf(g.block), block: g.block, rdAmount, amount, asset: (kind === 'rd' ? 'RD' : 'DFABI') as 'RD' | 'DFABI' };
+      const flowOf = (issue: boolean): FlowId => (dvp ? 'dvp' : (`${kind === 'rd' ? 'rd' : 'dfabi'}-${issue ? 'issue' : 'transfer'}` as FlowId));
+
+      if (!bank) { // BI: the banks' view keys
+        const row = biRows(chainId, [main], holders, kind)[0];
+        if (!row) return { ...base, flow: null, role: 'regulator', verdict: 'partial', counterparty: null }; // addressed to none of the banks: only token and amount are readable
+        const counterparty: Counterparty = { from: partyOf(row.sender), to: row.bank as BankId };
+        const issue = !dvp && counterparty.from === 'BI';
+        return { ...base, flow: flowOf(issue), asset: base.asset, role: roleFromParties('BI', counterparty, issue), verdict: issue ? 'clear' : 'viewkey', counterparty };
+      }
+      const k = banks[bank];
+      const gotMain = mine.has(lc(main.stealthAddress));
+      const gotRd = !!g.rd && mine.has(lc(g.rd.stealthAddress));
+      if (gotMain || gotRd || sent.has(txHash)) {
+        const counterparty: Counterparty = gotMain
+          ? { from: partyOf(read(chainId, main, k.viewKey, kind).sender), to: bank }
+          : { from: bank, to: gotRd ? partyOf(read(chainId, g.rd!, k.viewKey, 'rd').sender) : null };
+        const issue = !dvp && counterparty.from === 'BI';
+        return { ...base, flow: flowOf(issue), role: roleFromParties(party, counterparty, issue), verdict: 'clear', counterparty };
+      }
+      // Not its payment: the same checks lens() runs for an outsider.
+      const hits = scanView([main], { id: party, viewKey: k.viewKey, metaAddress: k.metaAddress }).length;
+      const opened = openMemo(md.memo, k.viewKey, { chainId, token: md.token, stealthAddress: main.stealthAddress, amount: md.amount, ephemeralPubKey: main.ephemeralPubKey, partition: (md as { partition?: string }).partition });
+      return { ...base, flow: null, role: 'outsider', verdict: outsiderVerdict(hits, opened), counterparty: null };
+    }));
+  }
+
   // Funds `count` fresh stealth addresses of `bank` with exactly LOAD_AMOUNT RD each (BI mints) and records their keys.
   async function fund(bank: BankId, to: BankId, count: number) {
     const gp = await gasPrice();
@@ -314,8 +439,8 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
     },
     run,
     lens,
-    history: async () => { throw new NotAvailableError('Riwayat belum tersedia'); }, // step 0 stub (ARCHITECTURE.md §5), replaced per §2.3
-    network: async () => { throw new NotAvailableError('Status jaringan belum tersedia'); },
+    history,
+    network: () => besuNetwork({ paladin: false }),
     async loadCapacity() {
       return 3 * Math.min(...PAIRS.map(([a, b]) => unused(a, b).length));
     },
@@ -356,5 +481,10 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
 
 export async function load(): Promise<ModelAdapter | null> {
   const s = readState<StealthState>('stealth');
-  return s ? createStealthAdapter(s) : null;
+  if (!s) return null;
+  const adapter = createStealthAdapter(s);
+  // The first read of the announcement cache walks every block since the deploy (about 9 s on the live chain). Start it now, in the
+  // background, so the first history() or lens() finds it warm; a failure here just means the first real call pays and reports it.
+  void adapter.history('BI', 1).catch(() => {});
+  return adapter;
 }

@@ -173,6 +173,8 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     try {
       const items = await withDeadline(a.history(party, limit), HISTORY_MS, 'Riwayat');
       if (items.truncated) reply.header('x-history-truncated', '1');
+      // v1.3: fresh txs this party's node holds back (not indexed yet); Lensa must not call them absent
+      if (items.pending?.length) reply.header('x-history-pending', items.pending.join(','));
       return [...items];
     } catch (e) {
       if (e instanceof NotAvailableError) return reply.code(501).send({ reason: e.message });

@@ -51,24 +51,13 @@ const LOCK_SPENT_TOPIC = '0x1c3e771c022f9501e48b0c09f0bac40132cc0aac211f5b33e3db
 const RECEIPT_PAGE = 100;
 // ponytail: page cap on the receipt scan, add a contract-level index if real volume needs it
 const SCAN_PAGES_MAX = 3;
-const RECORD_WAIT_MS = 10_000; // a node gets the private state a moment after the receipt: a fresh unreadable tx is left out, not sealed
-const FRESH_BLOCKS = 5; // "fresh": within this many blocks of the newest receipt of the scan
 const EVENT_CHUNK = 25; // tx hashes per event query
 const EVENT_LIMIT = 1000;
 const READ_GROUPS = 4; // groups (at most 2 legs each) read in parallel
 
-// The receipts of one page of the scan. When the page is full its oldest base-ledger tx may continue on the next page (the two legs of
-// a DvP are two receipts with one hash), so that tx's remaining receipts are fetched by hash and added: a DvP is never split in two.
-export interface ReceiptLike { id: string; sequence: number; transactionHash: string; blockNumber: number; source: string }
-export async function receiptPage<R extends ReceiptLike>(
-  client: { ptx: { queryTransactionReceipts(q: object): Promise<R[]> } }, query: object, pageSize: number, sources: string[],
-): Promise<R[]> {
-  const rows = await client.ptx.queryTransactionReceipts(query);
-  if (rows.length < pageSize) return rows;
-  const oldest = rows[rows.length - 1]!.transactionHash;
-  const rest = await client.ptx.queryTransactionReceipts({ limit: 10, eq: [{ field: 'transactionHash', value: oldest }], in: [{ field: 'source', values: sources }] });
-  return [...rows, ...rest.filter((r) => !rows.some((x) => x.id === r.id))];
-}
+export { receiptPage, type ReceiptLike } from './besu-network.ts';
+import type { ReceiptLike } from './besu-network.ts';
+import { holdBack, receiptPage } from './besu-network.ts';
 
 export interface NotoLeg { source: 'cash' | 'bond'; read: NotoTxView }
 export interface NotoGroup { hash: string; block: number; at: string | null; legs: NotoLeg[]; dvp?: boolean } // dvp: the events say two locks were spent
@@ -124,10 +113,11 @@ export interface NotoScan {
   pageSize?: number;
 }
 
-export async function notoHistory(party: PartyId, want: number, c: NotoScan): Promise<HistoryItem[] & { truncated?: true }> {
+export async function notoHistory(party: PartyId, want: number, c: NotoScan): Promise<HistoryItem[] & { truncated?: true; pending?: string[] }> {
   const now = c.now ?? Date.now;
   const pageSize = c.pageSize ?? RECEIPT_PAGE;
   const items: HistoryItem[] = [];
+  const pending: string[] = []; // held back as too fresh to call sealed
   const done = new Set<string>(); // base-ledger txs already handled: a completed boundary tx shows up again on the next page
   let cursor: number | undefined;
   let newest: number | undefined;
@@ -183,16 +173,14 @@ export async function notoHistory(party: PartyId, want: number, c: NotoScan): Pr
         if (!legs.some((l) => l.read.visible)) {
           // Neither sealed nor listed while it is fresh: the node stores the private state a moment after the receipt. Age is this
           // process's own first-seen moment (a validator's block time would add clock skew), and a missing block time never seals.
-          const key = `${party}|${hash}`;
-          const seen = c.cache.firstSeen.get(key) ?? (c.cache.firstSeen.set(key, now()), now());
-          if (rs[0]!.blockNumber >= (newest ?? 0) - FRESH_BLOCKS && now() - seen < RECORD_WAIT_MS) return;
+          if (holdBack(c.cache.firstSeen, `${party}|${hash}`, rs[0]!.blockNumber, newest ?? 0, now())) { pending.push(hash); return; }
         }
         const item = notoItem(party, { hash, block: rs[0]!.blockNumber, at: info.at, legs, dvp: info.lockSpent >= 2 }, c.known);
         if (!items.some((x) => x.id === item.id)) items.push(item);
       });
     }
   }
-  return more && pages >= SCAN_PAGES_MAX && items.length < want ? Object.assign(items, { truncated: true as const }) : items;
+  return Object.assign(items, more && pages >= SCAN_PAGES_MAX && items.length < want ? { truncated: true as const } : {}, pending.length ? { pending } : {});
 }
 
 export function createNotoAdapter(dataDir: string): ModelAdapter {
@@ -314,7 +302,7 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
   }
 
   const notoCache = newNotoCache();
-  async function history(party: PartyId, limit: number): Promise<HistoryItem[] & { truncated?: true }> {
+  async function history(party: PartyId, limit: number): Promise<HistoryItem[] & { truncated?: true; pending?: string[] }> {
     if (!Number.isInteger(limit) || limit < 1) throw new Error('limit harus bilangan bulat >= 1');
     const p = await plat();
     const client = clientOf(p, party);

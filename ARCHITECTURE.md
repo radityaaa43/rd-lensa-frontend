@@ -135,6 +135,13 @@ export function roleFromParties(party: PartyId, cp: Counterparty | null, issuer:
   An adapter throws it when a platform has no source for the read (and the step 0 stubs throw
   it). The route maps it to 501 `{ reason: e.message }`. Any other throw stays 502. The UI shows
   501 as the neutral state "Belum tersedia di platform ini", with no retry.
+- **`x-history-pending: <id,id,…>`** header (v1.3, 2026-11-02). An adapter that holds back a
+  fresh unreadable tx (the R1 race rule: Fabric-X and Noto) lists those tx ids on the result as
+  `pending: string[]`, next to `truncated`. The route turns them into this header. Lensa never
+  claims "Tidak terlihat oleh pihak ini" for a pending id; it shows "Belum terindeks di node
+  pihak ini" and rechecks once after 10 s. Riwayat ignores the header. Reason: the live T7 run
+  saw an outsider's first call after a server start hold back a head tx, and Lensa wrongly
+  claimed absence.
 - **`x-history-truncated: 1`** header when the adapter's bounded scan hit its cap (§2.3). The
   adapter signals it by returning the array with a `truncated: true` property; the route turns
   that into the header.
@@ -249,11 +256,12 @@ retired. The live demo txs (blocks 121, 127) proved that `/v1/explorer/*` serves
 
 **Stealth** (`stealth.ts`)
 - **Received.** `scan` with the bank's view + spend key gives `clear`.
-- **Own sends.** These cannot be found in the announcement log. Use the token `Transfer` logs
-  whose `from` is a stealth address the bank controls (received ones plus `pool`). One `getLogs`
-  per 1000-block page, with the `from` topic set to the array of controlled addresses (OR), not
-  one call per address. Result: `clear`, counterparty `{ from: bank, to: <from the memo if
-  readable, else null> }`.
+- **Own sends** (as built, v2). These cannot be found in the announcement log. The adapter reads
+  every token `Transfer` log in the window, one `getLogs` per 1000-block page (incremental, with
+  progress kept per page), and keeps the logs whose `from` is a stealth address the bank derives
+  from its own keys (received ones plus `pool`). This filters on the client instead of using a
+  `from`-topic OR. R1 still holds: the match uses only the bank's own keys.
+  Result: `clear`, counterparty `{ from: bank, to: null }` (the memo is encrypted to the receiver).
 - **Everything else.** `partial`: amount public, counterparty null (`outsiderVerdict` holds).
 - **BI.** `biRows` with the view keys: `viewkey`.
 - **Window.** `STEALTH_HISTORY_BLOCKS`. blockhain measures the scan time and proposes the value.

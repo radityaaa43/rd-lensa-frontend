@@ -152,16 +152,22 @@ describe('iroha3 history', () => {
     expect((await adapter.network()).nodes).toHaveLength(4); // network() needs no operator key
   });
 
+  test('a missing operator toml reports the fs code, never the path', async () => {
+    const adapter = createIroha3Adapter(state, (async () => '{}') as Cli, { init: async () => { throw Object.assign(new Error("ENOENT: no such file or directory, open '/secret/dir/op-bi.toml'"), { code: 'ENOENT' }); } });
+    const err = await adapter.history('A', 5).catch((e: Error) => e);
+    expect((err as Error).message).toBe('Kunci operator Iroha 3 tidak dapat dimuat: berkas tidak terbaca (ENOENT)');
+  });
+
   test('page cap: more than SCAN_PAGES_MAX full pages sets truncated and stops at the oldest fetched row', async () => {
-    // limit 5 -> pages of 15 rows, 3 pages = 45 rows read of A's 60. Rows 0 and 1 are movements, the rest are unlisted grants.
-    const long = Array.from({ length: 60 }, (_, i) => {
+    // pages of 100 rows (PAGE_ROWS), 3 pages = 300 rows read of A's 400. Rows 0 and 1 are movements, the rest are unlisted grants.
+    const long = Array.from({ length: 400 }, (_, i) => {
       const hash = i === 0 ? H.dvp : i === 1 ? H.transfer : i.toString(16).padStart(64, 'c');
       if (i > 1) BOX[hash] = { box: GRANT, authority: 'acct-B' };
-      return row(hash, 100_000 - i * 1000);
+      return row(hash, 1_000_000 - i * 1000);
     });
     const { adapter, calls } = setup({ lists: { 'acct-BI': [row(H.issue, 1000)], 'acct-A': long, 'acct-B': [], 'acct-C': [] } });
     const items = await adapter.history('C', 5);
-    expect(items.map((i) => i.id)).toEqual([H.dvp, H.transfer]); // the issue (ts 1000) is older than A's oldest fetched row (56000): not trusted
+    expect(items.map((i) => i.id)).toEqual([H.dvp, H.transfer]); // the issue (ts 1000) is older than A's oldest fetched row (701000): not trusted
     expect(items.truncated).toBe(true);
     expect(calls.filter((c) => decodeURIComponent(c.url.pathname).includes('acct-A')).length).toBe(3); // exactly SCAN_PAGES_MAX pages
     expect((await adapter.history('C', 2)).truncated).toBeUndefined(); // enough items before the cut: complete
@@ -176,7 +182,7 @@ describe('iroha3 history, Torii limits', () => {
     await withFakeTimers(async () => {
       let n = 0;
       const { adapter } = setup({ fetchFail: (u) => (u.pathname.includes('/transactions') ? (n++, tooBusy(0)) : undefined) });
-      const done = expect(adapter.history('A', 20)).rejects.toThrow(/429/);
+      const done = expect(adapter.history('A', 20)).rejects.toThrow('Node Iroha sedang sibuk, coba lagi'); // fixed Indonesian text, not the node's English body
       await vi.advanceTimersByTimeAsync(120_000);
       await done;
       expect(n).toBe(10);

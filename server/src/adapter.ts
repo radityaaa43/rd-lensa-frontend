@@ -39,7 +39,8 @@ export interface ModelAdapter {
   lens(req: FlowRequest, result: FlowResult, party: PartyId): Promise<LensView>;
   // Newest first, 1 <= limit <= HISTORY_MAX. Throws when the party's own read fails; never [] for an error.
   // truncated: the scan stopped at the adapter's page cap (ARCHITECTURE.md §2.3); the route turns it into x-history-truncated.
-  history(party: PartyId, limit: number): Promise<HistoryItem[] & { truncated?: true }>;
+  // pending: ids of txs the adapter held back instead of claiming "sealed" (the party's own read had not caught up yet); the route reports them.
+  history(party: PartyId, limit: number): Promise<HistoryItem[] & { truncated?: true; pending?: string[] }>;
   // Probes every node in parallel (3 s each); a failed probe is status 'down', never a rejection.
   network(): Promise<Network>;
   loadCapacity(): Promise<number>;

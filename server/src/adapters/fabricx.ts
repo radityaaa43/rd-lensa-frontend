@@ -69,11 +69,13 @@ export const kubectl = (s: FabricxState): Exec => async (args) => {
   try {
     return (await execFileP('kubectl', ['--kubeconfig', s.kubeconfig, '-n', s.namespace, ...args], { timeout: CALL_MS, maxBuffer: 32 << 20 })).stdout;
   } catch (e) {
-    const err = e as { stderr?: string; killed?: boolean; message: string };
+    const err = e as { stderr?: string; killed?: boolean; code?: number | string };
     if (err.killed) throw new Error(`Perintah kubectl tidak selesai dalam ${CALL_MS / 1000} detik`);
     // the driver ends a failed call with a "FAIL ..." line on stderr; everything else there is log noise
     const fail = (err.stderr ?? '').split('\n').filter((l) => l.startsWith('FAIL ')).pop();
-    throw new Error(fail ? fail.slice(5) : err.message.split('\n')[0]!);
+    if (!fail) console.error('[fabricx] kubectl gagal:', e); // the original (command line, kubeconfig path) stays in the server log
+    // Never the raw execFile message: it is the whole command line, kubeconfig path included, and this text reaches the browser.
+    throw new Error(fail ? fail.slice(5) : `kubectl gagal (kode ${err.code ?? 'tidak diketahui'})`);
   }
 };
 
@@ -230,7 +232,7 @@ export function createFabricxAdapter(exec: Exec) {
 
   const FRESH_BLOCKS = 2; // "at the ledger head": the newest block and the two before it
   const firstUnrecorded = new Map<string, number>(); // party|txId -> when this process first saw the tx without an own record
-  async function history(party: PartyId, limit: number): Promise<HistoryItem[]> {
+  async function history(party: PartyId, limit: number): Promise<HistoryItem[] & { pending?: string[] }> {
     if (!Number.isInteger(limit) || limit < 1) throw new Error('limit harus bilangan bulat >= 1');
     const want = Math.min(limit, HISTORY_MAX);
     // Own records for the newest HISTORY_MAX txs: any own tx among the newest `want` ledger txs is among them.
@@ -239,7 +241,8 @@ export function createFabricxAdapter(exec: Exec) {
     const byTx = new Map<string, HRec[]>();
     for (const r of records) byTx.set(r.txId, [...(byTx.get(r.txId) ?? []), r]);
     const head = ledger[0]?.block ?? 0;
-    return ledger.slice(0, want).flatMap(({ txId, block }): HistoryItem[] => {
+    const pending: string[] = []; // held back as too fresh to call sealed
+    const items = ledger.slice(0, want).flatMap(({ txId, block }): HistoryItem[] => {
       const rows = byTx.get(txId);
       if (!rows) {
         // The committer applies a block before the node stores its own record of it (lens() waits RECORDS_WAIT_MS for the same
@@ -247,12 +250,13 @@ export function createFabricxAdapter(exec: Exec) {
         // it has been seen unrecorded for RECORDS_WAIT_MS (first-seen moment: the DB has no block time). Older ones are sealed at once.
         const key = `${party}|${txId}`;
         const seen = firstUnrecorded.get(key) ?? (firstUnrecorded.set(key, Date.now()), Date.now());
-        if (block >= head - FRESH_BLOCKS && Date.now() - seen < RECORDS_WAIT_MS) return [];
+        if (block >= head - FRESH_BLOCKS && Date.now() - seen < RECORDS_WAIT_MS) { pending.push(txId); return []; }
         return [{ id: txId, at: null, block, flow: null, asset: null, role: roleFromParties(party, null, false), verdict: 'sealed', amount: null, rdAmount: null, counterparty: null }];
       }
       const item = ownItem(party, rows, block);
       return item ? [item] : []; // held but not a listed movement (pending, redeem)
     });
+    return pending.length ? Object.assign(items, { pending }) : items;
   }
 
   interface Pod { metadata: { name: string; deletionTimestamp?: string }; status: { phase?: string; conditions?: { type: string; status: string }[]; containerStatuses?: { restartCount: number }[] } }

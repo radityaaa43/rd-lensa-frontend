@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { ModelAdapter } from '../../src/adapter.ts';
 import { PARTIES, type FlowRequest, type PartyId } from '../../src/domain.ts';
-import { load } from '../../src/adapters/stealth.ts';
+import { createStealthAdapter, load, STEALTH_HISTORY_BLOCKS, type StealthState } from '../../src/adapters/stealth.ts';
+import { readState } from '../../src/state.ts';
 
 // Needs a bootstrapped stack: npm run bootstrap -- stealth (Besu at 127.0.0.1:8545). Run: npm run test:live -- test/live/stealth.live.ts
 let a: ModelAdapter;
@@ -71,5 +72,63 @@ describe('stealth adapter on Besu', () => {
     expect(await a.loadCapacity()).toBeGreaterThanOrEqual(6); // 3 pairs x (ceil(3/3)+1)
     const s = await a.transferForLoad('B', 'C', 1000n);
     expect(s.confirmedAt).toBeGreaterThan(s.submittedAt);
+  });
+});
+
+describe('stealth history + network live', () => {
+  const P: PartyId[] = ['BI', 'A', 'B', 'C'];
+  it('a fresh rd-transfer A->B: each party\'s item equals its lens (a sender cannot name the receiver, so `to` is null)', async () => {
+    const r = req('rd-transfer', 'A', 'B', 1000n);
+    const res = await a.run(r, 1000n, () => {});
+    const l = await lenses(r, res);
+    for (const p of P) {
+      const item = (await a.history(p, 20)).find((i) => i.id === res.txHash);
+      expect(item, `${p} history has the tx`).toBeDefined();
+      expect(item).toMatchObject({ verdict: l[p].verdict, amount: l[p].amount, role: l[p].role });
+      if (p === 'A') expect(item!.counterparty).toEqual({ from: 'A', to: null });
+      else expect(item!.counterparty).toEqual(l[p].counterparty);
+    }
+  });
+
+  it('a fresh dvp A->B: one item, DFABI leg as amount, the public RD announcement as rdAmount; the seller names the buyer', async () => {
+    const r = req('dvp', 'A', 'B', 3n);
+    const res = await a.run(r, 3n, () => {});
+    const l = await lenses(r, res);
+    for (const p of P) {
+      const item = (await a.history(p, 20)).find((i) => i.id === res.txHash);
+      expect(item, `${p} history has the dvp`).toBeDefined();
+      expect(item).toMatchObject({ verdict: l[p].verdict, amount: l[p].amount, rdAmount: l[p].rdAmount, role: l[p].role });
+    }
+    const itemA = (await a.history('A', 20)).find((i) => i.id === res.txHash)!;
+    expect(itemA).toMatchObject({ flow: 'dvp', counterparty: { from: 'A', to: 'B' } });
+    expect((await a.history('B', 20)).find((i) => i.id === res.txHash)).toMatchObject({ flow: 'dvp', role: 'receiver', counterparty: { from: 'A', to: 'B' } });
+    // the outsider reads only the public log: token and amounts, no flow, no parties
+    expect((await a.history('C', 20)).find((i) => i.id === res.txHash)).toEqual(expect.objectContaining({
+      flow: null, counterparty: null, role: 'outsider', verdict: 'partial', asset: 'DFABI', amount: '3', rdAmount: String(3n * 1_000_000n),
+    }));
+    expect(l.A.rdAmount).toBe(String(3n * 1_000_000n));
+  });
+
+  it('history(p, 20) works for all four parties; BI reads with view keys, a bank with its own keys; timing of the cold scan', async () => {
+    const t0 = Date.now();
+    const lists = await Promise.all(P.map((p) => a.history(p, 20)));
+    console.log(`stealth history cold: ${Date.now() - t0} ms for 4 parties, window ${STEALTH_HISTORY_BLOCKS} blocks`);
+    const t1 = Date.now();
+    await Promise.all(P.map((p) => a.history(p, 20)));
+    console.log(`stealth history warm: ${Date.now() - t1} ms`);
+    // runs after the fresh-tx tests above, so the window holds their txs: an empty list here would be a bug, not an idle chain
+    for (const l of lists) expect(l.length).toBeGreaterThan(0);
+    expect(lists[0]!.every((i) => ['viewkey', 'clear', 'partial'].includes(i.verdict))).toBe(true);
+    for (const i of lists[3]!.filter((x) => x.verdict === 'partial')) expect([i.role, i.counterparty, i.flow]).toEqual(['outsider', null, null]);
+  });
+
+  it('network(): 4 Besu validators, all up', async () => {
+    const n = await a.network();
+    expect(n.nodes.map((x) => [x.kind, x.status])).toEqual(Array(4).fill(['besu-validator', 'up']));
+  });
+
+  it('an unreachable RPC makes history() reject', async () => {
+    const st = readState<StealthState>('stealth')!;
+    await expect(createStealthAdapter(st, 'http://127.0.0.1:1').history('A', 5)).rejects.toThrow();
   });
 });

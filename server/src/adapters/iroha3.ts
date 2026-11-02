@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, StepEvent } from '../adapter.ts';
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
+import { DeadlineError, withDeadline } from '../deadline.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
@@ -34,6 +35,10 @@ const FLOW_IDS = Object.keys(FLOWS) as FlowId[];
 const INTENT_PY = fileURLToPath(new URL('./iroha3-intent.py', import.meta.url));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+// The CLI's own error text can carry paths and English node text: callers see a fixed Indonesian message with the exit code, the server
+// log and the adapter's own checks (HTTP 404, 429, "status not found", "Rejected") see `raw`.
+class CliError extends Error { constructor(message: string, readonly raw: string) { super(message); } }
+const rawMsg = (e: unknown) => (e instanceof CliError ? e.raw : errMsg(e));
 
 // Torii caps parallel requests per node (HTTP 429, default config). A query that hits the cap is retried, and so is a
 // submit Torii answered 429: it refused admission, so nothing was queued. Any other failed write is never retried.
@@ -42,7 +47,8 @@ export const irohaCli = (dir: string): Cli => {
   return async (config, args, stdin) => {
     for (let attempt = 1; ; attempt++) {
       try { return await once(config, args, stdin); } catch (e) {
-        if (attempt >= 10 || !/query failed; HTTP 429|Unexpected transaction response; status: 429/.test(errMsg(e))) throw e;
+        if (!/query failed; HTTP 429|Unexpected transaction response; status: 429|limit of parallel queries|query_capacity_exceeded/.test(rawMsg(e))) throw e;
+        if (attempt >= 10) throw new Error(BUSY); // never the raw Torii text
         await sleep(100 * attempt);
       }
     }
@@ -57,15 +63,25 @@ const runCli = (dir: string): Cli => (config, args, stdin) => new Promise((resol
       if (err.killed) return reject(new Error(`iroha CLI tidak selesai dalam ${CALL_MS / 1000} detik`));
       let message: string | undefined; // --machine prints {"error":{"message":...}} on stderr
       try { message = (JSON.parse(stderr) as { error?: { message?: string } }).error?.message; } catch { /* not JSON */ }
-      reject(new Error(message ?? (stderr.trim().split('\n').pop() || err.message)));
+      const code = (err as { code?: unknown }).code ?? 'tidak diketahui';
+      const raw = message ?? (stderr.trim().split('\n').pop() || String(code));
+      console.error(`[iroha3] CLI gagal (kode ${code}):`, raw);
+      reject(new CliError(`iroha CLI gagal (kode ${code})`, raw)); // never the CLI text or err.message (the command line)
     });
+  child.stdin!.on('error', () => {}); // a child that exits without reading stdin gives EPIPE here; unhandled it would crash the whole server, and the exit code still arrives in the callback
   child.stdin!.end(stdin ?? '');
 });
 
 // DvpIsi::intent_hash of the instruction the CLI rendered with `-o` (see iroha3-intent.py).
 export const intentHash = (rendered: string) => new Promise<string>((resolve, reject) => {
   const child = execFile('python3', ['-I', INTENT_PY], { timeout: 10_000 }, (err, stdout, stderr) =>
-    (err ? reject(new Error(stderr.trim() || err.message)) : resolve(stdout.trim())));
+    {
+      if (!err) return resolve(stdout.trim());
+      const code = (err as { code?: unknown }).code ?? 'tidak diketahui';
+      console.error(`[iroha3] intent hash gagal (kode ${code}):`, stderr.trim());
+      reject(new Error(`intent hash gagal (kode ${code})`));
+    });
+  child.stdin!.on('error', () => {}); // same: EPIPE on a child that has already exited
   child.stdin!.end(rendered);
 });
 
@@ -84,6 +100,9 @@ export interface ReadDeps { init: () => Promise<{ auth: Record<PartyId, Auth>; c
 interface AccountRow { authority: string; entrypoint_hash: string; result_ok: boolean; timestamp_ms: number }
 // ponytail: page cap per account list, add a cursor-based index if real volume needs it
 const SCAN_PAGES_MAX = 3;
+const BUSY = 'Node Iroha sedang sibuk, coba lagi';
+const LANE_WAIT_MS = 15_000;
+const PAGE_ROWS = 100; // rows per account list request (Torii accepts up to 500); a small page needs more round trips because of non-movement rows
 const DECODE_BATCH = 5; // `transaction get` CLI spawns in flight
 
 export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
@@ -92,14 +111,18 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
   const json = async <T>(config: string, args: string[], stdin?: string) => JSON.parse(await cli(config, args, stdin)) as T;
   const op = (p: PartyId) => `op-${CONFIG[p]}`; // node operator account on p's own validator (CanReadAllLedgerData)
 
+  // In the party's lane with the history scan: a Torii answers one query at a time, a balance read racing a scan got HTTP 429.
   async function balanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
-    try {
-      const { value } = await json<{ value: string }>(CONFIG[party], ['--machine', 'ledger', 'asset', 'get', '--definition', s.assets[asset], '--account', acct[party]]);
-      return BigInt(value);
-    } catch (e) {
-      if (/HTTP 404/.test(errMsg(e))) return 0n; // no balance record yet
-      throw e;
-    }
+    // A history scan can hold the lane for seconds: the wait has a deadline, so run()'s balance check and loadCapacity never hang on it.
+    return withDeadline(inLane(party, async () => {
+      try {
+        const { value } = await json<{ value: string }>(CONFIG[party], ['--machine', 'ledger', 'asset', 'get', '--definition', s.assets[asset], '--account', acct[party]]);
+        return BigInt(value);
+      } catch (e) {
+        if (/HTTP 404/.test(rawMsg(e))) return 0n; // no balance record yet
+        throw e;
+      }
+    }), LANE_WAIT_MS, 'Saldo Iroha').catch((e) => { throw e instanceof DeadlineError ? new Error(BUSY) : e; });
   }
 
   // The flow's single instruction as `signer` signs it. lens() renders it again with -o and compares it to the stored bytes.
@@ -133,7 +156,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     let seenAt: number | undefined;
     for (const end = Date.now() + DEADLINE; ; await sleep(250)) {
       const st = await json<Status>(CONFIG[signer], ['--machine', 'ledger', 'transaction', 'status', '--hash', hash]).catch((e) => {
-        if (/status not found/i.test(errMsg(e))) return null;
+        if (/status not found/i.test(rawMsg(e))) return null;
         throw e;
       });
       if (st) {
@@ -174,7 +197,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
       // `app settlement dvp` has no --no-wait: it returns once applied, so lane and block share one boundary.
       const t1 = Date.now();
       hash = (await json<{ hash: string }>(CONFIG[p.signer], [...SUBMIT, ...p.args]).catch(async (e) => {
-        const rejected = /transaction ([0-9a-f]{64}) reached .*`Rejected`/.exec(errMsg(e));
+        const rejected = /transaction ([0-9a-f]{64}) reached .*`Rejected`/.exec(rawMsg(e));
         throw rejected ? new Error(`Transaksi Rejected: ${await rejection(rejected[1]!)}`) : e;
       })).hash;
       const ms = Date.now() - t1;
@@ -239,7 +262,10 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
   let ready: Promise<{ auth: Record<PartyId, Auth>; ctx: NoritoCtx }> | undefined;
   const deps = () => (ready ??= (read ? read.init() : Promise.reject(new Error('tidak dikonfigurasi'))).catch((e) => {
     ready = undefined;
-    throw new Error(`Kunci operator Iroha 3 tidak dapat dimuat: ${errMsg(e)}`);
+    // an fs error message carries the file path: show its code only
+    console.error('[iroha3] kunci operator tidak dapat dimuat:', e); // the original, before the mapped text
+    const code = (e as { code?: unknown }).code;
+    throw new Error(`Kunci operator Iroha 3 tidak dapat dimuat: ${typeof code === 'string' ? `berkas tidak terbaca (${code})` : errMsg(e)}`);
   }));
   const http = read?.fetch ?? fetch;
   async function toriiGet<T>(party: PartyId, path: string, query: URLSearchParams): Promise<T> {
@@ -252,7 +278,8 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
         await sleep(Math.max(100 * attempt, (Number.isFinite(w) ? Math.min(w, 5) : 1) * 1000)); // the node's hint, capped; 1 s when it gives none
         continue;
       }
-      if (!res.ok) throw new Error(`Torii ${PARTIES[party].name} menjawab HTTP ${res.status}: ${(await res.text()).slice(0, 120)}`);
+      if (res.status === 429) throw new Error(BUSY);
+      if (!res.ok) throw new Error(`Torii ${PARTIES[party].name} menjawab HTTP ${res.status}`); // never the response body: it is English text of the node
       return (await res.json()) as T;
     }
   }
@@ -318,12 +345,10 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
   async function history(party: PartyId, limit: number): Promise<HistoryItem[] & { truncated?: true }> {
     if (!Number.isInteger(limit) || limit < 1) throw new Error('limit harus bilangan bulat >= 1');
     const want = Math.min(limit, HISTORY_MAX);
-    // Rows per request: most rows of an account are RD/DFABI movements, the rest (consent grants…) are skipped after decoding.
-    const page = Math.min(100, Math.max(10, want * 3));
     // Lists and decodes both go through the party's operator account on its Torii, so they run in its lane, one after another.
     return inLane(party, async () => {
       const lists: Awaited<ReturnType<typeof accountRows>>[] = [];
-      for (const p of Object.keys(acct) as PartyId[]) lists.push(await accountRows(party, acct[p], page));
+      for (const p of Object.keys(acct) as PartyId[]) lists.push(await accountRows(party, acct[p], PAGE_ROWS));
       const byHash = new Map<string, AccountRow>();
       for (const { rows } of lists) for (const r of rows) byHash.set(r.entrypoint_hash, r);
       // Rows older than the newest oldest-row of a cut list may be missing others from that list: stop there and say so.

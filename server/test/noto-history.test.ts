@@ -152,9 +152,13 @@ describe('notoHistory', () => {
     const clock = { t: 1_000_000 };
     const f = setup([rcpt('r1', 1, '0xh1')], ev('0xh1', 'transfer'), {}, { now: clock });
     const scan = f.scan();
-    expect(await notoHistory('C', 10, scan)).toEqual([]);
+    const first = await notoHistory('C', 10, scan);
+    expect(first.length).toBe(0);
+    expect(first.pending).toEqual(['0xh1']); // reported, not silently absent
     clock.t += 11_000;
-    expect((await notoHistory('C', 10, scan)).map((i) => i.verdict)).toEqual(['sealed']);
+    const later = await notoHistory('C', 10, scan);
+    expect(later.map((i) => i.verdict)).toEqual(['sealed']);
+    expect(later.pending).toBeUndefined();
   });
 
   it('a block time that is missing never seals early, a visible read is cached, an unreadable one is not, caches are per party', async () => {

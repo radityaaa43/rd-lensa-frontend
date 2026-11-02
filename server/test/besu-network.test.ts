@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Exec } from '../src/adapters/fabricx.ts';
-import { besuNetwork } from '../src/adapters/besu-network.ts';
+import { besuNetwork, holdBack, joinInFlight, RECORD_WAIT_MS } from '../src/adapters/besu-network.ts';
 
 // Pod names and ports are the live ones (ns besu: besu-node-validator-N-0; Paladin RPC port-forwards 31548/31648/31748/31848).
 const pods = (over: Record<string, { ready?: boolean; restarts?: number }> = {}) => ({
@@ -78,5 +78,38 @@ describe('besuNetwork, leftovers and failures', () => {
     const n = await besuNetwork({ paladin: true }, { exec: (() => { throw new Error('geen'); }) as unknown as Exec, rpc: async () => true });
     expect(n.nodes.filter((x) => x.kind === 'besu-validator').every((x) => x.status === 'unknown')).toBe(true);
     expect(n.nodes.filter((x) => x.kind === 'paladin').every((x) => x.status === 'up')).toBe(true);
+  });
+});
+
+describe('holdBack (shared by Fabric-X-style, Noto and Zeto history)', () => {
+  it('holds a tx near the head back for RECORD_WAIT_MS after it is first seen unreadable, then lets it be sealed', () => {
+    const seen = new Map<string, number>();
+    expect(holdBack(seen, 'A|0x1', 100, 100, 1_000)).toBe(true);
+    expect(holdBack(seen, 'A|0x1', 100, 100, 1_000 + RECORD_WAIT_MS - 1)).toBe(true);
+    expect(holdBack(seen, 'A|0x1', 100, 100, 1_000 + RECORD_WAIT_MS)).toBe(false);
+  });
+  it('never holds back a tx older than the freshness window, and keys are per party', () => {
+    const seen = new Map<string, number>();
+    expect(holdBack(seen, 'A|0x2', 50, 100, 5)).toBe(false);
+    expect(holdBack(seen, 'A|0x3', 100, 100, 5)).toBe(true);
+    expect(holdBack(seen, 'B|0x3', 100, 100, 20_000)).toBe(true); // B has not seen it yet
+  });
+});
+
+describe('joinInFlight', () => {
+  it('callers during a run share it (one run), a later caller starts a new one, a failed run is not remembered', async () => {
+    let runs = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const sync = joinInFlight(async () => { runs++; await gate; return runs; });
+    const a = sync();
+    const b = sync();
+    expect(a).toBe(b);
+    release();
+    expect(await Promise.all([a, b])).toEqual([1, 1]);
+    expect(await sync()).toBe(2);
+    const bad = joinInFlight(async () => { throw new Error('boom'); });
+    await expect(bad()).rejects.toThrow('boom');
+    await expect(bad()).rejects.toThrow('boom'); // retried, not cached
   });
 });

@@ -51,7 +51,11 @@ export async function loadAuth(dir: string, config: string): Promise<Auth> {
   if (!priv || !pub) throw new Error(`op-${config}.toml tanpa kunci operator`);
   const out = await new Promise<string>((resolve, reject) => {
     execFile(join(dir, 'bin', 'iroha'), ['tools', 'address', 'convert', '--format', 'canonical-hex', pub], { cwd: dir, timeout: 30_000 },
-      (err, stdout) => (err ? reject(new Error(`iroha tools address convert gagal: ${err.message.split('\n')[0]}`)) : resolve(stdout)));
+      (err, stdout) => {
+        if (!err) return resolve(stdout);
+        console.error('[iroha3] iroha tools address convert gagal:', err); // the original (command line included) stays in the server log
+        reject(new Error(`iroha tools address convert gagal (kode ${(err as { code?: unknown }).code ?? 'tidak diketahui'})`));
+      });
   });
   const account = out.split('\n').find((l) => l.startsWith('0x')); // the CLI prints "CLI started" first
   if (!account) throw new Error('iroha tools address convert tidak mengembalikan alamat');

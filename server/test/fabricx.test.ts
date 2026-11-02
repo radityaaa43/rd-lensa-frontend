@@ -288,6 +288,7 @@ describe('fabricx history', () => {
       const a = createFabricxAdapter(histFake({ records: { bank2: OWN_A }, ledger: { bank2: LEDGER } }).exec);
       const first = await a.history('A', 20);
       expect(ids(first)).toEqual([5, 3, 2]); // T(4) is at the head without a record yet: left out; T(1) is still pending in the store: not listed
+      expect(first.pending).toEqual([T(4)]); // ...and reported as held back, so the UI never reads its absence as "not visible to this party"
       later();
       const items = await a.history('A', 20);
       expect(items.map((i) => [ids([i])[0], i.verdict, i.flow, i.block])).toEqual([
@@ -306,8 +307,10 @@ describe('fabricx history', () => {
       const a = createFabricxAdapter(f.exec);
       const first = await a.history('C', 20);
       expect(first.map((i) => i.block)).toEqual([177, 176]); // blocks 180..178 are at the head: not claimed yet
+      expect(first.pending).toEqual([T(5), T(4), T(3)]);
       later();
       const items = await a.history('C', 20);
+      expect(items.pending).toBeUndefined(); // nothing held back any more
       expect(items.map((i) => i.block)).toEqual([180, 179, 178, 177, 176]);
       expect(items.every((i) => i.verdict === 'sealed' && i.role === 'outsider' && i.amount === null && i.counterparty === null && i.at === null)).toBe(true);
       expect(f.calls.filter((c) => c.includes('api')).map((c) => c.slice(c.indexOf('api') + 1))).toEqual([['history', 'bank4', '100'], ['history', 'bank4', '100']]);
@@ -359,5 +362,16 @@ describe('fabricx history', () => {
       const [item] = await createFabricxAdapter(histFake({ records: { bank2: rows }, ledger: { bank2: [[T(5), hex(180)]] } }).exec).history('A', 5);
       expect(item!.at).toBe('2026-11-02T10:00:05.000Z');
     });
+  });
+});
+
+describe('kubectl() error text', () => {
+  it('never carries the command line (kubeconfig path) to the caller', async () => {
+    const { kubectl } = await import('../src/adapters/fabricx.ts');
+    const exec = kubectl({ kubeconfig: '/definitely/not/here/secret-kubeconfig.yaml', namespace: 'x' });
+    const err = await exec(['get', 'pods']).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toMatch(/secret-kubeconfig|--kubeconfig|Command failed/);
+    expect((err as Error).message).toMatch(/^kubectl gagal \(kode /);
   });
 });

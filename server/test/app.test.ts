@@ -528,3 +528,15 @@ test('stress snapshots (events and GET) never leak firstError internals', async 
   const snap = await stressState(a);
   expect(snap.models.zeto.firstError).toBe("ENOENT: no such file or directory, open '(berkas server)'");
 });
+
+test('history sets x-history-pending only when the adapter holds back fresh unreadable txs (v1.3)', async () => {
+  const a = fakeAdapter('noto');
+  const app = make({ noto: a });
+  expect((await app.inject('/api/history?model=noto&party=C')).headers['x-history-pending']).toBeUndefined();
+  a.history = async () => Object.assign([], { pending: [] as string[] });
+  expect((await app.inject('/api/history?model=noto&party=C')).headers['x-history-pending']).toBeUndefined();
+  a.history = async () => Object.assign([], { pending: ['0xaa', '0xbb'] });
+  const res = await app.inject('/api/history?model=noto&party=C');
+  expect(res.headers['x-history-pending']).toBe('0xaa,0xbb');
+  expect(res.json()).toEqual([]);
+});
