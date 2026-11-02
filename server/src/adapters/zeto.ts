@@ -3,7 +3,7 @@ import {
   BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleOf,
   type BankId, type FlowId, type FlowRequest, type PartyId,
 } from '../domain.ts';
-import { CANCELLED, LOAD_AMOUNT } from '../adapter.ts';
+import { CANCELLED, LOAD_AMOUNT, NotAvailableError } from '../adapter.ts';
 import { afterLock } from '../deadline.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
@@ -268,6 +268,8 @@ export function createZetoAdapter(state: ZetoState) {
     balanceOf: balance,
     run,
     lens,
+    history: async () => { throw new NotAvailableError('Riwayat belum tersedia'); }, // step 0 stub (ARCHITECTURE.md §5), replaced per §2.3
+    network: async () => { throw new NotAvailableError('Status jaringan belum tersedia'); },
     async loadCapacity() {
       return 3 * Math.min(...(await Promise.all(BANKS.map(loadUtxos))));
     },

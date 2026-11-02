@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import type { Capability, LensView, ModelAdapter } from './adapter.ts';
+import { HISTORY_MAX, NotAvailableError, type Capability, type LensView, type ModelAdapter } from './adapter.ts';
 import { withDeadline } from './deadline.ts';
 import {
   FLOWS, MODEL_NAMES, PARTIES, PRICE_PER_UNIT, validateRequest,
@@ -17,6 +17,9 @@ type Adapters = Partial<Record<ModelId, ModelAdapter>>;
 const MODELS = Object.keys(MODEL_NAMES) as ModelId[];
 const PARTY_IDS = Object.keys(PARTIES) as PartyId[];
 const TX_DEADLINE_MS = 120_000;
+const HISTORY_MS = 20_000;
+const NETWORK_MS = 5_000;
+const HISTORY_LIMIT = 20;
 const HEALTH_POLL_MS = 3_000; // /api/health is polled by the UI; stress and tx keep the longer HEALTH_MS
 const KEEP_RUN_MS = 5 * 60_000;
 const BUSY_REASON = 'Transaksi lain sedang diproses';
@@ -43,8 +46,14 @@ const stressBody = {
     limitS: { enum: [120, 300, 600] },
   },
 } as const;
+// coerceTypes is off, so limit stays a string and the handler checks its range
+const modelQuery = { type: 'object', required: ['model'], properties: { model: { enum: MODELS } } } as const;
+const partyQuery = {
+  type: 'object', required: ['model', 'party'],
+  properties: { model: { enum: MODELS }, party: { enum: PARTY_IDS }, limit: { type: 'string', pattern: '^[0-9]{1,3}$' } },
+} as const;
 
-const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x));
+const json =(v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x));
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 interface Sse { send(event: string, data: unknown): void; end(): void }
@@ -64,7 +73,12 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
   const streams = new Set<ServerResponse>();
   app.addHook('onClose', async () => { for (const r of streams) r.end(); });
 
-  app.setNotFoundHandler((_req, reply) => reply.code(404).send({ reason: 'Tidak ditemukan' }));
+  // SPA fallback for History-API deep links: only GET, never /api/, never a path with an extension (a missing asset stays 404)
+  app.setNotFoundHandler((req, reply) => {
+    const path = req.url.split('?')[0];
+    if (opts.webDist && req.method === 'GET' && !path.startsWith('/api/') && !/\.[^/]*$/.test(path)) return reply.sendFile('index.html');
+    return reply.code(404).send({ reason: 'Tidak ditemukan' });
+  });
 
   app.setErrorHandler((err: FastifyError, req, reply) => {
     if (err.validation) {
@@ -122,6 +136,50 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       }),
     ]);
     return { models: Object.fromEntries(MODELS.map((m, i) => [m, health[i]])), nodes };
+  });
+
+  // ---- party-scoped reads: never take the busy lock (ARCHITECTURE.md §0.5) ----
+  type PartyQuery = { model: ModelId; party: PartyId; limit?: string };
+
+  app.get<{ Querystring: PartyQuery }>('/api/history', { schema: { querystring: partyQuery } }, async (request, reply) => {
+    const { model, party, limit: raw } = request.query;
+    const limit = raw === undefined ? HISTORY_LIMIT : Number(raw);
+    if (limit < 1 || limit > HISTORY_MAX) return reply.code(400).send({ reason: 'Permintaan tidak valid: limit' });
+    const a = adapters[model];
+    if (!a) return reply.code(503).send(modelUnavailable(model));
+    try {
+      const items = await withDeadline(a.history(party, limit), HISTORY_MS, 'Riwayat');
+      if (items.truncated) reply.header('x-history-truncated', '1');
+      return [...items];
+    } catch (e) {
+      if (e instanceof NotAvailableError) return reply.code(501).send({ reason: e.message });
+      return reply.code(502).send({ reason: `Riwayat ${MODEL_NAMES[model]} untuk ${PARTIES[party].name} tidak dapat dibaca: ${msg(e)}` });
+    }
+  });
+
+  app.get<{ Querystring: { model: ModelId } }>('/api/network', { schema: { querystring: modelQuery } }, async (request, reply) => {
+    const { model } = request.query;
+    const a = adapters[model];
+    if (!a) return reply.code(503).send(modelUnavailable(model));
+    try {
+      return await withDeadline(a.network(), NETWORK_MS, 'Status jaringan');
+    } catch (e) {
+      if (e instanceof NotAvailableError) return reply.code(501).send({ reason: e.message });
+      return reply.code(502).send({ reason: `Status jaringan ${MODEL_NAMES[model]} tidak dapat dibaca: ${msg(e)}` });
+    }
+  });
+
+  // one asset failing (e.g. Fabric-X BI holds no transfer balance) never hides the other
+  app.get<{ Querystring: PartyQuery }>('/api/balance', { schema: { querystring: partyQuery } }, async (request, reply) => {
+    const { model, party } = request.query;
+    const a = adapters[model];
+    if (!a) return reply.code(503).send(modelUnavailable(model));
+    const assets = ['RD', 'DFABI'] as const;
+    const got = await Promise.allSettled(assets.map((asset) => withDeadline(a.balanceOf(party, asset), HEALTH_MS, 'Cek saldo')));
+    return Object.fromEntries(assets.map((asset, i) => {
+      const r = got[i];
+      return [asset, r.status === 'fulfilled' ? { amount: r.value.toString() } : { error: msg(r.reason) }];
+    }));
   });
 
   // ---- single transactions ----

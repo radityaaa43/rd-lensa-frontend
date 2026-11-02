@@ -24,6 +24,23 @@ export const FLOWS: Record<FlowId, { asset: 'RD' | 'DFABI'; issuer: boolean; dvp
 
 export interface FlowRequest { model: ModelId; flow: FlowId; from: PartyId; to: PartyId; amount: string }
 export type Role = 'sender' | 'receiver' | 'issuer' | 'regulator' | 'outsider';
+// Who paid whom as this party's own read shows it. A side that read cannot show is null; the whole value is null when neither is readable.
+export interface Counterparty { from: PartyId | null; to: PartyId | null }
+
+export type PlatformId = 'besu' | 'fabricx' | 'iroha3';
+export const PLATFORMS: Record<PlatformId, { name: string; models: ModelId[] }> = {
+  besu: { name: 'Besu', models: ['zeto', 'noto', 'stealth'] },
+  fabricx: { name: 'Fabric-X', models: ['fabricx'] },
+  iroha3: { name: 'Iroha 3', models: ['iroha3'] },
+};
+export const PLATFORM_OF: Record<ModelId, PlatformId> = { zeto: 'besu', noto: 'besu', stealth: 'besu', fabricx: 'fabricx', iroha3: 'iroha3' };
+
+// Role of `party` in a tx it observed, from what its own read shows (history has no request to go by).
+export function roleFromParties(party: PartyId, cp: Counterparty | null, issuer: boolean): Role {
+  if (cp?.from === party) return issuer ? 'issuer' : 'sender';
+  if (cp?.to === party) return 'receiver';
+  return party === 'BI' ? 'regulator' : 'outsider';
+}
 
 export function roleOf(req: FlowRequest, party: PartyId): Role {
   if (party === req.from) return FLOWS[req.flow].issuer ? 'issuer' : 'sender';

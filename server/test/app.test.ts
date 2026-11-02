@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, expect, test } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import type { ModelAdapter } from '../src/adapter.ts';
+import { NotAvailableError, type ModelAdapter } from '../src/adapter.ts';
 import { buildApp } from '../src/app.ts';
 import { rpcUp } from '../src/health.ts';
 import type { FlowRequest, ModelId } from '../src/domain.ts';
@@ -339,4 +339,130 @@ test('unknown routes are 404 with an Indonesian reason', async () => {
   const res = await make().inject('/api/nope');
   expect(res.statusCode).toBe(404);
   expect(res.json()).toEqual({ reason: 'Tidak ditemukan' });
+});
+
+// ---- history / network / balance (ARCHITECTURE.md §2.2) ----
+
+test('history returns the party read with limit 20 by default', async () => {
+  const a = fakeAdapter('zeto');
+  const seen: [string, number][] = [];
+  const history = a.history.bind(a);
+  a.history = async (party, limit) => { seen.push([party, limit]); return history(party, limit); };
+  const res = await make({ zeto: a }).inject('/api/history?model=zeto&party=C');
+  expect(res.statusCode).toBe(200);
+  expect(seen).toEqual([['C', 20]]);
+  expect(res.json()).toHaveLength(3);
+  expect(res.json()[1]).toMatchObject({ verdict: 'sealed', amount: null, counterparty: null });
+});
+
+test('history passes an explicit limit through', async () => {
+  const a = fakeAdapter('zeto');
+  let got = 0;
+  a.history = async (_p, limit) => { got = limit; return []; };
+  expect((await make({ zeto: a }).inject('/api/history?model=zeto&party=A&limit=100')).statusCode).toBe(200);
+  expect(got).toBe(100);
+});
+
+test.each([
+  ['model=nope&party=A', 'model'],
+  ['party=A', 'model'],
+  ['model=zeto&party=X', 'party'],
+  ['model=zeto', 'party'],
+  ['model=zeto&party=A&limit=0', 'limit'],
+  ['model=zeto&party=A&limit=101', 'limit'],
+  ['model=zeto&party=A&limit=abc', 'limit'],
+  ['model=zeto&party=A&limit=1000', 'limit'],
+])('history 400 on %s', async (qs, field) => {
+  const res = await make().inject(`/api/history?${qs}`);
+  expect(res.statusCode).toBe(400);
+  expect(res.json()).toEqual({ reason: `Permintaan tidak valid: ${field}` });
+});
+
+test('history 503 when the model has no adapter', async () => {
+  const res = await make().inject('/api/history?model=noto&party=A');
+  expect(res.statusCode).toBe(503);
+  expect(res.json()).toEqual({ reason: 'Noto belum tersedia' });
+});
+
+test('history 502 when the party read throws, never an empty list', async () => {
+  const a = fakeAdapter('zeto');
+  a.history = async () => { throw new Error('node 3 mati'); };
+  const res = await make({ zeto: a }).inject('/api/history?model=zeto&party=B');
+  expect(res.statusCode).toBe(502);
+  expect(res.json()).toEqual({ reason: 'Riwayat Zeto untuk Bank Nusantara tidak dapat dibaca: node 3 mati' });
+});
+
+test('network returns the adapter nodes', async () => {
+  const res = await make().inject('/api/network?model=zeto');
+  expect(res.statusCode).toBe(200);
+  expect(res.json().nodes).toHaveLength(4);
+});
+
+test('network 400, 503 and 502', async () => {
+  const a = fakeAdapter('zeto');
+  a.network = async () => { throw new Error('kubectl gagal'); };
+  const app = make({ zeto: a });
+  expect((await app.inject('/api/network?model=nope')).json()).toEqual({ reason: 'Permintaan tidak valid: model' });
+  expect((await app.inject('/api/network?model=noto')).statusCode).toBe(503);
+  const res = await app.inject('/api/network?model=zeto');
+  expect(res.statusCode).toBe(502);
+  expect(res.json()).toEqual({ reason: 'Status jaringan Zeto tidak dapat dibaca: kubectl gagal' });
+});
+
+test('balance returns both assets as strings', async () => {
+  const res = await make().inject('/api/balance?model=zeto&party=A');
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ RD: { amount: (10n ** 18n).toString() }, DFABI: { amount: (10n ** 18n).toString() } });
+});
+
+test('balance: one failing asset does not hide the other', async () => {
+  const a = fakeAdapter('fabricx');
+  a.balanceOf = async (_p, asset) => { if (asset === 'RD') throw new Error('BI tidak memegang saldo transfer'); return 7n; };
+  const res = await make({ fabricx: a }).inject('/api/balance?model=fabricx&party=BI');
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toEqual({ RD: { error: 'BI tidak memegang saldo transfer' }, DFABI: { amount: '7' } });
+});
+
+test('balance 400 and 503', async () => {
+  const app = make();
+  expect((await app.inject('/api/balance?model=zeto&party=Z')).json()).toEqual({ reason: 'Permintaan tidak valid: party' });
+  expect((await app.inject('/api/balance?model=noto&party=A')).statusCode).toBe(503);
+});
+
+test('history and network map NotAvailableError to a neutral 501', async () => {
+  const a = fakeAdapter('zeto');
+  a.history = async () => { throw new NotAvailableError('Riwayat belum tersedia'); };
+  a.network = async () => { throw new NotAvailableError('Status jaringan belum tersedia'); };
+  const app = make({ zeto: a });
+  const h = await app.inject('/api/history?model=zeto&party=A');
+  expect(h.statusCode).toBe(501);
+  expect(h.json()).toEqual({ reason: 'Riwayat belum tersedia' });
+  const n = await app.inject('/api/network?model=zeto');
+  expect(n.statusCode).toBe(501);
+  expect(n.json()).toEqual({ reason: 'Status jaringan belum tersedia' });
+});
+
+test('history sets x-history-truncated only when the adapter scan hit its cap', async () => {
+  const a = fakeAdapter('zeto');
+  const app = make({ zeto: a });
+  expect((await app.inject('/api/history?model=zeto&party=A')).headers['x-history-truncated']).toBeUndefined();
+  a.history = async () => Object.assign([], { truncated: true as const });
+  const res = await app.inject('/api/history?model=zeto&party=A');
+  expect(res.headers['x-history-truncated']).toBe('1');
+  expect(res.json()).toEqual([]);
+});
+
+test('deep links get index.html; /api and missing assets keep 404', async () => {
+  const dist = mkdtempSync(join(tmpdir(), 'web-'));
+  writeFileSync(join(dist, 'index.html'), '<!doctype html><title>Lensa</title>');
+  const app = make(undefined, { webDist: dist });
+  const deep = await app.inject('/besu/zeto/dasbor?pihak=C');
+  expect(deep.statusCode).toBe(200);
+  expect(deep.headers['content-type']).toMatch(/text\/html/);
+  expect(deep.body).toContain('<title>Lensa</title>');
+  expect((await app.inject('/api/tidak-ada')).json()).toEqual({ reason: 'Tidak ditemukan' });
+  const asset = await app.inject('/assets/tidak-ada.js');
+  expect(asset.statusCode).toBe(404);
+  expect(asset.json()).toEqual({ reason: 'Tidak ditemukan' });
+  expect((await app.inject({ method: 'POST', url: '/besu/zeto/dasbor' })).statusCode).toBe(404);
 });

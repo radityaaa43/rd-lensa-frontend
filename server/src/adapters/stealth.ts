@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { Capability, Counterparty, FlowResult, LensView, ModelAdapter, StepEvent } from '../adapter.ts';
-import { CANCELLED, LOAD_AMOUNT } from '../adapter.ts';
+import { CANCELLED, LOAD_AMOUNT, NotAvailableError } from '../adapter.ts';
 import { BANKS, FLOWS, PRICE_PER_UNIT, roleOf, type BankId, type FlowId, type PartyId } from '../domain.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import type { Sample } from '../stats.ts';
@@ -309,6 +309,8 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
     },
     run,
     lens,
+    history: async () => { throw new NotAvailableError('Riwayat belum tersedia'); }, // step 0 stub (ARCHITECTURE.md §5), replaced per §2.3
+    network: async () => { throw new NotAvailableError('Status jaringan belum tersedia'); },
     async loadCapacity() {
       return 3 * Math.min(...PAIRS.map(([a, b]) => unused(a, b).length));
     },

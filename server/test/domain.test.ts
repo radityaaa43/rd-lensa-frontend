@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { roleOf, validateRequest, type FlowRequest } from '../src/domain.ts';
+import { roleFromParties, roleOf, validateRequest, type FlowRequest } from '../src/domain.ts';
 
 const t = (o: Partial<FlowRequest>): FlowRequest => ({ model: 'zeto', flow: 'rd-transfer', from: 'A', to: 'B', amount: '1000', ...o });
 
@@ -23,3 +23,11 @@ test.each([
   [{ flow: 'rd-transfer', from: 'BI' }, 'Transfer dijalankan oleh bank'],
 ] as [Partial<FlowRequest>, string][])('rejects %o', (o, reason) => expect(validateRequest(t(o))).toEqual({ ok: false, reason }));
 test('accepts and parses', () => expect(validateRequest(t({ amount: '1000000000' }))).toEqual({ ok: true, amount: 1_000_000_000n }));
+test.each([
+  ['A', { from: 'A', to: 'B' }, false, 'sender'],
+  ['BI', { from: 'BI', to: 'C' }, true, 'issuer'],
+  ['B', { from: null, to: 'B' }, false, 'receiver'],
+  ['BI', { from: 'A', to: 'B' }, false, 'regulator'],
+  ['C', null, false, 'outsider'],
+  ['BI', null, false, 'regulator'],
+] as const)('roleFromParties(%s, %o, issuer=%s) = %s', (party, cp, issuer, role) => expect(roleFromParties(party, cp, issuer)).toBe(role));

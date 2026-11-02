@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { Capability, Counterparty, FlowResult, LensView, ModelAdapter, StepEvent, Verdict } from '../adapter.ts';
-import { CANCELLED, LOAD_AMOUNT } from '../adapter.ts';
+import { CANCELLED, LOAD_AMOUNT, NotAvailableError } from '../adapter.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
@@ -178,6 +178,8 @@ export function createFabricxAdapter(exec: Exec) {
     balanceOf,
     run,
     lens,
+    history: async () => { throw new NotAvailableError('Riwayat belum tersedia'); }, // step 0 stub (ARCHITECTURE.md §5), replaced per §2.3
+    network: async () => { throw new NotAvailableError('Status jaringan belum tersedia'); },
     async loadCapacity() {
       const balances = await Promise.all(BANKS.map((b) => balanceOf(b, 'RD')));
       return 3 * Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT);

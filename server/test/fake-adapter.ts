@@ -1,5 +1,5 @@
-import { CANCELLED, type Capability, type LensView, type ModelAdapter } from '../src/adapter.ts';
-import { roleOf, type FlowId, type ModelId } from '../src/domain.ts';
+import { CANCELLED, type Capability, type HistoryItem, type LensView, type ModelAdapter, type Network } from '../src/adapter.ts';
+import { FLOWS, PRICE_PER_UNIT, roleOf, type FlowId, type FlowRequest, type ModelId } from '../src/domain.ts';
 
 const FLOW_IDS: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp'];
 
@@ -36,6 +36,30 @@ export function fakeAdapter(
         method: `fake:${id}`,
       };
     },
+    // Same shape as lens(): the outsider observes the tx but reads nothing (sealed).
+    async history(party, limit): Promise<HistoryItem[]> {
+      const txs: FlowRequest[] = [
+        { model: id, flow: 'rd-issue', from: 'BI', to: 'A', amount: '5000' },
+        { model: id, flow: 'rd-transfer', from: 'A', to: 'B', amount: '1000' },
+        { model: id, flow: 'dvp', from: 'B', to: 'C', amount: '3' },
+      ];
+      return txs.slice(0, limit).map((req, i) => {
+        const role = roleOf(req, party);
+        const sealed = role === 'outsider';
+        const dvp = req.flow === 'dvp';
+        return {
+          id: `0x${String(i + 1).repeat(64)}`, at: new Date(Date.UTC(2026, 10, 2, 10, 0, 0) - i * 60_000).toISOString(), block: 100 - i,
+          flow: sealed ? null : req.flow, asset: sealed ? null : FLOWS[req.flow].asset,
+          role, verdict: sealed ? 'sealed' : 'clear',
+          amount: sealed ? null : req.amount, rdAmount: sealed || !dvp ? null : (BigInt(req.amount) * PRICE_PER_UNIT).toString(),
+          counterparty: sealed ? null : { from: req.from, to: req.to },
+        };
+      });
+    },
+    network: async (): Promise<Network> => ({
+      nodes: (['BI', 'A', 'B', 'C'] as const).map((owner, i) => ({ id: `node${i + 1}`, label: `Node ${i + 1}`, kind: 'paladin', owner, status: 'up', detail: 'ok' })),
+      links: [{ from: 'node1', to: 'node2' }, { from: 'node1', to: 'node3' }, { from: 'node1', to: 'node4' }],
+    }),
     loadCapacity: async () => opts.capacity ?? 1000,
     prepareLoad: async () => {},
     async transferForLoad(_from, _to, _amount, signal) {
