@@ -5,6 +5,7 @@ test('zeto transfer: 4 steps, survives leaving the screen, 4 lenses, exactly 1 s
   await page.goto('/besu/zeto/transfer?pihak=A');
   await page.getByRole('button', { name: 'Kirim transaksi', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Proses' }).locator('li.ok')).toHaveCount(4);
+  await expect(page.locator('p.elapsed[role=status]')).toHaveText(/^Selesai dalam \d+ detik$/);
   await page.getByRole('link', { name: 'Dasbor' }).click();
   await page.getByRole('link', { name: 'Transfer' }).click();
   await expect(page.getByText(/Selesai di blok/)).toBeVisible();

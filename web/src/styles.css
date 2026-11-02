@@ -426,6 +426,8 @@ table.hist .amt{font-weight:600;white-space:nowrap}
 .compose2 .notice{margin-top:16px}
 .json pre{margin:0;font:12.5px/1.65 var(--mono);background:var(--canvas);border-radius:var(--r-tile);padding:14px 16px;white-space:pre-wrap;word-break:break-all;min-height:196px;color:var(--ink)}
 .progress .timeline{padding:0}
+.elapsed{margin:0;font-size:14px;font-weight:600}
+.elapsed .muted{font-weight:400}
 .done{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;background:var(--clear-bg);color:var(--clear);border-radius:var(--r-tile);padding:12px 16px;font-weight:600}
 .state.error:focus{outline:2px solid var(--focus);outline-offset:2px}
 

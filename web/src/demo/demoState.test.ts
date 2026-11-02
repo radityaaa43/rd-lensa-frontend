@@ -48,21 +48,31 @@ describe('demoReducer', () => {
   });
 
   test('a run keeps the request it started with', () => {
-    expect(demoReducer(base(), { type: 'start', req })).toMatchObject({ phase: 'run', req });
+    expect(demoReducer(base(), { type: 'start', req, at: 1000 })).toMatchObject({ phase: 'run', req });
+  });
+
+  test('a run records its wall-clock start and end (elapsed counter); a new run clears the end', () => {
+    let s = demoReducer(base(), { type: 'start', req, at: 1000 });
+    expect(s).toMatchObject({ startedAt: 1000, endedAt: null });
+    s = demoReducer(s, { type: 'result', result: { txHash: '0x1', block: 1, steps: [], lenses: [] }, at: 46_000 });
+    expect(s).toMatchObject({ startedAt: 1000, endedAt: 46_000 });
+    s = demoReducer(s, { type: 'start', req, at: 50_000 });
+    expect(s).toMatchObject({ startedAt: 50_000, endedAt: null });
+    expect(demoReducer(s, { type: 'error', reason: 'x', at: 52_000 })).toMatchObject({ endedAt: 52_000 });
   });
 
   test('run lifecycle: start, step, result', () => {
-    let s = demoReducer(base(), { type: 'start', req });
+    let s = demoReducer(base(), { type: 'start', req, at: 0 });
     s = demoReducer(s, { type: 'step', index: 0, ms: 120 });
     s = demoReducer(s, { type: 'step', index: 0, ms: 120 });
     expect(s.steps).toEqual([120]);
-    s = demoReducer(s, { type: 'result', result: { txHash: '0xab', block: 9, steps: [{ index: 0, label: 'a', ms: 130 }], lenses: [] } });
+    s = demoReducer(s, { type: 'result', result: { txHash: '0xab', block: 9, steps: [{ index: 0, label: 'a', ms: 130 }], lenses: [] }, at: 0 });
     expect(s).toMatchObject({ phase: 'done', tab: 'res', steps: [130], req });
   });
 
   test('an error keeps the reason, the request and the form values', () => {
     const typed = demoReducer(base(), { type: 'amount', asset: 'RD', amount: '42' });
-    const s = demoReducer({ ...typed, phase: 'run', req }, { type: 'error', reason: 'Saldo Bank Mandala tidak cukup' });
+    const s = demoReducer({ ...typed, phase: 'run', req }, { type: 'error', reason: 'Saldo Bank Mandala tidak cukup', at: 0 });
     expect(s).toMatchObject({ phase: 'error', tab: 'res', error: 'Saldo Bank Mandala tidak cukup', req, amounts: { RD: '42' } });
   });
 });

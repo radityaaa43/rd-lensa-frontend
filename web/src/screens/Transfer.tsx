@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react';
-import type { FlowRequest } from '../../../server/src/domain.ts';
+import { useEffect, useRef, useState } from 'react';
+import type { FlowRequest, ModelId } from '../../../server/src/domain.ts';
+import { TYPICAL_SECONDS } from '../demo/copy.ts';
 import type { Meta } from '../api.ts';
 import type { Route } from '../app/route.ts';
 import { linkTo } from '../app/useRoute.ts';
@@ -11,6 +12,22 @@ import { Empty } from '../ui/States.tsx';
 
 type ModelRoute = Extract<Route, { page: 'model' }>;
 const BUSY = 'Transaksi lain sedang diproses';
+
+// Always-true elapsed time; only the final line is announced (a ticking live region would be noise).
+// The typical figure comes only from measured live runs (copy.ts TYPICAL_SECONDS) and is labelled as such.
+function Elapsed({ model, start, end, failed }: { model: ModelId; start: number | null; end: number | null; failed: boolean }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (end !== null) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [end]);
+  if (start === null) return null;
+  const secs = Math.max(0, Math.round(((end ?? now) - start) / 1000));
+  const typical = TYPICAL_SECONDS[model];
+  if (end !== null) return <p className="elapsed" role="status">{failed ? `Berhenti setelah ${secs} detik` : `Selesai dalam ${secs} detik`}</p>;
+  return <p className="elapsed">Berjalan {secs} detik{typical !== undefined && <span className="muted"> · biasanya ±{typical} detik (angka tipikal, bukan janji)</span>}</p>;
+}
 
 // DESIGN.md §7.9, ARCHITECTURE.md §3.6: the run lives in App, so leaving this screen keeps its progress and result.
 export function Transfer({ meta, route, run, dispatch, send, stressRunning, dvp = false }: {
@@ -36,6 +53,7 @@ export function Transfer({ meta, route, run, dispatch, send, stressRunning, dvp 
             <h2 id="h-proc">Proses</h2>
             <span className="muted">Dikirim oleh {meta.parties[req.from].name}</span>
           </div>
+          <Elapsed model={req.model} start={run.startedAt} end={run.endedAt} failed={run.phase === 'error'} />
           <Timeline labels={meta.models[route.model].stepLabels} s={run} />
           {run.phase === 'done' && run.result && (
             <div className="done" role="status">

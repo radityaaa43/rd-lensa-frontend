@@ -10,6 +10,7 @@ export interface DemoState {
   phase: 'idle' | 'run' | 'done' | 'error';
   tab: 'req' | 'res';
   req: FlowRequest | null; // copied at start: a later party or model switch never changes a run
+  startedAt: number | null; endedAt: number | null; // wall clock (ms) for the elapsed counter; passed in by actions so the reducer stays pure
   steps: number[]; // measured ms per step, by index
   result: TxResult | null;
   error: string | null;
@@ -19,13 +20,13 @@ export type DemoAction =
   | { type: 'to'; to: PartyId }
   | { type: 'amount'; asset: Asset; amount: string }
   | { type: 'tab'; tab: 'req' | 'res' }
-  | { type: 'start'; req: FlowRequest }
+  | { type: 'start'; req: FlowRequest; at: number }
   | { type: 'step'; index: number; ms: number }
-  | { type: 'result'; result: TxResult }
-  | { type: 'error'; reason: string };
+  | { type: 'result'; result: TxResult; at: number }
+  | { type: 'error'; reason: string; at: number };
 
-const cleared = (): Pick<DemoState, 'phase' | 'tab' | 'req' | 'steps' | 'result' | 'error'> =>
-  ({ phase: 'idle', tab: 'req', req: null, steps: [], result: null, error: null });
+const cleared = (): Pick<DemoState, 'phase' | 'tab' | 'req' | 'startedAt' | 'endedAt' | 'steps' | 'result' | 'error'> =>
+  ({ phase: 'idle', tab: 'req', req: null, startedAt: null, endedAt: null, steps: [], result: null, error: null });
 
 export const initialDemo = (): DemoState => ({ asset: 'RD', to: 'B', amounts: { RD: '1000000000', DFABI: '1000' }, ...cleared() });
 
@@ -42,15 +43,15 @@ export function requestOf(s: DemoState, model: ModelId, party: PartyId, dvp: boo
 export function demoReducer(s: DemoState, a: DemoAction): DemoState {
   switch (a.type) {
     case 'tab': return { ...s, tab: a.tab };
-    case 'start': return { ...s, ...cleared(), phase: 'run', req: a.req };
+    case 'start': return { ...s, ...cleared(), phase: 'run', req: a.req, startedAt: a.at };
     case 'step': {
       if (s.phase !== 'run') return s;
       const steps = [...s.steps];
       steps[a.index] = a.ms;
       return { ...s, steps };
     }
-    case 'result': return { ...s, phase: 'done', tab: 'res', result: a.result, steps: a.result.steps.map((x) => x.ms) };
-    case 'error': return { ...s, phase: 'error', tab: 'res', error: a.reason };
+    case 'result': return { ...s, phase: 'done', tab: 'res', result: a.result, steps: a.result.steps.map((x) => x.ms), endedAt: a.at };
+    case 'error': return { ...s, phase: 'error', tab: 'res', error: a.reason, endedAt: a.at };
   }
   if (s.phase === 'run') return s; // selections are locked while a run is in flight
   switch (a.type) {

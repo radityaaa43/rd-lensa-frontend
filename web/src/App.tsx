@@ -108,13 +108,13 @@ export default function App() {
   useEffect(() => () => stop.current?.(), []);
   async function send(req: FlowRequest) {
     if (run.phase === 'run') return;
-    dispatch({ type: 'start', req });
+    dispatch({ type: 'start', req, at: Date.now() });
     const res = await postTx(req);
-    if (!res.ok) return dispatch({ type: 'error', reason: res.reason });
+    if (!res.ok) return dispatch({ type: 'error', reason: res.reason, at: Date.now() });
     stop.current = watchTx(res.body.runId, {
       onStep: (index, ms) => dispatch({ type: 'step', index, ms }),
-      onResult: (result) => dispatch({ type: 'result', result }),
-      onError: (reason) => dispatch({ type: 'error', reason }),
+      onResult: (result) => dispatch({ type: 'result', result, at: Date.now() }),
+      onError: (reason) => dispatch({ type: 'error', reason, at: Date.now() }),
     });
   }
 
