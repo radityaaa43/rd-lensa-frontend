@@ -104,6 +104,28 @@ test('riwayat: 503 warming up shows the reason as loading, retries once, then th
   expect(calls).toBe(2);
 });
 
+// A flow the adapter disables (capabilities() with a reason) stays visible with its reason; other flows keep working
+test('zeto DvP disabled by capabilities: nav item and DvP screen show the reason, Transfer still works', async ({ page }) => {
+  // assert on the prefix only: the interim wording will change, and DvP may be re-enabled later
+  const reason = 'DvP Zeto dinonaktifkan sementara: koordinator token macet setelah DvP (masalah di Paladin, sedang diperbaiki)';
+  const PREFIX = /DvP Zeto dinonaktifkan/;
+  await page.route('**/api/meta', async (r) => {
+    const meta = await (await r.fetch()).json();
+    meta.models.zeto.capabilities.dvp = { enabled: false, reason };
+    return r.fulfill({ json: meta });
+  });
+  await page.goto('/besu/zeto/dasbor?pihak=A');
+  const nav = page.locator('.side .nav[aria-disabled=true]', { hasText: 'DvP' });
+  await expect(nav).toContainText(PREFIX);
+  await expect(page.getByRole('link', { name: 'DvP', exact: true })).toHaveCount(0);
+  await page.goto('/besu/zeto/dvp?pihak=A'); // a deep link still explains itself
+  await expect(page.locator('.compose2 .notice')).toHaveText(PREFIX);
+  await expect(page.getByRole('button', { name: 'Jalankan DvP', exact: true })).toBeDisabled();
+  await page.getByRole('link', { name: 'Transfer', exact: true }).click();
+  await page.getByRole('button', { name: 'Kirim transaksi', exact: true }).click();
+  await expect(page.getByText(/Selesai di blok/)).toBeVisible();
+});
+
 test('a deep link reloads into the same view', async ({ page }) => {
   await page.goto('/iroha3/dasbor?pihak=B');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Dasbor · Bank Nusantara');
