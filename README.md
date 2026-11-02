@@ -1,6 +1,6 @@
 # Lensa Privasi
 
-Demo satu transaksi yang sama dilihat dari tiap pihak (BI, bank pengirim, bank penerima, bank lain) di empat model privasi: Zeto, Noto, Stealth, Fabric-X. Ada juga stress test TPS yang membandingkan keempatnya.
+Demo satu transaksi yang sama dilihat dari tiap pihak (BI, bank pengirim, bank penerima, bank lain) di lima model: Zeto, Noto, Stealth, Fabric-X, Iroha 3. Ada juga stress test TPS yang membandingkan semuanya.
 
 Server di port 8790 (`PORT` mengganti). Port 8791 dipakai server mock untuk Playwright. Port 8787 sudah dipakai di host ini.
 
@@ -15,6 +15,14 @@ Server di port 8790 (`PORT` mengganti). Port 8791 dipakai server mock untuk Play
 
 - Stealth butuh `besu/stealth-address/.env.smoke`.
 - Fabric-X butuh `kubectl` dan kubeconfig ke cluster (namespace `fabricx`, deployment `rdbi-driver`). Tanpa port-forward: adapter memanggil `kubectl exec`. Kubeconfig dari env `FABRICX_KUBECONFIG`, default `/home/ecs-user/.kube/alibaba.yaml`.
+- Iroha 3 butuh port-forward Torii keempat validator (namespace `iroha3`) dan `python3` (hitung intent hash DvP):
+
+  ```bash
+  export KUBECONFIG=../iroha3/alibaba.yaml
+  i=0; for p in bi bank-a bank-b bank-c; do nohup kubectl -n iroha3 port-forward svc/$p $((38080+i)):8080 --address 127.0.0.1 >/dev/null 2>&1 & i=$((i+1)); done
+  ```
+
+  `server/state/iroha3/` harus sudah berisi `bin/iroha` (dari image `ghcr.io/radityaaa43/iroha3-rd-node:071e281e-stark`), `bi.toml`, `bank-a.toml`, `bank-b.toml`, `bank-c.toml` (kunci akun pihak, Torii node sendiri), `admin.toml` (akun operator node dari `kagami localnet`) dan `genesis.expected_hash`. Akun pihak, RD, DFABI dan saldo fee XOR ada di genesis (`iroha3/network/genesis-rd-dfabi.jq`), jadi kunci di sini harus kunci yang dipakai saat genesis dibuat.
 
 ## Instalasi
 
@@ -35,12 +43,14 @@ npm run bootstrap -- stealth
 npm run bootstrap -- noto
 npm run bootstrap -- zeto
 npm run bootstrap -- fabricx
+npm run bootstrap -- iroha3
 ```
 
 State ditulis ke `server/state/` (git-ignored). Catatan:
 
 - Noto menolak bootstrap ulang tanpa `--force`, supaya deployment yang sudah ada tidak tertimpa.
 - Fabric-X tidak men-deploy apa pun (jaringannya sudah jalan di cluster): bootstrap menulis `state/fabricx.json` lalu mengisi saldo awal bank (RD 10^13, DFABI 1000) lewat penerbitan BI. Bank yang saldonya sudah di atas itu dibiarkan, jadi aman dijalankan ulang.
+- Iroha 3 juga tidak men-deploy apa pun: bootstrap menulis `op-<pihak>.toml` (akun operator per node), mencatat id akun ke `state/iroha3.json`, lalu mint saldo awal bank (RD 10^13, DFABI 1000) dari BI. Aman dijalankan ulang.
 - Zeto tidak pernah memanggil `setERC20`. Itu transaksi PUBLIC ke kontrak Zeto dan bisa membuat node Paladin crash (lihat bagian Node Paladin restart).
 
 ## Sebelum meeting
@@ -70,6 +80,7 @@ npm run test:live -w server -- test/live/zeto.live.ts
 npm run test:live -w server -- test/live/noto.live.ts
 npm run test:live -w server -- test/live/stealth.live.ts
 npm run test:live -w server -- test/live/fabricx.live.ts   # butuh kubectl, tanpa lock Paladin
+npm run test:live -w server -- test/live/iroha3.live.ts    # butuh port-forward Iroha 3
 ```
 
 Tes live Paladin (zeto, noto) jalan di bawah lock supaya tidak bertabrakan:

@@ -68,7 +68,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // --only stealth,noto: prepare (and check) just these models, e.g. Stealth is Besu-only and spares the Paladin nodes
   const oi = process.argv.indexOf('--only');
   const only = oi < 0 ? undefined : (process.argv[oi + 1] ?? '').split(',').filter((m): m is ModelId => m in MODEL_NAMES);
-  if (only && !only.length) { console.error('--only butuh model: stealth, noto, zeto, atau fabricx'); process.exit(2); }
+  if (only && !only.length) { console.error('--only butuh model: stealth, noto, zeto, fabricx, atau iroha3'); process.exit(2); }
   let adapters;
   try { adapters = await loadAdapters({ only }); } catch (e) { console.log(`GAGAL Muat adapter: ${msg(e)}`); process.exit(1); }
   process.exit(await runPreflight(adapters, probeNodes, { prepare, only }, console.log));

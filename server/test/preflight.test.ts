@@ -17,11 +17,11 @@ test('a model that is not ready fails the run', async () => {
 });
 
 test('everything ready exits 0 and prints each capacity', async () => {
-  const { code, out } = await run({ zeto: fakeAdapter('zeto', { capacity: 7 }), noto: fakeAdapter('noto', { capacity: 8 }), stealth: fakeAdapter('stealth', { capacity: 9 }), fabricx: fakeAdapter('fabricx', { capacity: 10 }) });
+  const { code, out } = await run({ zeto: fakeAdapter('zeto', { capacity: 7 }), noto: fakeAdapter('noto', { capacity: 8 }), stealth: fakeAdapter('stealth', { capacity: 9 }), fabricx: fakeAdapter('fabricx', { capacity: 10 }), iroha3: fakeAdapter('iroha3', { capacity: 11 }) });
   expect(code).toBe(0);
   expect(out).toContain('OK Paladin node 4');
   expect(out).toContain('OK Besu');
-  for (const l of ['Zeto: 7', 'Noto: 8', 'Stealth: 9', 'Fabric-X: 10']) expect(out).toContain(`OK Kapasitas ${l} tx`);
+  for (const l of ['Zeto: 7', 'Noto: 8', 'Stealth: 9', 'Fabric-X: 10', 'Iroha 3: 11']) expect(out).toContain(`OK Kapasitas ${l} tx`);
 });
 
 test('a missing adapter and a dead node are reported', async () => {

@@ -1,5 +1,5 @@
 // Imported by the web bundle at runtime: keep this file free of imports.
-export type ModelId = 'zeto' | 'noto' | 'stealth' | 'fabricx';
+export type ModelId = 'zeto' | 'noto' | 'stealth' | 'fabricx' | 'iroha3';
 export type FlowId = 'rd-issue' | 'rd-transfer' | 'dfabi-issue' | 'dfabi-transfer' | 'dvp';
 export type PartyId = 'BI' | 'A' | 'B' | 'C';
 export type BankId = Exclude<PartyId, 'BI'>;
@@ -46,4 +46,4 @@ export function validateRequest(req: FlowRequest): { ok: true; amount: bigint } 
   else if (req.from === 'BI') return fail('Transfer dijalankan oleh bank');
   return { ok: true, amount };
 }
-export const MODEL_NAMES: Record<ModelId, string> = { zeto: 'Zeto', noto: 'Noto', stealth: 'Stealth', fabricx: 'Fabric-X' };
+export const MODEL_NAMES: Record<ModelId, string> = { zeto: 'Zeto', noto: 'Noto', stealth: 'Stealth', fabricx: 'Fabric-X', iroha3: 'Iroha 3' };

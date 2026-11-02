@@ -19,7 +19,7 @@ afterEach(async () => { await app?.close(); app = undefined; });
 
 const make = (adapters: Partial<Record<ModelId, ModelAdapter>> = { zeto: fakeAdapter('zeto') }, opts: { webDist?: string } = {}) =>
   (app = buildApp(adapters, { probe, ...opts }));
-const all = () => ({ zeto: fakeAdapter('zeto'), noto: fakeAdapter('noto'), stealth: fakeAdapter('stealth'), fabricx: fakeAdapter('fabricx') });
+const all = () => ({ zeto: fakeAdapter('zeto'), noto: fakeAdapter('noto'), stealth: fakeAdapter('stealth'), fabricx: fakeAdapter('fabricx'), iroha3: fakeAdapter('iroha3') });
 const post = (a: FastifyInstance, url: string, payload: unknown) => a.inject({ method: 'POST', url, payload: payload as object });
 const listen = async (a: FastifyInstance) => a.listen({ port: 0, host: '127.0.0.1' });
 
@@ -56,7 +56,7 @@ test('meta lists 4 models with step labels', async () => {
   const res = await make(all()).inject('/api/meta');
   expect(res.statusCode).toBe(200);
   const body = res.json();
-  expect(Object.keys(body.models).sort()).toEqual(['fabricx', 'noto', 'stealth', 'zeto']);
+  expect(Object.keys(body.models).sort()).toEqual(['fabricx', 'iroha3', 'noto', 'stealth', 'zeto']);
   expect(body.models.zeto).toMatchObject({ name: 'Zeto', available: true, stepLabels: ['Siapkan', 'Kirim', 'Konfirmasi', 'Selesai'] });
   expect(body.models.zeto.capabilities['dvp']).toEqual({ enabled: true });
   expect(body.parties.A.name).toBe('Bank Mandala');

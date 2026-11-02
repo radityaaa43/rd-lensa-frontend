@@ -33,9 +33,13 @@ export const MODEL_COPY: Record<ModelId, { tag: string; story: string }> = {
     tag: 'Bukti ZK dan pseudonim Idemix. Endorsement 3 dari 4 institusi, tanpa auditor.',
     story: 'Ledger hanya menyimpan commitment Pedersen dan bukti ZK, jadi nominal, jenis token, dan pemilik tersembunyi. Transaksi butuh endorsement 3 dari 4 institusi (BI dan tiga bank), sehingga bank tetap bisa bertransaksi saat BI atau satu bank offline. Setelah final, bank pengirim melaporkan transaksi lengkap ke BI; BI mencocokkannya dengan commitment di ledger lalu menyimpannya. Bank penerima membaca dompetnya sendiri, bank lain hanya melihat entri ledger yang buram.',
   },
+  iroha3: {
+    tag: 'Lane publik Iroha 3 tanpa privasi. DvP atomik native, empat validator.',
+    story: 'RD dan DFABI adalah aset biasa di lane publik. DvP memakai instruksi native DvpIsi: bank pembeli memberi izin sekali pakai yang terikat ke isi transaksi, lalu kedua kaki pindah dalam satu transaksi. Keempat validator (BI dan tiga bank) menyimpan setiap transaksi dalam bentuk terbuka. Torii hanya membatasi akun mana yang boleh membaca, jadi ini kontrol akses, bukan kerahasiaan. Jalur privat (APS) belum aktif.',
+  },
 };
 
-export const nodeLabel = (model: ModelId, node: number) => (model === 'stealth' ? 'Akun Besu' : model === 'fabricx' ? `Node Fabric-X ${node}` : `Paladin node ${node}`);
+export const nodeLabel = (model: ModelId, node: number) => (model === 'stealth' ? 'Akun Besu' : model === 'fabricx' ? `Node Fabric-X ${node}` : model === 'iroha3' ? `Validator Iroha ${node}` : `Paladin node ${node}`);
 export const roleHelp = (issuer: boolean, dvp: boolean) =>
   issuer ? 'Penerbitan hanya dijalankan BI.' : dvp ? 'Pilih bank penjual DFABI.' : 'Pilih bank pengirim.';
 
