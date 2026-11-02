@@ -207,8 +207,10 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
         ...hashes.outputs.map((value) => ({ label: 'Output state', value })),
       ];
       const note = req.flow === 'dfabi-issue' ? ' Penerbitan DFABI di Noto = transfer dari kustodian BI (unit belum terjual), karena BondTracker hanya mencetak ke kustodian.' : '';
+      // dvp: txIds = [bond-leg spend tx, cash-leg spend tx], so reads[1] is the RD leg when this node can read it
+      const rdLeg = FLOWS[req.flow].dvp && reads[1]?.visible ? reads[1].amount : undefined;
       const view = (verdict: Verdict, amount: bigint | undefined, counterparty: Counterparty | null, method: string): LensView =>
-        ({ party, role, verdict, amount: amount === undefined ? null : amount.toString(), counterparty, onChain, method: method + note });
+        ({ party, role, verdict, amount: amount === undefined ? null : amount.toString(), rdAmount: rdLeg === undefined || !visible ? null : rdLeg.toString(), counterparty, onChain, method: method + note });
 
       if (!visible) {
         return view('sealed', undefined, null,

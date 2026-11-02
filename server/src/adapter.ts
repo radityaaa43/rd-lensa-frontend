@@ -7,6 +7,7 @@ export interface FlowResult { txHash: string; block: number; steps: StepEvent[];
 export type Verdict = 'clear' | 'reported' | 'notarised' | 'viewkey' | 'partial' | 'sealed';
 export interface LensView {
   party: PartyId; role: Role; verdict: Verdict; amount: string | null; counterparty: Counterparty | null;
+  rdAmount: string | null; // dvp only: the RD leg as this party's own read shows it (amount = the DFABI leg); null elsewhere or when unreadable
   onChain: { label: string; value: string }[]; method: string; // amount null => redacted
 }
 export type Capability = { enabled: true } | { enabled: false; reason: string };

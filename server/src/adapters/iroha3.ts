@@ -208,13 +208,15 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
       throw new Error(`Isi transaksi di node ${PARTIES[party].name} tidak sama dengan permintaan`);
     }
     let amount = req.amount;
+    let rdAmount: string | null = null; // dvp: the payment leg of the settlement receipt
     let counterparty: Counterparty = { from: partyOf.get(authority) ?? null, to: req.to };
     if (dvp) {
-      const receipt = await json<{ content: { details: { value: { delivery: Movement } } } }>(op(party), ['--machine', 'ledger', 'query', 'stdin'],
+      const receipt = await json<{ content: { details: { value: { delivery: Movement; payment: Movement } } } }>(op(party), ['--machine', 'ledger', 'query', 'stdin'],
         JSON.stringify({ singular: { type: 'FindSettlementReceiptById', payload: { id: sid } } }));
       const d = receipt.content.details.value.delivery; // the DFABI leg
       const owner = (asset: string) => partyOf.get(asset.slice(asset.indexOf('#') + 1)) ?? null;
       amount = d.quantity;
+      rdAmount = receipt.content.details.value.payment.quantity;
       counterparty = { from: owner(d.source), to: owner(d.destination) };
     }
     const onChain = [
@@ -226,7 +228,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     const read = dvp ? '`ledger transaction get`, `FindSettlementReceiptById`' : '`ledger transaction get`';
     const method = `Node validator ${PARTIES[party].name} menyimpan transaksi ini dalam bentuk terbuka, sama seperti tiga validator lain. Dibaca dengan akun operator node (${read}).`
       + (role === 'outsider' ? ' Akun bank ini sendiri ditolak Torii (HTTP 403), tetapi itu hanya izin API, bukan enkripsi.' : '');
-    return { party, role, verdict: 'clear', amount, counterparty, onChain, method };
+    return { party, role, verdict: 'clear', amount, rdAmount, counterparty, onChain, method };
   }
 
   // History: every read goes to the party's OWN Torii, signed as its operator account. Iroha 3 is transparent (each

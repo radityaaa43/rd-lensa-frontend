@@ -60,6 +60,12 @@ history(party: PartyId, limit: number): Promise<HistoryItem[]>; // newest first,
 network(): Promise<Network>;
 ```
 
+`LensView` gains `rdAmount: string | null` (v1.2, 2026-11-02), with the same meaning as
+`HistoryItem.rdAmount`: for a DvP it is the RD leg as this party's own read shows it, otherwise
+null. The field is required, so tsc forces all 5 adapters to set it. The UI never computes it.
+A request preview (Compose, before sending) may show `amount × PRICE_PER_UNIT`, labelled as the
+transaction's terms ("ketentuan transaksi"). That is the request, not a party's read.
+
 What `history(party)` returns:
 - **Contents.** Every RD or DFABI transaction of the model that the party's own read can
   **observe**, with each field filled only from what that read reveals.
@@ -265,7 +271,8 @@ web/src/
   api.ts          + getHistory, getNetwork, getBalance (same call<T> helper)
   app/            route.ts, route.test.ts, useRoute.ts, usePoll.ts, usePoll.test.ts,
                   Sidebar.tsx, Header.tsx, PartySwitcher.tsx, ModelSelector.tsx
-  screens/        Landing, Dashboard, History, Transfer, Dvp, Lens, Report, Tps (.tsx)
+  screens/        Landing, Dashboard, History, Transfer (also renders DvP via `dvp` prop), Lens, Report (.tsx);
+                  TPS = <StressView/> directly (no one-line wrapper files)
   ui/             Sealed, States (Empty/Error/Loading), StatCard, BalanceCard, HistoryTable,
                   NetworkGraph, BarChart, LineChart (.tsx)
   demo/           keep demoState, Compose, Timeline, Lenses, JsonView, counterparty, copy (restyled);

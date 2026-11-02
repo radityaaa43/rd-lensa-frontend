@@ -5,7 +5,7 @@ import { buildApp } from './app.ts';
 import { fakeAdapter } from '../test/fake-adapter.ts';
 
 // Stealth amounts are public on chain, so the outsider sees the amount but not the parties.
-const stealth = fakeAdapter('stealth', { tps: 40, capacity: 500 });
+const stealth = fakeAdapter('stealth', { tps: 40, capacity: 500, biVerdict: 'viewkey' });
 const fakeLens = stealth.lens.bind(stealth);
 stealth.lens = async (req, result, party) => {
   const v = await fakeLens(req, result, party);
@@ -15,10 +15,10 @@ stealth.lens = async (req, result, party) => {
 const dist = fileURLToPath(new URL('../../web/dist', import.meta.url));
 const app = buildApp(
   {
-    zeto: fakeAdapter('zeto', { tps: 10, capacity: 500 }),
-    noto: fakeAdapter('noto', { tps: 20, capacity: 500 }),
+    zeto: fakeAdapter('zeto', { tps: 10, capacity: 500, biVerdict: 'reported' }),
+    noto: fakeAdapter('noto', { tps: 20, capacity: 500, biVerdict: 'notarised' }),
     stealth,
-    fabricx: fakeAdapter('fabricx', { tps: 10, capacity: 500 }),
+    fabricx: fakeAdapter('fabricx', { tps: 10, capacity: 500, biVerdict: 'reported' }),
     iroha3: fakeAdapter('iroha3', { tps: 5, capacity: 500, transparent: true }), // Iroha 3 is transparent: an outsider reads everything
   },
   { webDist: existsSync(dist) ? dist : undefined, probe: async () => ({ besu: true, paladin: [true, true, true, true] }) },

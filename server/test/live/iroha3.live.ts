@@ -54,7 +54,7 @@ describe('iroha3 live', () => {
     expect(await a.balanceOf('B', 'RD')).toBe(bR - 2n * PRICE_PER_UNIT);
     const l = await lenses(a, req, result);
     for (const p of ['BI', 'A', 'B', 'C'] as const) {
-      expect(l[p]).toMatchObject({ verdict: 'clear', amount: '2', counterparty: { from: 'A', to: 'B' } });
+      expect(l[p]).toMatchObject({ verdict: 'clear', amount: '2', rdAmount: String(2n * PRICE_PER_UNIT), counterparty: { from: 'A', to: 'B' } });
     }
     expect(l.C.onChain.map((o) => o.label)).toContain('Settlement id');
   });

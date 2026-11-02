@@ -38,7 +38,7 @@ function fake(opts: { status?: string; authority?: string; stored?: string; bala
     }
     if (args.includes('asset') && args.includes('get')) return JSON.stringify({ value: opts.balance ?? '10000000000' });
     if (args.includes('query')) {
-      return JSON.stringify({ content: { details: { value: { delivery: { source: 'DFABI-ID#acct-A', destination: 'DFABI-ID#acct-B', quantity: '2' } } } } });
+      return JSON.stringify({ content: { details: { value: { delivery: { source: 'DFABI-ID#acct-A', destination: 'DFABI-ID#acct-B', quantity: '2' }, payment: { source: 'RD-ID#acct-B', destination: 'RD-ID#acct-A', quantity: '1999999' } } } } });
     }
     // a submitted transfer/mint is stored as its instruction; a grant is not the flow's instruction
     if (!args.includes('settlement') && !args.includes('permission')) rendered = args.slice(3).filter((x) => x !== '--no-wait').join(' ');
@@ -122,7 +122,13 @@ describe('iroha3 lens', () => {
     const a = createIroha3Adapter(state, fake().cli);
     const r = req('dvp', 'A', 'B', '2');
     const l = await a.lens(r, await a.run(r, 2n, () => {}), 'BI');
-    expect(l).toMatchObject({ verdict: 'clear', amount: '2', counterparty: { from: 'A', to: 'B' } });
+    expect(l).toMatchObject({ verdict: 'clear', amount: '2', rdAmount: '1999999', counterparty: { from: 'A', to: 'B' } }); // the receipt's payment leg
+  });
+
+  it('a transfer lens has no RD leg', async () => {
+    const a = createIroha3Adapter(state, fake().cli);
+    const r = req('rd-transfer', 'A', 'B', '5');
+    expect((await a.lens(r, await a.run(r, 5n, () => {}), 'BI')).rdAmount).toBeNull();
   });
 
   it('a stored instruction that differs from the request is an error, not a verdict', async () => {

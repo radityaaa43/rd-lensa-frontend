@@ -6,7 +6,7 @@ const FLOW_IDS: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-tra
 // Deterministic adapter for tests: no chain access, fixed results.
 export function fakeAdapter(
   id: ModelId,
-  opts: { ready?: boolean; capacity?: number; tps?: number; failEvery?: number; serial?: boolean; onSubmit?: () => void; disabled?: Partial<Record<FlowId, string>>; transparent?: boolean } = {}, // transparent: every party reads everything (Iroha 3)
+  opts: { ready?: boolean; capacity?: number; tps?: number; failEvery?: number; serial?: boolean; onSubmit?: () => void; disabled?: Partial<Record<FlowId, string>>; transparent?: boolean; biVerdict?: 'reported' | 'notarised' | 'viewkey' } = {}, // transparent: every party reads everything (Iroha 3); biVerdict: what BI's read of a bank-to-bank tx is called (default 'clear')
 ): ModelAdapter {
   let calls = 0;
   let lockTail: Promise<unknown> = Promise.resolve(); // opts.serial: one transfer at a time, like a per-sender lock
@@ -29,8 +29,9 @@ export function fakeAdapter(
       const role = roleOf(req, party);
       const sealed = role === 'outsider' && !opts.transparent;
       return {
-        party, role, verdict: sealed ? 'sealed' : 'clear',
+        party, role, verdict: sealed ? 'sealed' : role === 'regulator' && opts.biVerdict ? opts.biVerdict : 'clear',
         amount: sealed ? null : req.amount,
+        rdAmount: sealed || req.flow !== 'dvp' ? null : (BigInt(req.amount) * PRICE_PER_UNIT).toString(),
         counterparty: sealed ? null : { from: req.from, to: req.to },
         onChain: [{ label: 'tx', value: '0x' + 'ab'.repeat(32) }],
         method: `fake:${id}`,
@@ -50,7 +51,7 @@ export function fakeAdapter(
         return {
           id: `0x${String(i + 1).repeat(64)}`, at: new Date(Date.UTC(2026, 10, 2, 10, 0, 0) - i * 60_000).toISOString(), block: 100 - i,
           flow: sealed ? null : req.flow, asset: sealed ? null : FLOWS[req.flow].asset,
-          role, verdict: sealed ? 'sealed' : 'clear',
+          role, verdict: sealed ? 'sealed' : role === 'regulator' && opts.biVerdict ? opts.biVerdict : 'clear',
           amount: sealed ? null : req.amount, rdAmount: sealed || !dvp ? null : (BigInt(req.amount) * PRICE_PER_UNIT).toString(),
           counterparty: sealed ? null : { from: req.from, to: req.to },
         };

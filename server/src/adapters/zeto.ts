@@ -226,20 +226,27 @@ export function createZetoAdapter(state: ZetoState) {
     // A bank only knows what its own node holds: the sender sees who owns the new outputs, the receiver sees
     // that the outputs are its own and nothing about the sender (a Zeto UTXO carries no sender).
     const assetParties = () => ledgerParties(ledger, io.filter((i) => i.token === asset).flatMap((i) => i.outputs), FLOWS[req.flow].issuer);
-    const view = (verdict: LensView['verdict'], amount: bigint | null, counterparty: Counterparty | null, method: string): LensView =>
-      ({ party: id, role, verdict, amount: amount === null ? null : amount.toString(), counterparty, onChain, method });
+    // dvp: the buyer pays the seller in RD, so the RD leg is the RD outputs the seller owns; null when the party holds none of them.
+    const sellerKey = lower(state.owners[req.from]);
+    const rdLeg = (xs: { token: Token; amount: bigint; owner: string }[]): bigint | null => {
+      if (!FLOWS[req.flow].dvp) return null;
+      const m = xs.filter((x) => x.token === 'RD' && x.owner === sellerKey);
+      return m.length ? m.reduce((a, x) => a + x.amount, 0n) : null;
+    };
+    const view = (verdict: LensView['verdict'], amount: bigint | null, counterparty: Counterparty | null, method: string, rd: bigint | null = null): LensView =>
+      ({ party: id, role, verdict, amount: amount === null ? null : amount.toString(), rdAmount: rd === null ? null : rd.toString(), counterparty, onChain, method });
 
     if (id === 'BI') {
       await untilVerified(io.flatMap((i) => i.outputs));
       const seen = io.flatMap((i) => i.outputs.map((o) => ({ token: i.token, ...ledger.verified.get(o)!.output }))).map((o) => ({ token: o.token, amount: BigInt(o.amount), owner: lower(o.owner) }));
       return view(role === 'issuer' ? 'clear' : 'reported', sum(seen), assetParties(),
-        'Membaca laporan bank di privacy group, lalu mencocokkan ulang ke commitment on-chain (`BiLedger.pollReports`, `scanChain`).');
+        'Membaca laporan bank di privacy group, lalu mencocokkan ulang ke commitment on-chain (`BiLedger.pollReports`, `scanChain`).', rdLeg(seen));
     }
     await indexedOn(id, result.txHash, io);
     const mine = await held(id, result.txHash, io);
     if (role === 'outsider') {
       return view(mine.length === 0 ? 'sealed' : 'partial', mine.length === 0 ? null : sum(mine), null,
-        'Node bank ini tidak menerima state maupun laporan: 0 state, saldo 0.');
+        'Node bank ini tidak menerima state maupun laporan: 0 state, saldo 0.', rdLeg(mine));
     }
     if (!mine.length) throw new Error(`Node ${PARTIES[id].name} tidak memiliki state transaksi ini`);
     const partyOf = new Map(PARTY_IDS.map((p) => [lower(state.owners[p]), p]));
@@ -248,7 +255,7 @@ export function createZetoAdapter(state: ZetoState) {
       ? { from: id, to: others.size === 1 ? [...others][0]! : null }
       : { from: null, to: id };
     return view('clear', sum(mine), own,
-      id === req.from ? 'Query state privat di node sendiri (`pstate.queryContractStates`).' : 'Node penerima menerima state terenkripsi dan membukanya.');
+      id === req.from ? 'Query state privat di node sendiri (`pstate.queryContractStates`).' : 'Node penerima menerima state terenkripsi dan membukanya.', rdLeg(mine));
   }
 
   // Unspent, unlocked RD UTXOs of exactly LOAD_AMOUNT a bank owns on its own node.

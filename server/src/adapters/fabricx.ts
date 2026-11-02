@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { Capability, Counterparty, FlowResult, LensView, ModelAdapter, StepEvent, Verdict } from '../adapter.ts';
-import { CANCELLED, LOAD_AMOUNT, NotAvailableError } from '../adapter.ts';
-import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
+import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, StepEvent, Verdict } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
+import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
 
@@ -21,6 +21,23 @@ const NODE: Record<PartyId, string> = { BI: 'issuer', A: 'bank2', B: 'bank3', C:
 const PARTY_OF_NODE: Record<string, PartyId> = { '': 'BI', issuer: 'BI', bank2: 'A', bank3: 'B', bank4: 'C' }; // an issue record has an empty sender
 export const TOKEN = { RD: 'RD', DFABI: 'DFABI-2027A' } as const;
 const FLOW_IDS = Object.keys(FLOWS) as FlowId[];
+// Ledger nodes of ns fabricx for network(): pods are matched by name (kubectl get pods, 2026-11-02). A node with several pods
+// (the shared committer stack, one orderer's consenter/router/batcher/assembler) is up only when all of them are Ready.
+// Left out on purpose: the Fabric CAs (fca-*), the block explorer and its DB, and the test driver pod.
+// Each bank's own committer runs inside its rdbi-bankN pod (README "Cluster deployment"), so the pod's Ready covers it.
+const NODES: { id: string; label: string; kind: NetworkNode['kind']; owner: PartyId | null; match: RegExp }[] = [
+  { id: 'rdbi-bi', label: 'Node FSC BI', kind: 'fsc-node', owner: 'BI', match: /^rdbi-bi-/ },
+  { id: 'rdbi-bank2', label: 'Node FSC Bank Mandala', kind: 'fsc-node', owner: 'A', match: /^rdbi-bank2-/ },
+  { id: 'rdbi-bank3', label: 'Node FSC Bank Nusantara', kind: 'fsc-node', owner: 'B', match: /^rdbi-bank3-/ },
+  { id: 'rdbi-bank4', label: 'Node FSC Bank Sejahtera', kind: 'fsc-node', owner: 'C', match: /^rdbi-bank4-/ },
+  { id: 'committer', label: 'Committer bersama', kind: 'fabricx-committer', owner: null, match: /^committer-/ },
+  ...[1, 2, 3, 4].map((n) => ({ id: `orderer-${n}`, label: `Orderer org ${n}`, kind: 'fabricx-orderer' as const, owner: null, match: new RegExp(`^orderer-(assembler|batcher|consenter|router)-${n}-`) })),
+];
+// Connections the deployment configures (README "Cluster deployment"): BI reads the shared committer; each bank committer pulls blocks from every orderer's assembler.
+const LINKS = [
+  { from: 'rdbi-bi', to: 'committer' },
+  ...['rdbi-bank2', 'rdbi-bank3', 'rdbi-bank4'].flatMap((b) => [1, 2, 3, 4].map((n) => ({ from: b, to: `orderer-${n}` }))),
+];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Module level, so every adapter instance in the process shares them. At most MAX_TX operations in flight (a released
@@ -140,8 +157,9 @@ export function createFabricxAdapter(exec: Exec) {
     const { report, onChain } = result.context as Ctx;
     const role = roleOf(req, id);
     const token = TOKEN[FLOWS[req.flow].asset];
+    let rdAmount: bigint | null = null; // dvp: the RD leg of the swap as this node's records show it
     const view = (verdict: Verdict, amount: bigint | null, counterparty: Counterparty | null, method: string): LensView =>
-      ({ party: id, role, verdict, amount: amount === null ? null : amount.toString(), counterparty, onChain, method });
+      ({ party: id, role, verdict, amount: amount === null ? null : amount.toString(), rdAmount: rdAmount === null ? null : rdAmount.toString(), counterparty, onChain, method });
 
     // BI offline: the transaction is final but BI never got the report, so BI holds nothing about it.
     if (id === 'BI' && report.startsWith('not delivered')) {
@@ -153,6 +171,10 @@ export function createFabricxAdapter(exec: Exec) {
       return view('sealed', null, null, 'Node bank ini tidak menyimpan catatan transaksi ini (0 catatan). Ledger publik hanya berisi commitment dan bukti ZK.');
     }
     const amount = seen.reduce((a, m) => a + m.amount, 0n);
+    if (FLOWS[req.flow].dvp) {
+      const rd = await moves(id, result.txHash, TOKEN.RD, role !== 'outsider');
+      if (rd.length) rdAmount = rd.reduce((a, m) => a + m.amount, 0n);
+    }
     const one = <K extends 'sender' | 'recipient'>(k: K) => { const s = new Set(seen.map((m) => m[k])); return s.size === 1 ? [...s][0]! : null; };
     const counterparty = { from: one('sender'), to: one('recipient') };
     if (id === 'BI') {
@@ -161,6 +183,95 @@ export function createFabricxAdapter(exec: Exec) {
     }
     return view(role === 'outsider' ? 'partial' : 'clear', amount, counterparty,
       role === 'receiver' ? 'Membaca riwayat transaksi di dompet node penerima (`acceptedTransactionHistory`).' : 'Membaca riwayat transaksi di node sendiri (`acceptedTransactionHistory`).');
+  }
+
+  // History: the party's own `api history` records (a bank: the txs it took part in; BI: its audit store, every reported tx)
+  // plus the tx ids of the RD/DFABI namespace in the party's OWN committer DB. A tx in that DB the party holds no record of
+  // is sealed: it saw the commitments and the block, nothing else. BI's committer is the shared committer-db-0 (db sc_db),
+  // a bank's runs inside its rdbi-bankN pod (container db, database committer); same schema, same ledger (public).
+  interface HRec { txId: string; type: string; sender: string; recipient: string; token: string; amount: string; timestamp: string; status: string }
+  // The token-request keys are \0tr\0<txid>\0: the range scan on the key (primary key index) reads only those, not every output key.
+  const LEDGER_SQL = (n: number) => `select encode(s.tx_id,'escape'), encode(s.height,'hex') from tx_status s where s.status = 1 and s.tx_id in `
+    + `(select decode(substring(encode(key,'hex') from '^00747200([0-9a-f]{128})00'),'hex') from ns_rd_dfabi_v2 where key >= '\\x00747200'::bytea and key < '\\x00747201'::bytea) order by s.height desc limit ${n}`;
+  const PSQL = (db: string, port: string) => `PGPASSWORD=$POSTGRES_PASSWORD psql -U $POSTGRES_USER -d ${db} ${port} -h 127.0.0.1 -At -F'|' -c "${LEDGER_SQL(HISTORY_MAX)}"`;
+  async function ledgerTxs(party: PartyId): Promise<{ txId: string; block: number }[]> {
+    const out = await exec(party === 'BI' ? ['exec', 'committer-db-0', '--', 'sh', '-c', PSQL('sc_db', '-p 5150')]
+      : ['exec', `deploy/rdbi-${NODE[party]}`, '-c', 'db', '--', 'sh', '-c', PSQL('committer', '')]);
+    return out.split('\n').filter(Boolean).map((line) => {
+      const [txId, height] = line.split('|') as [string, string]; // height = length byte, big-endian block number, position byte
+      const len = parseInt(height?.slice(0, 2) ?? '', 16);
+      const block = parseInt(height?.slice(2, 2 + 2 * len) ?? '', 16);
+      if (!/^[0-9a-f]{64}$/.test(txId ?? '') || !/^[0-9a-f]{4,}$/.test(height ?? '') || !Number.isSafeInteger(block)) throw new Error(`Baris ledger tidak dikenali: ${line.slice(0, 100)}`);
+      return { txId, block };
+    });
+  }
+
+  // One tx from the party's own records. Change rows (sender = recipient) are not movements. Not listed: redeems, other tokens.
+  function ownItem(party: PartyId, rows: HRec[], block: number): HistoryItem | null {
+    const moves = rows.filter((r) => r.status === 'confirmed' && r.sender !== r.recipient && (r.token === TOKEN.RD || r.token === TOKEN.DFABI) && r.type !== 'redeem');
+    if (!moves.length) return null;
+    const sum = (token: string) => moves.filter((m) => m.token === token).reduce((a, m) => a + BigInt(m.amount), 0n);
+    const one = (token: string, k: 'sender' | 'recipient') => { const s = new Set(moves.filter((m) => m.token === token).map((m) => PARTY_OF_NODE[m[k]] ?? null)); return s.size === 1 ? [...s][0]! : null; };
+    const issue = moves.every((m) => m.type === 'issue');
+    const tokens = new Set(moves.map((m) => m.token));
+    const dvp = tokens.size === 2 && !issue;
+    const token = dvp ? TOKEN.DFABI : moves[0]!.token; // a dvp's amount is its DFABI leg
+    const counterparty: Counterparty = { from: one(token, 'sender'), to: one(token, 'recipient') };
+    const asset = token === TOKEN.RD ? 'RD' : 'DFABI';
+    const role = roleFromParties(party, counterparty, issue);
+    return {
+      id: moves[0]!.txId,
+      at: new Date(moves[0]!.timestamp).toISOString(), // a confirmed row; when this node stored the record (waktu catat node), not the commit time: it differs per node
+      block, flow: dvp ? 'dvp' : (`${asset === 'RD' ? 'rd' : 'dfabi'}-${issue ? 'issue' : 'transfer'}` as FlowId), asset, role,
+      verdict: party === 'BI' ? (issue ? 'clear' : 'reported') : role === 'outsider' ? 'partial' : 'clear',
+      amount: sum(token).toString(), rdAmount: dvp ? sum(TOKEN.RD).toString() : null, counterparty,
+    };
+  }
+
+  const FRESH_BLOCKS = 2; // "at the ledger head": the newest block and the two before it
+  const firstUnrecorded = new Map<string, number>(); // party|txId -> when this process first saw the tx without an own record
+  async function history(party: PartyId, limit: number): Promise<HistoryItem[]> {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error('limit harus bilangan bulat >= 1');
+    const want = Math.min(limit, HISTORY_MAX);
+    // Own records for the newest HISTORY_MAX txs: any own tx among the newest `want` ledger txs is among them.
+    const [{ records }, ledger] = await Promise.all([api<{ records: HRec[] }>(['history', NODE[party], String(HISTORY_MAX)]), ledgerTxs(party)]);
+    if (!ledger.length && records.length) throw new Error('Ledger kosong tetapi node punya catatan: kueri committer tidak cocok dengan ledger');
+    const byTx = new Map<string, HRec[]>();
+    for (const r of records) byTx.set(r.txId, [...(byTx.get(r.txId) ?? []), r]);
+    const head = ledger[0]?.block ?? 0;
+    return ledger.slice(0, want).flatMap(({ txId, block }): HistoryItem[] => {
+      const rows = byTx.get(txId);
+      if (!rows) {
+        // The committer applies a block before the node stores its own record of it (lens() waits RECORDS_WAIT_MS for the same
+        // reason). A participant must not be shown "sealed" in that gap: a tx at the ledger head with no record is left out until
+        // it has been seen unrecorded for RECORDS_WAIT_MS (first-seen moment: the DB has no block time). Older ones are sealed at once.
+        const key = `${party}|${txId}`;
+        const seen = firstUnrecorded.get(key) ?? (firstUnrecorded.set(key, Date.now()), Date.now());
+        if (block >= head - FRESH_BLOCKS && Date.now() - seen < RECORDS_WAIT_MS) return [];
+        return [{ id: txId, at: null, block, flow: null, asset: null, role: roleFromParties(party, null, false), verdict: 'sealed', amount: null, rdAmount: null, counterparty: null }];
+      }
+      const item = ownItem(party, rows, block);
+      return item ? [item] : []; // held but not a listed movement (pending, redeem)
+    });
+  }
+
+  interface Pod { metadata: { name: string; deletionTimestamp?: string }; status: { phase?: string; conditions?: { type: string; status: string }[]; containerStatuses?: { restartCount: number }[] } }
+  async function network(): Promise<Network> {
+    let items: Pod[];
+    try {
+      items = (JSON.parse(await exec(['get', 'pods', '-o', 'json', '--request-timeout=3s'])) as { items: Pod[] }).items; // one call for the namespace
+    } catch (e) { // the namespace could not be read: the status is not known, which is not "down"
+      return { nodes: NODES.map(({ match: _m, ...node }): NetworkNode => ({ ...node, status: 'unknown', detail: (e as Error).message.split('\n')[0]! })), links: LINKS };
+    }
+    const nodes = NODES.map(({ match, ...node }): NetworkNode => {
+      const pods = items.filter((p) => match.test(p.metadata.name) && !['Failed', 'Succeeded'].includes(p.status.phase ?? '') && !p.metadata.deletionTimestamp); // leftovers of an eviction or a finished job are not nodes
+      if (!pods.length) return { ...node, status: 'down', detail: 'pod tidak ditemukan' };
+      const restarts = pods.reduce((n, p) => n + (p.status.containerStatuses ?? []).reduce((m, c) => m + c.restartCount, 0), 0);
+      const ready = pods.filter((p) => (p.status.conditions ?? []).some((c) => c.type === 'Ready' && c.status === 'True')).length;
+      const detail = pods.length === 1 ? `${pods[0]!.status.phase ?? 'Unknown'}, ${restarts} restart` : `${ready}/${pods.length} pod siap, ${restarts} restart`;
+      return { ...node, status: ready === pods.length ? 'up' : 'down', detail };
+    });
+    return { nodes, links: LINKS };
   }
 
   const adapter: ModelAdapter & { fund: typeof issue } = {
@@ -178,8 +289,8 @@ export function createFabricxAdapter(exec: Exec) {
     balanceOf,
     run,
     lens,
-    history: async () => { throw new NotAvailableError('Riwayat belum tersedia'); }, // step 0 stub (ARCHITECTURE.md §5), replaced per §2.3
-    network: async () => { throw new NotAvailableError('Status jaringan belum tersedia'); },
+    history,
+    network,
     async loadCapacity() {
       const balances = await Promise.all(BANKS.map((b) => balanceOf(b, 'RD')));
       return 3 * Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT);

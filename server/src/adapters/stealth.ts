@@ -233,6 +233,11 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
     const ctx = result.context as Ctx;
     const anns = await txAnnouncements(result.block, result.txHash, ctx.kind);
     if (!anns.length) throw new Error('Pengumuman transaksi tidak ditemukan di block');
+    // dvp: the RD leg is a second announcement of the same tx; its amount is public in the log, so every party reads it the same way.
+    const rdAmount = FLOWS[req.flow].dvp
+      ? (await txAnnouncements(result.block, result.txHash, 'rd')).map((a) => parse('rd', a.metadata)?.amount.toString() ?? null).find((x) => x !== null) ?? null
+      : null;
+    if (FLOWS[req.flow].dvp && rdAmount === null) throw new Error('Pengumuman RD dari DvP ini tidak ditemukan di block'); // amounts are public in the log: a missing leg is a failed read, not "unreadable"
     if (role === 'sender' || role === 'issuer') {
       // Read the tx's announcement back from the chain; amount, stealth address and token shown are the on-chain ones.
       const own = anns.find((a) => lc(a.stealthAddress) === lc(ctx.stealthAddress));
@@ -240,7 +245,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
       const chain = parse(ctx.kind, own.metadata)!;
       checkOwnTx(ctx, { stealthAddress: own.stealthAddress, amount: chain.amount, token: chain.token }, tokenOf(ctx.kind === 'rd' ? 'RD' : 'DFABI'));
       return {
-        party, role, verdict: 'clear', amount: chain.amount.toString(), counterparty: { from: party, to: req.to },
+        party, role, verdict: 'clear', amount: chain.amount.toString(), rdAmount, counterparty: { from: party, to: req.to },
         onChain: onChain(result.txHash, own.stealthAddress, chain.memo, chain.amount),
         method: 'Baca pengumuman transaksi dari chain (`announcements`), lalu cocokkan dengan data yang dibangun pengirim (`deriveStealth`, `buildMemo`)',
       };
@@ -248,7 +253,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
     const ann = anns[0];
     const md = parse(ctx.kind, ann.metadata)!;
     const view = (verdict: LensView['verdict'], amount: bigint, counterparty: Counterparty | null, method: string): LensView =>
-      ({ party, role, verdict, amount: amount.toString(), counterparty, onChain: onChain(result.txHash, ann.stealthAddress, md.memo, amount), method });
+      ({ party, role, verdict, amount: amount.toString(), rdAmount, counterparty, onChain: onChain(result.txHash, ann.stealthAddress, md.memo, amount), method });
 
     if (role === 'receiver') {
       const k = banks[party as BankId];
