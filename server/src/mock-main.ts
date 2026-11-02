@@ -19,7 +19,7 @@ const app = buildApp(
     noto: fakeAdapter('noto', { tps: 20, capacity: 500 }),
     stealth,
     fabricx: fakeAdapter('fabricx', { tps: 10, capacity: 500 }),
-    iroha3: fakeAdapter('iroha3', { tps: 5, capacity: 500 }),
+    iroha3: fakeAdapter('iroha3', { tps: 5, capacity: 500, transparent: true }), // Iroha 3 is transparent: an outsider reads everything
   },
   { webDist: existsSync(dist) ? dist : undefined, probe: async () => ({ besu: true, paladin: [true, true, true, true] }) },
 );

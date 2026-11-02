@@ -6,7 +6,7 @@ const FLOW_IDS: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-tra
 // Deterministic adapter for tests: no chain access, fixed results.
 export function fakeAdapter(
   id: ModelId,
-  opts: { ready?: boolean; capacity?: number; tps?: number; failEvery?: number; serial?: boolean; onSubmit?: () => void; disabled?: Partial<Record<FlowId, string>> } = {},
+  opts: { ready?: boolean; capacity?: number; tps?: number; failEvery?: number; serial?: boolean; onSubmit?: () => void; disabled?: Partial<Record<FlowId, string>>; transparent?: boolean } = {}, // transparent: every party reads everything (Iroha 3)
 ): ModelAdapter {
   let calls = 0;
   let lockTail: Promise<unknown> = Promise.resolve(); // opts.serial: one transfer at a time, like a per-sender lock
@@ -27,7 +27,7 @@ export function fakeAdapter(
     },
     async lens(req, _result, party): Promise<LensView> {
       const role = roleOf(req, party);
-      const sealed = role === 'outsider';
+      const sealed = role === 'outsider' && !opts.transparent;
       return {
         party, role, verdict: sealed ? 'sealed' : 'clear',
         amount: sealed ? null : req.amount,
@@ -45,7 +45,7 @@ export function fakeAdapter(
       ];
       return txs.slice(0, limit).map((req, i) => {
         const role = roleOf(req, party);
-        const sealed = role === 'outsider';
+        const sealed = role === 'outsider' && !opts.transparent;
         const dvp = req.flow === 'dvp';
         return {
           id: `0x${String(i + 1).repeat(64)}`, at: new Date(Date.UTC(2026, 10, 2, 10, 0, 0) - i * 60_000).toISOString(), block: 100 - i,
