@@ -3,7 +3,8 @@ import type { ModelRunStatus, StressSnapshot } from '../../../server/src/stress.
 import type { Meta } from '../api.ts';
 import { formatDecimal } from '../format.ts';
 
-export const COLOR: Record<ModelId, string> = { zeto: '#0E2A52', noto: '#2F80ED', stealth: '#8A6BD1', fabricx: '#1F9D8A', iroha3: '#C2410C' };
+// DESIGN.md §7.8 (Ref A bars): ink and aqua alternate by model order; every bar and line is also labelled with its model name
+export const COLOR: Record<ModelId, string> = { zeto: 'var(--ink)', noto: 'var(--aqua-edge)', stealth: 'var(--ink)', fabricx: 'var(--aqua-edge)', iroha3: 'var(--ink)' };
 const LABEL: Record<ModelRunStatus, string> = {
   waiting: 'Menunggu giliran', running: 'Berjalan', done: 'Selesai', stopped: 'Dihentikan', timeout: 'Batas waktu habis', skipped: 'Dilewati',
 };

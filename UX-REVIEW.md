@@ -56,6 +56,33 @@ Transfer/DvP → progress → Lensa → Riwayat → Laporan → TPS.
 - **Responsive.** Three breakpoints. The H2 pills must hold at 320 px; check in pass 2.
 - **Terms.** Indonesian labels are consistent: Dasbor, Riwayat, Lensa, Laporan ke BI, Tersegel. "DvP" and "view key" stay as they are.
 
+## Pass 2 (mock, 2026-11-02, after T4 step 5)
+
+Evidence: fe's screenshots `s5-*` and `fix-*` (light and dark, 1440 and 390), Playwright 7/7,
+and fe's headless checks (no horizontal scroll, 0 console errors). The live pass follows in T7.
+
+| Criterion | Score 1–5 | Note |
+|---|---|---|
+| Time to first insight | 4 | The Landing headline and "Siapa melihat" row answer P3/P4. Platform tiles still show a letter instead of an icon |
+| Privacy clarity | 5 | Lensa with 4 columns, own column "Pihak Anda", one seal chip for a fully sealed row, "Kenapa tersegel?" |
+| Wayfinding | 5 | Breadcrumb, model, party and h1 with the party name are always visible |
+| Party switching | 5 | Pills keep the screen. A run keeps "Dikirim oleh {original}" |
+| States | 4 | 501/502/empty/loading are present. Laporan is not exercised by the mock (P2-3) |
+| Recovery | 4 | Error block + one action, focus moves to it. 409 names the stress test |
+| Slow actions | 3 | The confirm dialog + global banner exist, but the dialog is not modal (P2-2) |
+| Terms | 5 | Indonesian is consistent |
+| Accessibility | 4 | Live region, skip link, labels. Modal focus trap missing (P2-2). Keyboard walk not yet run |
+| Narrow layout | 4 | No horizontal scroll. The icon row is accepted |
+| Density vs refs | 4 | Transfer's JSON panel is heavy for P4. Acceptable as the existing "request/response" feature |
+
+| Id | Screen | Problem | Fix | Owner | Decision |
+|---|---|---|---|---|---|
+| P2-1 | Lensa | The outsider column of an RD transfer shows 3 stacked seal chips (amount, a second field, counterparty). Expected one amount seal + a counterparty seal, or the single "fully sealed" chip. No RD-leg row on a non-DvP | Check which field the 2nd chip is. Apply the same `cells()`/allSealed rule as Riwayat | fe | Fix |
+| P2-2 | TPS | The confirm dialog renders inline: no backdrop, no focus trap. It starts real txs on the live cluster | `dialog.showModal()` + `::backdrop`, initial focus on "Batal" | fe | Fix |
+| P2-3 | Laporan | The mock never returns reported/notarised/viewkey, so the dark report table is unverified | `fakeAdapter` option that makes BI's history `reported` for bank txs (zeto, fabricx in mock-main) | blockhain | Fix |
+| P2-4 | TPS | Over-time chart: sparklines per model instead of Ref B's line chart with tooltip | Accepted deviation (no shared time axis) | — | Accepted |
+| P2-5 | Results | Horizontal bars instead of Ref A's vertical columns | Accepted deviation (5 model labels) | — | Accepted |
+
 ## Pass 2 (after screens exist)
 
 Re-walk P1–P4 on the running app (mock first, then live). Score each criterion 1–5, with

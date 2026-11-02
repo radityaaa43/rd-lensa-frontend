@@ -358,6 +358,7 @@ table.hist .amt{font-weight:600;white-space:nowrap}
 .sealedrow{text-align:left}
 .seal.row summary{width:auto;max-width:100%;height:auto;min-height:28px;padding:4px 12px}
 .badge .ico{width:13px;height:13px;margin-right:5px}
+.pending{display:block;margin-top:4px;font-size:12px;font-weight:600;color:var(--partial)}
 .hero{position:relative;overflow:hidden;background:var(--ink-panel);color:var(--on-ink);border-radius:var(--r-card);box-shadow:var(--lift);display:flex;flex-direction:column;min-height:232px}
 .hero .pattern{position:absolute;inset:0;width:100%;height:72%;opacity:.07;color:#fff}
 .hero .top{position:relative;padding:24px;flex:1}
@@ -405,3 +406,68 @@ table.hist .amt{font-weight:600;white-space:nowrap}
   .hero .big .fit3{font-size:22px;line-height:30px}.hero .big .fit4{font-size:19px;line-height:26px}
 }
 @media (prefers-reduced-motion:reduce){.skel i{animation:none}}
+
+/* ---- step 5: Transfer / DvP / Lensa / Laporan / TPS (DESIGN.md §7.8–§7.14) ---- */
+.utabs{display:flex;gap:24px;border-bottom:1px solid var(--line);margin-bottom:20px;overflow-x:auto}
+.utabs button{background:none;border:0;border-bottom:2px solid transparent;padding:8px 0 10px;font-size:15px;color:var(--muted);white-space:nowrap;margin-bottom:-1px}
+.utabs button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--ink);font-weight:600}
+.utabs button:disabled{color:var(--faint);cursor:not-allowed}
+.compose2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:32px}
+.compose2 h2{margin:0 0 16px;font-size:20px;line-height:28px}
+.fields2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.fields2 label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+.fields2 select,.fields2 input{width:100%;height:40px;padding:0 12px;border:1px solid var(--control);border-radius:var(--r-control);background:var(--sheet);color:var(--ink);font:15px var(--sans)}
+.fields2 input[aria-invalid=true]{border-color:var(--danger)}
+.hint2{margin:6px 0 0;font-size:13px;color:var(--muted)}
+.btn.wide{width:100%;min-height:44px;margin-top:20px;font-size:15px}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.compose2 .notice{margin-top:16px}
+.json pre{margin:0;font:12.5px/1.65 var(--mono);background:var(--canvas);border-radius:var(--r-tile);padding:14px 16px;white-space:pre-wrap;word-break:break-all;min-height:196px;color:var(--ink)}
+.progress .timeline{padding:0}
+.done{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;background:var(--clear-bg);color:var(--clear);border-radius:var(--r-tile);padding:12px 16px;font-weight:600}
+.state.error:focus{outline:2px solid var(--focus);outline-offset:2px}
+
+/* lens comparison (§7.10) */
+.lenses2{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+.lens2{border:1px solid var(--line);border-radius:var(--r-card);padding:18px;display:flex;flex-direction:column;gap:10px;align-items:flex-start;min-width:0}
+.lens2.mine{border:2px solid var(--ink)}
+.lens2 header h3{margin:0;font:600 16px var(--display);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.lens2 header p{margin:2px 0 0;font-size:12.5px}
+.lens2 .you{font:600 11.5px var(--sans);background:var(--ink);color:var(--sheet);border-radius:var(--r-pill);padding:2px 8px}
+.lens2.note p{margin:0;color:var(--muted);font-size:14px}
+.lamt{font:600 22px/30px var(--display);overflow-wrap:anywhere}
+.lflow,.lrd{margin:0;font-size:14px}
+.onchain{font-size:13px;width:100%}
+.onchain summary{cursor:pointer;color:var(--muted)}
+.onchain code{font:12px var(--mono);background:var(--canvas);padding:1px 5px;border-radius:4px}
+.onchain ul{margin:6px 0 0;padding-left:18px}
+.story summary{cursor:pointer;font-weight:600}
+.story p{color:var(--muted);max-width:72ch}
+
+/* BI report (§7.11, Ref B Sell Order) */
+.report{background:var(--ink-panel);color:var(--on-ink);border-radius:var(--r-card);padding:24px}
+.report h2{margin:0 0 16px;font-size:20px}
+.report table{width:100%;border-collapse:collapse;font-size:14px}
+.report th{text-align:left;font-weight:500;opacity:.75;padding:0 12px 10px}
+.report td{padding:12px}
+.report tbody tr:hover{background:rgb(156 207 221 / .18);border-radius:var(--r-pill)}
+.report .right{text-align:right}
+.report a{color:var(--on-ink)}
+.report a:focus-visible{outline-color:var(--focus-on-ink)}
+
+/* TPS confirm (§7.14) and the existing stress view inside the new sheet */
+dialog.confirm{border:0;border-radius:var(--r-card);padding:24px;max-width:440px;background:var(--sheet);color:var(--ink);box-shadow:var(--lift)}
+dialog.confirm::backdrop{background:rgb(14 18 32 / .45)}
+dialog.confirm h2{margin:0 0 8px;font-size:20px}
+dialog.confirm p{margin:0 0 8px;color:var(--muted)}
+dialog.confirm .actions{display:flex;gap:12px;margin-top:16px}
+.main .shell{grid-template-columns:300px minmax(0,1fr);gap:24px}
+.main .shell aside{border:1px solid var(--line);border-radius:var(--r-card)}
+.stressmain{display:flex;flex-direction:column;gap:20px;min-width:0}
+
+@media (max-width:1279px){.lenses2{grid-template-columns:repeat(2,minmax(0,1fr))}.compose2{grid-template-columns:1fr}}
+@media (max-width:767px){
+  .lenses2,.fields2{grid-template-columns:1fr}
+  .main .shell{grid-template-columns:1fr}
+  .report{padding:16px}.report th,.report td{padding:8px}
+}

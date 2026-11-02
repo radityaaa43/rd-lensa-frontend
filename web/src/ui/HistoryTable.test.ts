@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import type { HistoryItem } from '../../../server/src/adapter.ts';
 import type { PartyId } from '../../../server/src/domain.ts';
-import { cells } from './HistoryTable.tsx';
+import { cells, notReported } from './HistoryTable.tsx';
 
 const name = (p: PartyId) => ({ BI: 'Bank Indonesia', A: 'Bank Mandala', B: 'Bank Nusantara', C: 'Bank Sejahtera' })[p];
 const base: HistoryItem = {
@@ -51,6 +51,14 @@ test('one unreadable side is sealed, the other stays readable', () => {
   const c = cells({ ...base, role: 'receiver', counterparty: { from: null, to: 'B' } }, name);
   expect(c.from).toEqual({ t: 'sealed' });
   expect(c.to).toEqual({ t: 'text', text: 'Bank Nusantara' });
+});
+
+test('Fabric-X: a sealed row in BI\'s view is a tx not yet reported by a bank; nowhere else', () => {
+  const sealed = { ...base, verdict: 'sealed' as const, amount: null, counterparty: null };
+  expect(notReported('fabricx', 'BI', sealed)).toBe(true);
+  expect(notReported('fabricx', 'C', sealed)).toBe(false);
+  expect(notReported('zeto', 'BI', sealed)).toBe(false);
+  expect(notReported('fabricx', 'BI', { ...base, verdict: 'reported' })).toBe(false);
 });
 
 test('a missing timestamp is stated, not sealed', () => {

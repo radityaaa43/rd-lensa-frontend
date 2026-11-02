@@ -1,51 +1,48 @@
 import type { LensView, StepEvent } from '../../../server/src/adapter.ts';
-import { BANKS, FLOWS, type FlowId, type ModelId, type PartyId } from '../../../server/src/domain.ts';
+import { BANKS, type FlowId, type FlowRequest, type ModelId, type PartyId } from '../../../server/src/domain.ts';
 
+export type Asset = 'RD' | 'DFABI';
 export interface TxResult { txHash: string; block: number; steps: StepEvent[]; lenses: LensView[] }
+// Model and sender are not here: they come from the route (ARCHITECTURE.md §3.6). The run lives in App.
 export interface DemoState {
-  model: ModelId; flow: FlowId; from: PartyId; to: PartyId;
-  amount: string; // decimal digits, kept as a string so it never passes through a JS number
+  asset: Asset; to: PartyId;
+  amounts: Record<Asset, string>; // decimal digits per asset, kept as strings so they never pass through a JS number; DvP uses DFABI
   phase: 'idle' | 'run' | 'done' | 'error';
   tab: 'req' | 'res';
+  req: FlowRequest | null; // copied at start: a later party or model switch never changes a run
   steps: number[]; // measured ms per step, by index
   result: TxResult | null;
   error: string | null;
-  open: PartyId | null; // lens whose detail panel is open
 }
 export type DemoAction =
-  | { type: 'model'; model: ModelId; enabled: FlowId[] }
-  | { type: 'flow'; flow: FlowId }
-  | { type: 'from'; from: PartyId }
+  | { type: 'asset'; asset: Asset }
   | { type: 'to'; to: PartyId }
-  | { type: 'amount'; amount: string }
+  | { type: 'amount'; asset: Asset; amount: string }
   | { type: 'tab'; tab: 'req' | 'res' }
-  | { type: 'open'; party: PartyId }
-  | { type: 'start' }
+  | { type: 'start'; req: FlowRequest }
   | { type: 'step'; index: number; ms: number }
   | { type: 'result'; result: TxResult }
   | { type: 'error'; reason: string };
 
-const defaultAmount = (f: FlowId) => (FLOWS[f].asset === 'RD' ? '1000000000' : '1000');
-const cleared = (): Pick<DemoState, "phase" | "tab" | "steps" | "result" | "error" | "open"> =>
-  ({ phase: 'idle', tab: 'req', steps: [], result: null, error: null, open: null });
+const cleared = (): Pick<DemoState, 'phase' | 'tab' | 'req' | 'steps' | 'result' | 'error'> =>
+  ({ phase: 'idle', tab: 'req', req: null, steps: [], result: null, error: null });
 
-// issuance is BI only, every other flow is a bank; the receiver is always a bank other than the sender
-function fixParties(s: DemoState): DemoState {
-  const from: PartyId = FLOWS[s.flow].issuer ? 'BI' : s.from === 'BI' ? 'A' : s.from;
-  const to = s.to !== from && s.to !== 'BI' ? s.to : BANKS.find((b) => b !== from)!;
-  return { ...s, from, to };
-}
+export const initialDemo = (): DemoState => ({ asset: 'RD', to: 'B', amounts: { RD: '1000000000', DFABI: '1000' }, ...cleared() });
 
-export function initialDemo(model: ModelId, enabled: FlowId[]): DemoState {
-  const flow = enabled.includes('rd-transfer') ? 'rd-transfer' : enabled[0] ?? 'rd-transfer';
-  return fixParties({ model, flow, from: 'A', to: 'B', amount: defaultAmount(flow), ...cleared() });
+// issuance is BI only; every other flow is a bank's
+export const flowOf = (dvp: boolean, party: PartyId, asset: Asset): FlowId =>
+  dvp ? 'dvp' : `${asset === 'RD' ? 'rd' : 'dfabi'}-${party === 'BI' ? 'issue' : 'transfer'}`;
+// the receiver is always a bank other than the sender
+export const toOf = (s: DemoState, party: PartyId): PartyId => (s.to !== party && s.to !== 'BI' ? s.to : BANKS.find((b) => b !== party)!);
+
+export function requestOf(s: DemoState, model: ModelId, party: PartyId, dvp: boolean): FlowRequest {
+  return { model, flow: flowOf(dvp, party, s.asset), from: party, to: toOf(s, party), amount: s.amounts[dvp ? 'DFABI' : s.asset] };
 }
 
 export function demoReducer(s: DemoState, a: DemoAction): DemoState {
   switch (a.type) {
     case 'tab': return { ...s, tab: a.tab };
-    case 'open': return s.phase === 'done' ? { ...s, open: s.open === a.party ? null : a.party } : s;
-    case 'start': return { ...s, ...cleared(), phase: 'run' };
+    case 'start': return { ...s, ...cleared(), phase: 'run', req: a.req };
     case 'step': {
       if (s.phase !== 'run') return s;
       const steps = [...s.steps];
@@ -57,13 +54,8 @@ export function demoReducer(s: DemoState, a: DemoAction): DemoState {
   }
   if (s.phase === 'run') return s; // selections are locked while a run is in flight
   switch (a.type) {
-    case 'model': {
-      const flow = a.enabled.includes(s.flow) ? s.flow : a.enabled[0] ?? s.flow;
-      return fixParties({ ...s, ...cleared(), model: a.model, flow, amount: flow === s.flow ? s.amount : defaultAmount(flow) });
-    }
-    case 'flow': return fixParties({ ...s, ...cleared(), flow: a.flow, amount: defaultAmount(a.flow) });
-    case 'from': return fixParties({ ...s, ...cleared(), from: a.from });
-    case 'to': return fixParties({ ...s, ...cleared(), to: a.to });
-    case 'amount': return { ...s, ...cleared(), amount: a.amount };
+    case 'asset': return { ...s, ...cleared(), asset: a.asset };
+    case 'to': return { ...s, ...cleared(), to: a.to };
+    case 'amount': return { ...s, ...cleared(), amounts: { ...s.amounts, [a.asset]: a.amount } };
   }
 }

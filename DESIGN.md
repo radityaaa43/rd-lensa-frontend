@@ -287,7 +287,9 @@ Desktop: semantic `<table>` with caption "Riwayat transaksi sebagai {pihak}". Co
 | Status | verdict badge (§6.3) | — |
 | Waktu | `at` formatted `id-ID`, block in mono below | `at` null → "Tanpa cap waktu" in `--muted` (Fabric-X), never sealed (absence of a timestamp is not redaction) |
 
-A row with nothing readable collapses its five content columns into one row-wide seal chip (§6.1); icon link and Waktu stay.
+A row with nothing readable collapses its five content columns into one row-wide seal chip (§6.1); icon link and Waktu stay. The same rule applies to a Lensa column.
+
+Fabric-X, party BI only: a sealed row is a transaction on BI's ledger that no bank has reported yet (the BI-offline case). It carries the line "Belum dilaporkan bank" in `--partial` under the chip or badge. For a bank the seal keeps its plain meaning.
 
 Row hover: `--canvas` background. Selected row (opened in the lens): `--aqua-tint` pill row, `--r-tile` (Ref B highlighted Sell Order row). Rows are `<tr>` with a real `<button>` in the first cell for "Buka di lensa".
 
@@ -320,7 +322,7 @@ A lane diagram, not a force layout (deterministic, no dependency):
 
 ### 7.8 Charts  · Ref A bar, Ref B line · inline SVG
 
-- **Bar chart** (TPS per model, per-run comparison): alternating series `--ink` and `--aqua` (+ `--aqua-edge` outline in light), 4px top radius, value label above the highlighted bar (Ref A "$9,880,00" above Jun). Y-axis 4 ticks, `--muted` `--t-small`, no gridlines except a baseline.
+- **Bar chart** (TPS per model, per-run comparison): alternating series `--ink` and `--aqua-edge` by model order (zeto, noto, stealth, fabricx, iroha3; `--aqua-edge` because plain `--aqua` is 1.7:1 on white), every bar labelled with its model name, 4px top radius, value label above the highlighted bar (Ref A "$9,880,00" above Jun). Y-axis 4 ticks, `--muted` `--t-small`, no gridlines except a baseline.
 - **Line chart** (TPS over time in a stress run): 2px `--ink` curve, dot markers on sample points, dashed horizontal guides in `--line`, dark tooltip pill with value + time (Ref B "$2954 Nov 29 2020").
 - Every chart has a `<title>`/`<desc>`, and a "Lihat data" disclosure with a `<table>` of the same values.
 - Numbers formatted `id-ID`; units in the axis title ("transaksi/detik").

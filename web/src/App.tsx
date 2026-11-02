@@ -1,7 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import type { StressSnapshot } from '../../server/src/stress.ts';
-import { PLATFORM_OF } from '../../server/src/domain.ts';
-import { getHealth, getMeta, getNetwork, getStress, stopStress, type Health, type Meta } from './api.ts';
+import { PLATFORM_OF, type FlowRequest } from '../../server/src/domain.ts';
+import { getHealth, getMeta, getNetwork, getStress, postTx, stopStress, watchTx, type Health, type Meta } from './api.ts';
+import { demoReducer, initialDemo, type DemoAction, type DemoState } from './demo/demoState.ts';
+import { Lens } from './screens/Lens.tsx';
+import { Report } from './screens/Report.tsx';
+import { Transfer } from './screens/Transfer.tsx';
 import { Header } from './app/Header.tsx';
 import { Sidebar } from './app/Sidebar.tsx';
 import type { Route } from './app/route.ts';
@@ -35,7 +39,10 @@ function stressProgress(s: StressSnapshot) {
 }
 
 // ARCHITECTURE.md §3.3: one App-level poll each for health (5 s), network of the current model (10 s), stress (5 s while running)
-function Shell({ meta, route, stress, reloadStress }: { meta: Meta; route: ModelRoute; stress: StressSnapshot | null | undefined; reloadStress(): void }) {
+type Run = { run: DemoState; dispatch: (a: DemoAction) => void; send: (req: FlowRequest) => void };
+
+function Shell({ meta, route, stress, reloadStress, tx }: { meta: Meta; route: ModelRoute; stress: StressSnapshot | null | undefined; reloadStress(): void; tx: Run }) {
+  const stressRunning = stress?.state === 'running';
   const network = usePoll(`net|${route.model}`, () => getNetwork(route.model), 10_000);
   const party = meta.parties[route.party].name;
   const title = route.screen === 'dasbor' ? `Dasbor · ${party}` : SCREEN_TITLE[route.screen];
@@ -63,8 +70,11 @@ function Shell({ meta, route, stress, reloadStress }: { meta: Meta; route: Model
           <div className="title"><h1>{title}</h1><p>{SCREEN_SUB[route.screen].replace('{pihak}', party)}</p></div>
           {route.screen === 'dasbor' ? <Dashboard meta={meta} route={route} network={network} />
             : route.screen === 'riwayat' ? <History key={`${route.model}|${route.party}`} meta={meta} route={route} />
-            : route.screen === 'tps' ? <StressView meta={meta} hidden={false} />
-            : <div className="placeholder">Layar ini dibangun di langkah berikutnya.</div>}
+            : route.screen === 'transfer' || route.screen === 'dvp'
+              ? <Transfer meta={meta} route={route} {...tx} stressRunning={stressRunning} dvp={route.screen === 'dvp'} />
+            : route.screen === 'lensa' ? <Lens meta={meta} route={route} run={tx.run} />
+            : route.screen === 'laporan' ? <Report meta={meta} route={route} />
+            : <StressView meta={meta} hidden={false} onRun={reloadStress} />}
         </main>
       </div>
     </div>
@@ -84,6 +94,22 @@ export default function App() {
   const stress = usePoll<StressSnapshot | null>('stress', getStress, stressRunning ? 5_000 : undefined);
   useEffect(() => { setStressRunning(stress.data?.state === 'running'); }, [stress.data]);
 
+  // ARCHITECTURE.md §3.6: the tx run lives here, so leaving Transfer/DvP keeps its SSE and its result (Lensa reads it)
+  const [run, dispatch] = useReducer(demoReducer, undefined, initialDemo);
+  const stop = useRef<() => void>();
+  useEffect(() => () => stop.current?.(), []);
+  async function send(req: FlowRequest) {
+    if (run.phase === 'run') return;
+    dispatch({ type: 'start', req });
+    const res = await postTx(req);
+    if (!res.ok) return dispatch({ type: 'error', reason: res.reason });
+    stop.current = watchTx(res.body.runId, {
+      onStep: (index, ms) => dispatch({ type: 'step', index, ms }),
+      onResult: (result) => dispatch({ type: 'result', result }),
+      onError: (reason) => dispatch({ type: 'error', reason }),
+    });
+  }
+
   return (
     <>
       <a className="skip" href="#konten">Lewati ke konten</a>
@@ -95,7 +121,7 @@ export default function App() {
       ) : route.page === 'landing' ? (
         <Landing health={health.data} />
       ) : (
-        <Shell meta={meta} route={route} stress={stress.data} reloadStress={stress.reload} />
+        <Shell meta={meta} route={route} stress={stress.data} reloadStress={stress.reload} tx={{ run, dispatch, send }} />
       )}
     </>
   );

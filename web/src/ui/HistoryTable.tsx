@@ -1,5 +1,5 @@
 import type { HistoryItem } from '../../../server/src/adapter.ts';
-import type { PartyId } from '../../../server/src/domain.ts';
+import type { ModelId, PartyId } from '../../../server/src/domain.ts';
 import type { Meta } from '../api.ts';
 import type { Route } from '../app/route.ts';
 import { href } from '../app/route.ts';
@@ -38,6 +38,10 @@ export function cells(it: HistoryItem, name: (p: PartyId) => string) {
     time: it.at === null ? 'Tanpa cap waktu' : TIME.format(new Date(it.at)),
   };
 }
+
+// Fabric-X: BI holds every tx on its ledger, so a sealed row in BI's view is one no bank has reported yet (BI-offline case)
+export const notReported = (model: ModelId, party: PartyId, it: HistoryItem) => model === 'fabricx' && party === 'BI' && it.verdict === 'sealed';
+export const NOT_REPORTED = 'Belum dilaporkan bank';
 
 const GLYPH: Record<string, string> = {
   sender: 'M7 17 17 7M9 7h8v8', receiver: 'M17 7 7 17M15 17H7V9', issuer: 'M12 5v14M5 12h14',
@@ -83,14 +87,17 @@ export function HistoryTable({ items, meta, route, caption }: { items: HistoryIt
                   </a>
                 </td>
                 {c.allSealed ? (
-                  <td colSpan={5} className="sealedrow"><Sealed field="row" model={route.model} viewer={viewer} lensHref={href(lens)} /></td>
+                  <td colSpan={5} className="sealedrow">
+                    <Sealed field="row" model={route.model} viewer={viewer} lensHref={href(lens)} />
+                    {notReported(route.model, route.party, it) && <small className="pending">{NOT_REPORTED}</small>}
+                  </td>
                 ) : (
                   <>
                     <td data-label="Transaksi"><b>{show(c.flow, 'flow')}</b><small>{roleLabel(it.role, it.flow === 'dvp')}</small></td>
                     <td data-label="Pihak"><span className="cp">{show(c.from, 'party')}<span aria-label="ke">→</span>{show(c.to, 'party')}</span></td>
                     <td data-label="Nominal" className="right amt">{show(c.amount, 'amount')}</td>
                     <td data-label="Kaki RD" className="right">{show(c.rd, 'amount')}</td>
-                    <td data-label="Status"><Verdict v={it.verdict} /></td>
+                    <td data-label="Status"><Verdict v={it.verdict} />{notReported(route.model, route.party, it) && <small className="pending">{NOT_REPORTED}</small>}</td>
                   </>
                 )}
                 <td data-label="Waktu"><span className={it.at === null ? 'muted' : ''}>{c.time}</span>{it.block !== null && <small className="mono">blok {it.block}</small>}</td>

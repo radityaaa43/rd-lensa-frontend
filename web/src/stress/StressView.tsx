@@ -7,7 +7,8 @@ import { RunRows } from './RunRows.tsx';
 import { StressConfig, type Form } from './StressConfig.tsx';
 import { clampCount, minCapacity } from './stressForm.ts';
 
-export function StressView({ meta, hidden }: { meta: Meta; hidden: boolean }) {
+// onRun: tells App a run started or stopped, so the global banner (UX H4) follows without waiting for its poll
+export function StressView({ meta, hidden, onRun }: { meta: Meta; hidden: boolean; onRun?: () => void }) {
   const [capacity, setCapacity] = useState<Capacity>({});
   const selectedOnce = useRef(false);
   const [snap, setSnap] = useState<StressSnapshot | null>(null);
@@ -69,12 +70,21 @@ export function StressView({ meta, hidden }: { meta: Meta; hidden: boolean }) {
     change({ count: n });
   };
 
+  // a run sends real transactions and holds the busy lock, so starting one needs a confirmation (UX H4)
+  const confirm = useRef<HTMLDialogElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
   async function go() {
     if (running) {
       const r = await stopStress();
       if (r.ok) setSnap(r.body);
+      onRun?.();
       return;
     }
+    confirm.current?.showModal();
+    cancel.current?.focus(); // focus starts on the safe choice: a stray Enter must not start real transactions
+  }
+  async function start() {
+    confirm.current?.close();
     setError(null);
     setStarting(true);
     const r = await postStress({ models: form.models, count, concurrency: form.concurrency, limitS: form.limitS });
@@ -82,6 +92,7 @@ export function StressView({ meta, hidden }: { meta: Meta; hidden: boolean }) {
     if (!r.ok) return setError(r.reason);
     setSnap(r.body);
     follow();
+    onRun?.();
   }
 
   const shown = snap?.config ?? { ...form, count };
@@ -93,7 +104,16 @@ export function StressView({ meta, hidden }: { meta: Meta; hidden: boolean }) {
     <div className="shell" hidden={hidden}>
       <StressConfig meta={meta} capacity={capacity} form={{ ...form, count }} running={running} starting={starting} cap={cap}
         countText={countText} error={error} onChange={change} onCountText={setText} onToggle={toggle} onGo={go} />
-      <main>
+      <dialog ref={confirm} className="confirm" aria-labelledby="stress-confirm">
+        <h2 id="stress-confirm">Mulai stress test?</h2>
+        <p>{shown.models.map((m) => meta.models[m].name).join(', ')} · {count.toLocaleString('id-ID')} transaksi per model · batas {form.limitS} detik.</p>
+        <p>Transaksi dikirim ke jaringan nyata. Transfer dan DvP diblokir selama tes.</p>
+        <div className="actions">
+          <button className="btn" type="button" onClick={() => void start()}>Mulai</button>
+          <button className="btn ghost" type="button" ref={cancel} onClick={() => confirm.current?.close()}>Batal</button>
+        </div>
+      </dialog>
+      <div className="stressmain">
         <section className="card" aria-label="Proses">
           <div className="result-head"><div><h2>Proses</h2><p>{summary}</p></div></div>
           <div className="runs">
@@ -103,7 +123,7 @@ export function StressView({ meta, hidden }: { meta: Meta; hidden: boolean }) {
           </div>
         </section>
         {snap && <Results meta={meta} snap={snap} />}
-      </main>
+      </div>
     </div>
   );
 }

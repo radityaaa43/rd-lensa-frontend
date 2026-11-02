@@ -1,28 +1,54 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 
-test('zeto transfer: 4 steps, 4 lenses, exactly 1 sealed', async ({ page }) => {
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Transfer RD', exact: true }).click();
-  await page.getByRole('button', { name: 'Kirim', exact: true }).click();
+test('zeto transfer: 4 steps, survives leaving the screen, 4 lenses, exactly 1 sealed', async ({ page }) => {
+  await page.goto('/besu/zeto/transfer?pihak=A');
+  await page.getByRole('button', { name: 'Kirim transaksi', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Proses' }).locator('li.ok')).toHaveCount(4);
-  await expect(page.locator('button.lens')).toHaveCount(4);
-  await expect(page.locator('button.lens.sealed')).toHaveCount(1);
+  await page.getByRole('link', { name: 'Dasbor' }).click();
+  await page.getByRole('link', { name: 'Transfer' }).click();
+  await expect(page.getByText(/Selesai di blok/)).toBeVisible();
+  await page.getByRole('link', { name: 'Buka di lensa' }).click();
+  await expect(page).toHaveURL(/\/besu\/zeto\/lensa\/0x[0-9a-f]+\?pihak=A$/);
+  await expect(page.locator('.lens2')).toHaveCount(4);
+  // UX P2-1: the outsider's column is ONE seal, not a badge plus a chip per field
+  await expect(page.locator('.lens2 details.seal')).toHaveCount(1);
+  await expect(page.locator('.lens2 details.seal.row')).toHaveCount(1);
 });
 
 test('stealth: exactly 1 partial lens', async ({ page }) => {
-  await page.goto('/');
-  await page.getByRole('button', { name: 'Stealth', exact: true }).click();
-  await page.getByRole('button', { name: 'Transfer RD', exact: true }).click();
-  await page.getByRole('button', { name: 'Kirim', exact: true }).click();
-  await expect(page.locator('button.lens')).toHaveCount(4);
-  await expect(page.locator('button.lens.partial')).toHaveCount(1);
+  await page.goto('/besu/stealth/transfer?pihak=A');
+  await page.getByRole('button', { name: 'Kirim transaksi', exact: true }).click();
+  await page.getByRole('link', { name: 'Buka di lensa' }).click();
+  await expect(page.locator('.lens2')).toHaveCount(4);
+  await expect(page.locator('.lens2 .badge.partial')).toHaveCount(1);
+});
+
+test('dvp lens: the RD leg comes from each party\'s lens, sealed for the outsider', async ({ page }) => {
+  await page.goto('/besu/zeto/dvp?pihak=B');
+  await page.getByRole('button', { name: 'Jalankan DvP', exact: true }).click();
+  await page.getByRole('link', { name: 'Buka di lensa' }).click();
+  await expect(page.getByRole('region', { name: 'Bank Mandala' }).locator('.lrd')).toContainText('Rp 1.000.000.000');
+  const outsider = page.getByRole('region', { name: 'Bank Sejahtera' });
+  await expect(outsider.locator('details.seal.row')).toHaveCount(1);
+  await expect(outsider).not.toContainText('Rp');
 });
 
 test('stress run on Ringan shows results and a CSV with the right header', async ({ page }) => {
   await page.goto('/besu/zeto/tps');
   await page.getByRole('button', { name: '50 tx' }).click();
+  // UX P2-2: a real modal (backdrop, inert page), focus starts on Batal, Esc cancels without starting
   await page.getByRole('button', { name: 'Mulai stress test' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Mulai stress test?' });
+  await expect(dialog).toBeVisible();
+  expect(await dialog.evaluate((d) => d.matches(':modal'))).toBe(true);
+  await expect(page.getByRole('button', { name: 'Batal', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(page.locator('.banner.stress')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Mulai stress test' }).click();
+  await page.getByRole('button', { name: 'Mulai', exact: true }).click();
+  await expect(page.locator('.banner.stress')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Hasil perbandingan' })).toBeVisible({ timeout: 20_000 });
   const download = page.waitForEvent('download');
   await page.getByRole('link', { name: /Unduh hasil/ }).click();

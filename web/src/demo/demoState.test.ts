@@ -1,93 +1,68 @@
 import { describe, expect, test } from 'vitest';
-import type { FlowId } from '../../../server/src/domain.ts';
-import { demoReducer, initialDemo, type DemoState } from './demoState.ts';
+import { demoReducer, flowOf, initialDemo, requestOf, toOf, type DemoState } from './demoState.ts';
 
-const ALL: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp'];
-const base = (): DemoState => initialDemo('zeto', ALL);
-const done = (): DemoState => ({ ...base(), phase: 'done', tab: 'res', steps: [1, 2, 3, 4], result: { txHash: '0x1', block: 1, steps: [], lenses: [] } });
+const base = (): DemoState => initialDemo();
+const req = { model: 'zeto', flow: 'rd-transfer', from: 'A', to: 'B', amount: '1000000000' } as const;
+const done = (): DemoState => ({ ...base(), phase: 'done', tab: 'res', req, steps: [1, 2, 3, 4], result: { txHash: '0x1', block: 1, steps: [], lenses: [] } });
+
+// ARCHITECTURE.md §3.6: model and sender come from the route, never from demo state
+describe('demo request', () => {
+  test('the sender is the route party and the flow follows it: BI issues, a bank transfers', () => {
+    expect(requestOf(base(), 'noto', 'BI', false)).toMatchObject({ model: 'noto', flow: 'rd-issue', from: 'BI' });
+    expect(requestOf(base(), 'zeto', 'C', false)).toMatchObject({ model: 'zeto', flow: 'rd-transfer', from: 'C' });
+  });
+
+  test('the asset picks RD or DFABI flows; DvP is always dvp', () => {
+    const d = demoReducer(base(), { type: 'asset', asset: 'DFABI' });
+    expect(flowOf(false, 'BI', d.asset)).toBe('dfabi-issue');
+    expect(flowOf(false, 'A', d.asset)).toBe('dfabi-transfer');
+    expect(flowOf(true, 'A', 'RD')).toBe('dvp');
+  });
+
+  test('the receiver is never the sender and never BI', () => {
+    expect(toOf({ ...base(), to: 'A' }, 'A')).toBe('B');
+    expect(toOf({ ...base(), to: 'BI' }, 'C')).toBe('A');
+    expect(toOf({ ...base(), to: 'C' }, 'A')).toBe('C');
+  });
+
+  test('each asset keeps its own amount; DvP amounts are DFABI units', () => {
+    let s = demoReducer(base(), { type: 'amount', asset: 'RD', amount: '5' });
+    s = demoReducer(s, { type: 'amount', asset: 'DFABI', amount: '7' });
+    expect(requestOf(s, 'zeto', 'A', false).amount).toBe('5');
+    expect(requestOf(s, 'zeto', 'A', true).amount).toBe('7');
+  });
+});
 
 describe('demoReducer', () => {
-  test('initial state is rd-transfer from Mandala to Nusantara', () => {
-    expect(base()).toMatchObject({ model: 'zeto', flow: 'rd-transfer', from: 'A', to: 'B', phase: 'idle' });
-  });
-
-  test('initial flow falls back to the first enabled flow', () => {
-    expect(initialDemo('noto', ['rd-issue', 'dvp']).flow).toBe('rd-issue');
-  });
-
-  test('issue flows force from=BI and a bank receiver', () => {
-    const s = demoReducer(base(), { type: 'flow', flow: 'rd-issue' });
-    expect(s.from).toBe('BI');
-    expect(s.to).not.toBe('BI');
-    expect(s.to).not.toBe(s.from);
-  });
-
-  test('picking a bank flow while from=BI sets from=A', () => {
-    const issued = demoReducer(base(), { type: 'flow', flow: 'dfabi-issue' });
-    const s = demoReducer(issued, { type: 'flow', flow: 'dvp' });
-    expect(s.from).toBe('A');
-    expect(s.to).toBe('B');
-  });
-
-  test('to never equals from', () => {
-    const s = demoReducer(base(), { type: 'from', from: 'B' });
-    expect(s.from).toBe('B');
-    expect(s.to).toBe('A');
-  });
-
-  test('to is never BI', () => {
-    const s = demoReducer(base(), { type: 'to', to: 'BI' });
-    expect(s.to).toBe('B');
-  });
-
-  test('to equal to from is replaced', () => {
-    const s = demoReducer(base(), { type: 'to', to: 'A' });
-    expect(s.to).toBe('B');
-  });
-
-  test('changing model to one where the flow is disabled selects the first enabled flow', () => {
-    const s = demoReducer(base(), { type: 'model', model: 'noto', enabled: ['rd-issue', 'dvp'] });
-    expect(s).toMatchObject({ model: 'noto', flow: 'rd-issue', from: 'BI' });
-  });
-
-  test('changing model keeps the flow when still enabled', () => {
-    const s = demoReducer(base(), { type: 'model', model: 'stealth', enabled: ALL });
-    expect(s.flow).toBe('rd-transfer');
-  });
-
-  test('flow change resets the amount to the asset default', () => {
-    expect(demoReducer(base(), { type: 'flow', flow: 'dfabi-transfer' }).amount).toBe('1000');
-    expect(demoReducer(base(), { type: 'flow', flow: 'rd-issue' }).amount).toBe('1000000000');
-  });
-
   test.each([
-    ['model', { type: 'model', model: 'stealth', enabled: ALL }],
-    ['flow', { type: 'flow', flow: 'dvp' }],
-    ['from', { type: 'from', from: 'C' }],
+    ['asset', { type: 'asset', asset: 'DFABI' }],
     ['to', { type: 'to', to: 'C' }],
-    ['amount', { type: 'amount', amount: '5' }],
-  ] as const)('a %s change clears the result', (_n, action) => {
-    const s = demoReducer(done(), action);
-    expect(s).toMatchObject({ phase: 'idle', result: null, error: null, steps: [], tab: 'req' });
+    ['amount', { type: 'amount', asset: 'RD', amount: '5' }],
+  ] as const)('a %s change clears the last result', (_n, action) => {
+    expect(demoReducer(done(), action)).toMatchObject({ phase: 'idle', result: null, error: null, steps: [], req: null });
   });
 
   test('selection changes are ignored while a run is in flight', () => {
-    const running: DemoState = { ...base(), phase: 'run' };
-    expect(demoReducer(running, { type: 'from', from: 'C' })).toBe(running);
+    const running: DemoState = { ...base(), phase: 'run', req };
+    expect(demoReducer(running, { type: 'to', to: 'C' })).toBe(running);
+  });
+
+  test('a run keeps the request it started with', () => {
+    expect(demoReducer(base(), { type: 'start', req })).toMatchObject({ phase: 'run', req });
   });
 
   test('run lifecycle: start, step, result', () => {
-    let s = demoReducer(base(), { type: 'start' });
-    expect(s.phase).toBe('run');
+    let s = demoReducer(base(), { type: 'start', req });
     s = demoReducer(s, { type: 'step', index: 0, ms: 120 });
     s = demoReducer(s, { type: 'step', index: 0, ms: 120 });
     expect(s.steps).toEqual([120]);
     s = demoReducer(s, { type: 'result', result: { txHash: '0xab', block: 9, steps: [{ index: 0, label: 'a', ms: 130 }], lenses: [] } });
-    expect(s).toMatchObject({ phase: 'done', tab: 'res', steps: [130] });
+    expect(s).toMatchObject({ phase: 'done', tab: 'res', steps: [130], req });
   });
 
-  test('error keeps the reason and shows the response tab', () => {
-    const s = demoReducer({ ...base(), phase: 'run' }, { type: 'error', reason: 'Saldo Bank Mandala tidak cukup' });
-    expect(s).toMatchObject({ phase: 'error', tab: 'res', error: 'Saldo Bank Mandala tidak cukup' });
+  test('an error keeps the reason, the request and the form values', () => {
+    const typed = demoReducer(base(), { type: 'amount', asset: 'RD', amount: '42' });
+    const s = demoReducer({ ...typed, phase: 'run', req }, { type: 'error', reason: 'Saldo Bank Mandala tidak cukup' });
+    expect(s).toMatchObject({ phase: 'error', tab: 'res', error: 'Saldo Bank Mandala tidak cukup', req, amounts: { RD: '42' } });
   });
 });
