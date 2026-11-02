@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { Capability, Counterparty, FlowResult, LensView, ModelAdapter, StepEvent, Verdict } from '../adapter.ts';
-import { CANCELLED, LOAD_AMOUNT, NotAvailableError } from '../adapter.ts';
+import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, StepEvent, Verdict } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
-import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
+import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
+import { besuNetwork } from './besu-network.ts';
 import type { Sample } from '../stats.ts';
 // Everything Paladin goes through the bond project's modules (its SDK 1.0.0 copy is the only one in play).
 import { appendTrade, loadPlatform, type Platform } from '../../../../besu/noto+pente/bond/src/lib/platform.ts';
@@ -40,9 +41,167 @@ export async function exclusive<T>(senders: PartyId[], fn: (hold: (p: Promise<un
 
 interface NotoContext { txIds: string[] } // plain flows: [tx]; dvp: [bond-leg spend tx, cash-leg spend tx]
 
+// History (ARCHITECTURE.md §2.3). A party's own node lists the base-ledger txs it indexed for the cash and bond contracts
+// (ptx_queryTransactionReceipts: `source` is the Noto contract, every node has the receipts, outsiders included). Tx that move
+// tokens emit the Noto `Transfer` event (mint, transfer) or `NotoLockSpent` (a spent lock: the DvP legs); lock / delegateLock /
+// prepareUnlock emit only other Lock* events and are not listed (checked live on cash, bond and a DvP). A DvP settles both legs in
+// one base-ledger tx (two receipts, two NotoLockSpent events), so legs with one hash are one item.
+const TRANSFER_TOPIC = '0x5c8f21be56ffd5f821a2df89667130d3c251c8df22c0d4b1f3677b4b54bb707b';
+const LOCK_SPENT_TOPIC = '0x1c3e771c022f9501e48b0c09f0bac40132cc0aac211f5b33e3dbd4d8eaff039c';
+const RECEIPT_PAGE = 100;
+// ponytail: page cap on the receipt scan, add a contract-level index if real volume needs it
+const SCAN_PAGES_MAX = 3;
+const RECORD_WAIT_MS = 10_000; // a node gets the private state a moment after the receipt: a fresh unreadable tx is left out, not sealed
+const FRESH_BLOCKS = 5; // "fresh": within this many blocks of the newest receipt of the scan
+const EVENT_CHUNK = 25; // tx hashes per event query
+const EVENT_LIMIT = 1000;
+const READ_GROUPS = 4; // groups (at most 2 legs each) read in parallel
+
+// The receipts of one page of the scan. When the page is full its oldest base-ledger tx may continue on the next page (the two legs of
+// a DvP are two receipts with one hash), so that tx's remaining receipts are fetched by hash and added: a DvP is never split in two.
+export interface ReceiptLike { id: string; sequence: number; transactionHash: string; blockNumber: number; source: string }
+export async function receiptPage<R extends ReceiptLike>(
+  client: { ptx: { queryTransactionReceipts(q: object): Promise<R[]> } }, query: object, pageSize: number, sources: string[],
+): Promise<R[]> {
+  const rows = await client.ptx.queryTransactionReceipts(query);
+  if (rows.length < pageSize) return rows;
+  const oldest = rows[rows.length - 1]!.transactionHash;
+  const rest = await client.ptx.queryTransactionReceipts({ limit: 10, eq: [{ field: 'transactionHash', value: oldest }], in: [{ field: 'source', values: sources }] });
+  return [...rows, ...rest.filter((r) => !rows.some((x) => x.id === r.id))];
+}
+
+export interface NotoLeg { source: 'cash' | 'bond'; read: NotoTxView }
+export interface NotoGroup { hash: string; block: number; at: string | null; legs: NotoLeg[]; dvp?: boolean } // dvp: the events say two locks were spent
+
+// One base-ledger tx as the party's own node reads it. `known` maps an address / lookup to its party.
+export function notoItem(party: PartyId, g: NotoGroup, known: Map<string, PartyId>): HistoryItem {
+  const bond = g.legs.find((l) => l.source === 'bond');
+  const cash = g.legs.find((l) => l.source === 'cash');
+  const dvp = g.dvp === true || (g.legs.length === 2 && !!bond && !!cash);
+  if (!g.legs.some((l) => l.read.visible)) { // the node knows the tx exists and holds none of its private state
+    return { id: g.hash, at: g.at, block: g.block, flow: null, asset: null, role: roleFromParties(party, null, false), verdict: 'sealed', amount: null, rdAmount: null, counterparty: null };
+  }
+  const who = (xs: string[]) => { const s = new Set(xs.map((a) => known.get(a) ?? null)); return s.size === 1 ? [...s][0]! : null; };
+  // A node that cannot read the locked inputs of a DvP leg sees no `from`, only the receipt's sender (the owner of the lock); a mint has the issuer as sender.
+  const side = (r: NotoTxView) => ({ from: who(r.from.length ? r.from : r.sender ? [r.sender] : []), to: who(r.to) });
+  let counterparty: Counterparty | null;
+  if (dvp) { // seller -> buyer: the bond leg says so; if only the cash leg is readable, it runs the other way (buyer pays seller)
+    const c = bond?.read.visible ? side(bond.read) : cash?.read.visible ? (({ from, to }) => ({ from: to, to: from }))(side(cash.read)) : null;
+    counterparty = c;
+  } else counterparty = side(g.legs[0]!.read);
+  const main = dvp ? bond : g.legs[0]!;
+  const asset = dvp ? 'DFABI' : main!.source === 'cash' ? 'RD' : 'DFABI';
+  // DFABI issuance is a transfer from BI's custodian (BondTracker only mints to the custodian), so "from BI" is an issue too.
+  const issue = !dvp && counterparty?.from === 'BI';
+  const role = roleFromParties(party, counterparty, issue);
+  const amountOf = (l?: NotoLeg) => (l?.read.visible ? (l.read.amount?.toString() ?? null) : null);
+  return {
+    id: g.hash, at: g.at, block: g.block,
+    flow: dvp ? 'dvp' : (`${asset === 'RD' ? 'rd' : 'dfabi'}-${issue ? 'issue' : 'transfer'}` as FlowId), asset, role,
+    verdict: party === 'BI' && !issue ? 'notarised' : 'clear',
+    amount: amountOf(main),
+    rdAmount: dvp ? amountOf(cash) : null,
+    counterparty,
+  };
+}
+
+// What the history scan needs, injectable for tests. The cache lives as long as the adapter.
+export interface EventLike { transactionHash: string; signature: string; block?: { timestamp?: string } }
+export interface NotoClient {
+  ptx: { queryTransactionReceipts(q: object): Promise<ReceiptLike[]> };
+  bidx: { queryIndexedEvents(q: object): Promise<EventLike[]> };
+}
+export interface NotoCache { events: Map<string, { movement: boolean; lockSpent: number; at: string | null }>; reads: Map<string, NotoTxView>; firstSeen: Map<string, number> }
+export const newNotoCache = (): NotoCache => ({ events: new Map(), reads: new Map(), firstSeen: new Map() });
+export interface NotoScan {
+  client: NotoClient;
+  readTx: (id: string) => Promise<NotoTxView>;
+  cashSource: string; // lower-case, no 0x
+  sources: string[]; // lower-case, no 0x: cash and bond
+  known: Map<string, PartyId>;
+  cache: NotoCache;
+  now?: () => number;
+  pageSize?: number;
+}
+
+export async function notoHistory(party: PartyId, want: number, c: NotoScan): Promise<HistoryItem[] & { truncated?: true }> {
+  const now = c.now ?? Date.now;
+  const pageSize = c.pageSize ?? RECEIPT_PAGE;
+  const items: HistoryItem[] = [];
+  const done = new Set<string>(); // base-ledger txs already handled: a completed boundary tx shows up again on the next page
+  let cursor: number | undefined;
+  let newest: number | undefined;
+  let more = true;
+  let pages = 0;
+  while (items.length < want && more && pages < SCAN_PAGES_MAX) {
+    pages++;
+    const receipts = await receiptPage(c.client, {
+      limit: pageSize, sort: ['sequence DESC'], eq: [{ field: 'domain', value: 'noto' }], in: [{ field: 'source', values: c.sources }], // the receipt filter takes the address without 0x
+      ...(cursor === undefined ? {} : { lt: [{ field: 'sequence', value: cursor }] }),
+    }, pageSize, c.sources);
+    const pageRows = receipts.slice(0, pageSize); // the rows after pageSize are the completed boundary tx
+    more = pageRows.length === pageSize;
+    if (pageRows.length) cursor = pageRows[pageRows.length - 1]!.sequence;
+    newest ??= receipts[0]?.blockNumber;
+    const byHash = new Map<string, ReceiptLike[]>();
+    for (const r of receipts) if (!done.has(r.transactionHash)) byHash.set(r.transactionHash, [...(byHash.get(r.transactionHash) ?? []), r]);
+
+    // Events: movement test, DvP hint and block time. Never cached as "not a movement" without having seen the tx's events.
+    const fresh = [...byHash.keys()].filter((h) => !c.cache.events.has(h));
+    for (let i = 0; i < fresh.length; i += EVENT_CHUNK) {
+      const chunk = fresh.slice(i, i + EVENT_CHUNK);
+      const events = await c.client.bidx.queryIndexedEvents({ limit: EVENT_LIMIT, in: [{ field: 'transactionHash', values: chunk }] });
+      if (events.length >= EVENT_LIMIT) throw new Error('Terlalu banyak event untuk satu halaman riwayat Noto');
+      for (const h of chunk) {
+        const mine = events.filter((e) => e.transactionHash === h);
+        if (!mine.length) throw new Error(`Node belum mengindeks event transaksi ${h}`);
+        c.cache.events.set(h, {
+          movement: mine.some((e) => e.signature === TRANSFER_TOPIC || e.signature === LOCK_SPENT_TOPIC),
+          lockSpent: mine.filter((e) => e.signature === LOCK_SPENT_TOPIC).length,
+          at: mine.find((e) => e.block?.timestamp)?.block?.timestamp ?? null,
+        });
+      }
+    }
+
+    const groups = [...byHash].filter(([h]) => c.cache.events.get(h)!.movement);
+    for (const [h] of byHash) done.add(h);
+    for (let i = 0; i < groups.length && items.length < want; i += READ_GROUPS) {
+      const batch = groups.slice(i, i + READ_GROUPS);
+      // Reads of a visible tx are cached; an unreadable one is not (its private state may still arrive).
+      const reads = await Promise.all(batch.map(([, rs]) => Promise.all(rs.map(async (r) => {
+        const key = `${party}|${r.id}`;
+        const hit = c.cache.reads.get(key);
+        if (hit) return hit;
+        const read = await c.readTx(r.id);
+        if (read.visible) c.cache.reads.set(key, read);
+        return read;
+      }))));
+      batch.forEach(([hash, rs], k) => {
+        if (items.length >= want) return;
+        const info = c.cache.events.get(hash)!;
+        const legs: NotoLeg[] = rs.map((r, j) => ({ source: r.source.toLowerCase().replace(/^0x/, '') === c.cashSource ? 'cash' : 'bond', read: reads[k]![j]! }));
+        if (!legs.some((l) => l.read.visible)) {
+          // Neither sealed nor listed while it is fresh: the node stores the private state a moment after the receipt. Age is this
+          // process's own first-seen moment (a validator's block time would add clock skew), and a missing block time never seals.
+          const key = `${party}|${hash}`;
+          const seen = c.cache.firstSeen.get(key) ?? (c.cache.firstSeen.set(key, now()), now());
+          if (rs[0]!.blockNumber >= (newest ?? 0) - FRESH_BLOCKS && now() - seen < RECORD_WAIT_MS) return;
+        }
+        const item = notoItem(party, { hash, block: rs[0]!.blockNumber, at: info.at, legs, dvp: info.lockSpent >= 2 }, c.known);
+        if (!items.some((x) => x.id === item.id)) items.push(item);
+      });
+    }
+  }
+  return more && pages >= SCAN_PAGES_MAX && items.length < want ? Object.assign(items, { truncated: true as const }) : items;
+}
+
 export function createNotoAdapter(dataDir: string): ModelAdapter {
   let platform: Promise<Platform> | undefined;
-  const plat = () => (platform ??= loadPlatform(dataDir).catch((e) => { platform = undefined; throw e; }));
+  const plat = () => (platform ??= loadPlatform(dataDir).catch((e) => {
+    platform = undefined;
+    console.error('[noto] platform tidak dapat dimuat:', e); // the library's message names the data dir: the UI gets a fixed text
+    throw new Error('Data platform Noto tidak dapat dimuat (lihat log server)');
+  }));
 
   const bank = (p: Platform, id: BankId) => p.investors.get(INVESTOR[id])!;
   const clientOf = (p: Platform, party: PartyId) => (party === 'BI' ? p.node1 : bank(p, party).client);
@@ -154,6 +313,18 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     return { txHash: receipt.transactionHash, block: receipt.blockNumber, steps, context: { txIds: [receipt.id] } satisfies NotoContext };
   }
 
+  const notoCache = newNotoCache();
+  async function history(party: PartyId, limit: number): Promise<HistoryItem[] & { truncated?: true }> {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error('limit harus bilangan bulat >= 1');
+    const p = await plat();
+    const client = clientOf(p, party);
+    const bare = (a: string) => a.toLowerCase().replace(/^0x/, '');
+    return notoHistory(party, Math.min(limit, HISTORY_MAX), {
+      client: client as unknown as NotoClient, readTx: (id) => readNotoTx(client, id), known: await partyKeys(), cache: notoCache,
+      cashSource: bare(p.data.notoCashAddress), sources: [bare(p.data.notoCashAddress), bare(p.data.notoBondAddress)],
+    });
+  }
+
   const adapter: ModelAdapter = {
     id: 'noto',
     stepLabels: ['Notary BI memeriksa', 'Kirim ke node Paladin', 'Masuk block Besu', 'State dibagikan ke pihak terkait'],
@@ -233,8 +404,8 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
           : 'Query state privat di node sendiri (`ptx.getDomainReceipt`).');
     },
 
-    history: async () => { throw new NotAvailableError('Riwayat belum tersedia'); }, // step 0 stub (ARCHITECTURE.md §5), replaced per §2.3
-    network: async () => { throw new NotAvailableError('Status jaringan belum tersedia'); },
+    history,
+    network: () => besuNetwork({ paladin: true }),
     async loadCapacity() {
       const balances = await Promise.all(BANKS.map((b) => balanceOf(b, 'RD')));
       return 3 * Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT);

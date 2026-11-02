@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { LensView, ModelAdapter, StepEvent } from '../../src/adapter.ts';
 import { LOAD_AMOUNT } from '../../src/adapter.ts';
 import { BANKS, PRICE_PER_UNIT, type FlowId, type FlowRequest, type PartyId } from '../../src/domain.ts';
-import { load } from '../../src/adapters/noto.ts';
+import { createNotoAdapter, load } from '../../src/adapters/noto.ts';
 
 // LIVE: needs the Paladin cluster and state/noto.json (npm run bootstrap -- noto).
 // Run: flock /tmp/lensa-paladin.lock npm run test:live -- test/live/noto.live.ts
@@ -134,5 +134,55 @@ describe('noto adapter (live)', () => {
     const s = await adapter.transferForLoad('B', 'C', LOAD_AMOUNT);
     expect(s.confirmedAt).toBeGreaterThan(s.submittedAt);
     expect(await adapter.balanceOf('B', 'RD')).toBe(b0 - LOAD_AMOUNT);
+  });
+});
+
+describe('noto history + network live', () => {
+  // A node gets the private state a moment after the receipt: poll until the party's list has the tx (and, for a reader, not sealed).
+  async function itemOf(p: PartyId, id: string, full: boolean) {
+    for (const end = Date.now() + 40_000; ; await new Promise((r) => setTimeout(r, 1000))) {
+      const item = (await adapter.history(p, 20)).find((i) => i.id === id);
+      if ((item && !(full && item.verdict === 'sealed')) || Date.now() > end) return item;
+    }
+  }
+
+  it('history(p, 20) works for all four parties; an outsider bank only has sealed items for what it is not part of', async () => {
+    const lists = await Promise.all(PARTIES.map((p) => adapter.history(p, 20)));
+    for (const l of lists) expect(l.length).toBeGreaterThan(0);
+    for (const i of lists[3]!.filter((x) => x.verdict === 'sealed')) expect([i.flow, i.amount, i.counterparty, i.rdAmount]).toEqual([null, null, null, null]);
+    expect(lists[0]!.some((i) => i.verdict === 'notarised' || i.role === 'issuer')).toBe(true); // BI reads through its notary copy
+  });
+
+  it('a fresh rd-transfer A->B: each party\'s item equals its own lens (verdict, amount, counterparty, role); C sealed', async () => {
+    const r = req('rd-transfer', 'A', 'B', '3');
+    const { result, lenses } = await runFlow(r);
+    for (const p of PARTIES) {
+      const item = await itemOf(p, result.txHash, p !== 'C');
+      expect(item, `${p} history has the tx`).toBeDefined();
+      expect(item).toMatchObject({ flow: lenses[p].verdict === 'sealed' ? null : 'rd-transfer', verdict: lenses[p].verdict, amount: lenses[p].amount, counterparty: lenses[p].counterparty, role: lenses[p].role });
+    }
+  });
+
+  it('a fresh dvp A->B: one item, DFABI leg as amount and the RD leg as rdAmount (equal to lens)', async () => {
+    const r = req('dvp', 'A', 'B', '1');
+    const { result, lenses } = await runFlow(r);
+    for (const p of ['A', 'B', 'BI'] as const) {
+      const item = await itemOf(p, result.txHash, true);
+      expect(item, `${p} history has the dvp`).toMatchObject({ flow: 'dvp', asset: 'DFABI', amount: lenses[p].amount, rdAmount: lenses[p].rdAmount, counterparty: lenses[p].counterparty, role: lenses[p].role, verdict: lenses[p].verdict });
+    }
+    expect(lenses.A.rdAmount).toBe(String(PRICE_PER_UNIT));
+    expect(lenses.C.rdAmount).toBeNull();
+    expect(await itemOf('C', result.txHash, false)).toMatchObject({ verdict: 'sealed', rdAmount: null });
+  });
+
+  it('network(): 4 validators + 4 Paladin nodes, all up', async () => {
+    const n = await adapter.network();
+    expect(n.nodes.filter((x) => x.kind === 'besu-validator')).toHaveLength(4);
+    expect(n.nodes.filter((x) => x.kind === 'paladin')).toHaveLength(4);
+    expect(n.nodes.map((x) => x.status)).toEqual(Array(8).fill('up'));
+  });
+
+  it('an adapter whose platform cannot be loaded makes history() reject', async () => {
+    await expect(createNotoAdapter('/nonexistent-noto-data').history('A', 5)).rejects.toThrow();
   });
 });
