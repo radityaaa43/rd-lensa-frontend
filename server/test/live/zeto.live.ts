@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { load } from '../../src/adapters/zeto.ts';
+import { createZetoAdapter, load, type ZetoState } from '../../src/adapters/zeto.ts';
+import { nodeConnections } from '../../../../besu/zeto/src/common.ts';
+import { readState } from '../../src/state.ts';
+import { PRICE_PER_UNIT, type PartyId } from '../../src/domain.ts';
 import { type FlowRequest } from '../../src/domain.ts';
 import { LOAD_AMOUNT, type StepEvent } from '../../src/adapter.ts';
 
@@ -40,5 +43,59 @@ describe('zeto live', () => {
     expect(await a.loadCapacity()).toBeGreaterThanOrEqual(3);
     const s = await a.transferForLoad('A', 'B', LOAD_AMOUNT);
     expect(s.confirmedAt).toBeGreaterThan(s.submittedAt);
+  });
+});
+
+describe('zeto history + network live', () => {
+  const P: PartyId[] = ['BI', 'A', 'B', 'C'];
+  // the bank report reaches BI, and a node's private state arrives, a moment after the chain event: poll until a reader's item is not sealed
+  async function itemOf(a: Awaited<ReturnType<typeof load>> & object, p: PartyId, id: string, full: boolean) {
+    for (const end = Date.now() + 90_000; ; await new Promise((r) => setTimeout(r, 1500))) {
+      const item = (await a.history(p, 20)).find((i) => i.id === id);
+      if ((item && !(full && item.verdict === 'sealed')) || Date.now() > end) return item;
+    }
+  }
+
+  it('history(p, 20) works for all four parties; an outsider bank has only sealed items for what it is not part of', async () => {
+    const a = (await load())!;
+    const lists = await Promise.all(P.map((p) => a.history(p, 20)));
+    for (const l of lists) expect(l.length).toBeGreaterThan(0);
+    for (const i of lists[3]!.filter((x) => x.verdict === 'sealed')) expect([i.flow, i.amount, i.counterparty, i.rdAmount]).toEqual([null, null, null, null]);
+  });
+
+  it('a fresh rd-transfer A->B: each party\'s item equals its own lens (verdict, amount, counterparty, role)', async () => {
+    const a = (await load())!;
+    const req: FlowRequest = { model: 'zeto', flow: 'rd-transfer', from: 'A', to: 'B', amount: '7' };
+    const res = await a.run(req, 7n, () => {});
+    for (const p of P) {
+      const lens = await a.lens(req, res, p);
+      const item = await itemOf(a, p, res.txHash, lens.verdict !== 'sealed');
+      expect(item, `${p} history has the tx`).toBeDefined();
+      expect(item).toMatchObject({ verdict: lens.verdict, amount: lens.amount, counterparty: lens.counterparty, role: lens.role, flow: lens.verdict === 'sealed' ? null : 'rd-transfer' });
+    }
+  });
+
+  it('a fresh dvp A->B: one item per party; amount = DFABI leg, rdAmount equal to the party\'s own lens', async () => {
+    const a = (await load())!;
+    const req: FlowRequest = { model: 'zeto', flow: 'dvp', from: 'A', to: 'B', amount: '1' };
+    const res = await a.run(req, 1n, () => {});
+    for (const p of P) {
+      const lens = await a.lens(req, res, p);
+      const item = await itemOf(a, p, res.txHash, lens.verdict !== 'sealed');
+      expect(item, `${p} history has the dvp`).toBeDefined();
+      expect(item).toMatchObject({ verdict: lens.verdict, amount: lens.amount, rdAmount: lens.rdAmount, counterparty: lens.counterparty, role: lens.role });
+    }
+    expect((await a.lens(req, res, 'A')).rdAmount).toBe(String(PRICE_PER_UNIT));
+  });
+
+  it('network(): 4 validators + 4 Paladin nodes, all up', async () => {
+    const n = await (await load())!.network();
+    expect(n.nodes.map((x) => x.status)).toEqual(Array(8).fill('up'));
+  });
+
+  it('a party whose node is unreachable makes history() reject', async () => {
+    const st = readState<ZetoState>('zeto')!;
+    const bad = nodeConnections.map((n, i) => (i === 1 ? { ...n, clientOptions: { ...n.clientOptions, url: 'http://127.0.0.1:1' } } : n));
+    await expect(createZetoAdapter(st, bad).history('A', 5)).rejects.toThrow();
   });
 });

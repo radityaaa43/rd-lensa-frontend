@@ -1,13 +1,15 @@
-import type { Capability, Counterparty, FlowResult, LensView, ModelAdapter, StepEvent } from '../adapter.ts';
+import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, StepEvent } from '../adapter.ts';
 import {
-  BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleOf,
+  BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf,
   type BankId, type FlowId, type FlowRequest, type PartyId,
 } from '../domain.ts';
-import { CANCELLED, LOAD_AMOUNT, NotAvailableError } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
+import { besuNetwork, holdBack, joinInFlight, receiptPage, type ReceiptLike } from './besu-network.ts';
+import type { EventLike } from './noto.ts';
 import { afterLock } from '../deadline.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
-import { buildReport } from '../../../../besu/zeto/src/bi-report.ts';
+import { REPORT_PAGE, ZETO_MOVEMENT_TOPICS, buildReport } from '../../../../besu/zeto/src/bi-report.ts';
 import {
   AtomFactory, BiLedger, PaladinClient, ZetoInstance, chainIO, heldStates, mintUtxos, nodeConnections, party, reportTo, swap, transfer, within,
   type Party, type Settled,
@@ -48,6 +50,169 @@ export function ledgerParties(
   const to = owners.size === 1 ? PARTY_OF.get([...owners][0]!) ?? null : null;
   return from === null && to === null ? null : { from, to };
 }
+// History (ARCHITECTURE.md §2.3). One tx = one base-ledger hash; the party's own node lists the receipts of the two Zeto contracts. Events tell
+// movements (mint, transfer, spent lock) from lock bookkeeping. A bank reads what its own node holds of the tx's outputs (nothing = sealed);
+// BI reads its ledger (bank reports + its own states), brought up to date from node1 first.
+const RECEIPT_PAGE = 100;
+// ponytail: page cap on the receipt scan, add a contract-level index if real volume needs it
+const SCAN_PAGES_MAX = 3;
+const EVENT_CHUNK = 25;
+const EVENT_LIMIT = 1000;
+const READ_GROUPS = 4; // groups read in parallel
+export interface Held { token: Token; amount: bigint; owner: string } // a state a node holds, owner = lower-case BabyJubJub key
+export interface ZetoGroup { hash: string; block: number; at: string | null; io: Io[] }
+const sealedItem = (party: PartyId, g: ZetoGroup): HistoryItem =>
+  ({ id: g.hash, at: g.at, block: g.block, flow: null, asset: null, role: roleFromParties(party, null, false), verdict: 'sealed', amount: null, rdAmount: null, counterparty: null });
+const sumOf = (xs: Held[]) => xs.reduce((a, x) => a + x.amount, 0n);
+
+// A bank's item from the states its own node holds for the tx's outputs. A sender's node holds the outputs it created for others as well as its
+// change; a receiver's holds only its own (a Zeto UTXO carries no sender, so `from` is null, as lens() shows it). A DvP has outputs of both tokens:
+// DFABI to the buyer, RD to the seller; the RD leg is readable when the node holds the seller's RD outputs (the seller's own, or the buyer's as sender of that leg).
+export function zetoBankItem(party: BankId, g: ZetoGroup, mine: Held[], keys: { self: string; partyOf: Map<string, PartyId> }): HistoryItem {
+  if (!mine.length) return sealedItem(party, g);
+  const dvp = new Set(g.io.map((i) => i.token)).size === 2;
+  const main: Token = dvp ? 'DFABI' : g.io[0]!.token;
+  const mainMine = mine.filter((m) => m.token === main);
+  const foreign = mainMine.filter((m) => m.owner !== keys.self);
+  const sender = foreign.length > 0;
+  const to = new Set(foreign.map((m) => keys.partyOf.get(m.owner) ?? null));
+  const counterparty: Counterparty = sender ? { from: party, to: to.size === 1 ? [...to][0]! : null } : { from: null, to: party };
+  const issue = g.io.every((i) => i.inputs.length === 0); // a mint spends nothing
+  let rdAmount: string | null = null;
+  if (dvp) {
+    const rd = mine.filter((m) => m.token === 'RD');
+    const sellers = new Set(rd.filter((m) => (sender ? m.owner === keys.self : m.owner !== keys.self)).map((m) => m.owner));
+    const seller = sellers.size === 1 ? [...sellers][0]! : null;
+    if (seller) rdAmount = sumOf(rd.filter((m) => m.owner === seller)).toString();
+  }
+  return {
+    id: g.hash, at: g.at, block: g.block,
+    flow: dvp ? 'dvp' : (`${main === 'RD' ? 'rd' : 'dfabi'}-${issue ? 'issue' : 'transfer'}` as FlowId), asset: main,
+    role: roleFromParties(party, counterparty, false), verdict: 'clear',
+    amount: sumOf(sender ? foreign : mainMine.filter((m) => m.owner === keys.self)).toString(), rdAmount, counterparty,
+  };
+}
+
+// BI's item from the outputs it has verified (bank reports + its own states) and the parties its ledger pins down.
+export function zetoBiItem(g: ZetoGroup, seen: Held[], cp: Counterparty | null, ownerKey: Record<PartyId, string>): HistoryItem {
+  const dvp = new Set(g.io.map((i) => i.token)).size === 2;
+  const main: Token = dvp ? 'DFABI' : g.io[0]!.token;
+  const issue = g.io.every((i) => i.inputs.length === 0);
+  const toKey = cp?.to ? lower(ownerKey[cp.to]) : null;
+  const fromKey = cp?.from ? lower(ownerKey[cp.from]) : null;
+  const part = (token: Token, key: string | null) => (key === null ? null : sumOf(seen.filter((s) => s.token === token && s.owner === key)).toString());
+  return {
+    id: g.hash, at: g.at, block: g.block,
+    flow: dvp ? 'dvp' : (`${main === 'RD' ? 'rd' : 'dfabi'}-${issue ? 'issue' : 'transfer'}` as FlowId), asset: main,
+    role: roleFromParties('BI', cp, issue), verdict: issue ? 'clear' : 'reported',
+    amount: part(main, toKey), rdAmount: dvp ? part('RD', fromKey) : null, counterparty: cp,
+  };
+}
+
+// The history scan with everything it reads injected (tests give it a fake node). Caches are keyed by party|hash: a bank's item never takes a
+// value (block time, io, states) read from another node.
+export interface ZetoCache {
+  info: Map<string, { movement: boolean; at: string | null }>;
+  io: Map<string, Io[]>;
+  held: Map<string, Held[]>; // a bank's read, kept only once the tx is past the hold-back window (a younger read may be partial)
+  firstSeen: Map<string, number>;
+}
+export const newZetoCache = (): ZetoCache => ({ info: new Map(), io: new Map(), held: new Map(), firstSeen: new Map() });
+export interface ZetoScan {
+  client: { ptx: { queryTransactionReceipts(q: object): Promise<ReceiptLike[]> }; bidx: { queryIndexedEvents(q: object): Promise<EventLike[]> } };
+  sources: [string, string]; // lower-case, no 0x: RD, DFABI
+  ioOf(hash: string, tokens: Token[]): Promise<Io[]>; // the party's own node
+  heldOf?(hash: string, io: Io[]): Promise<Held[]>; // a bank: what its node holds of the outputs
+  biOf?(io: Io[]): { seen: Held[]; cp: Counterparty | null } | null; // BI: null while an output is not verified yet
+  syncBi?(): Promise<void>;
+  ownerKey: Record<PartyId, string>;
+  partyOfKey: Map<string, PartyId>;
+  cache: ZetoCache;
+  now?: () => number;
+  pageSize?: number;
+}
+
+export async function zetoHistory(party: PartyId, want: number, c: ZetoScan): Promise<HistoryItem[] & { truncated?: true; pending?: string[] }> {
+  const now = c.now ?? Date.now;
+  const pageSize = c.pageSize ?? RECEIPT_PAGE;
+  const tokenOf = (src: string): Token => (src.toLowerCase().replace(/^0x/, '') === c.sources[0] ? 'RD' : 'DFABI');
+  if (party === 'BI') await c.syncBi!();
+  const items: HistoryItem[] = [];
+  const pending: string[] = []; // held back (too fresh to call sealed, or the node has not caught up yet): reported, never silently absent
+  const done = new Set<string>();
+  let cursor: number | undefined;
+  let newest: number | undefined;
+  let more = true;
+  let pages = 0;
+  while (items.length < want && more && pages < SCAN_PAGES_MAX) {
+    pages++;
+    const receipts = await receiptPage(c.client as never, {
+      limit: pageSize, sort: ['sequence DESC'], eq: [{ field: 'domain', value: 'zeto' }], in: [{ field: 'source', values: [...c.sources] }], // the receipt filter takes the address without 0x
+      ...(cursor === undefined ? {} : { lt: [{ field: 'sequence', value: cursor }] }),
+    }, pageSize, [...c.sources]);
+    const pageRows = receipts.slice(0, pageSize);
+    more = pageRows.length === pageSize;
+    if (pageRows.length) cursor = pageRows[pageRows.length - 1]!.sequence;
+    newest ??= receipts[0]?.blockNumber;
+    const byHash = new Map<string, ReceiptLike[]>();
+    for (const r of receipts) if (!done.has(r.transactionHash)) byHash.set(r.transactionHash, [...(byHash.get(r.transactionHash) ?? []), r]);
+    const key = (h: string) => `${party}|${h}`;
+
+    // Events of this node: movement test and block time. A receipt whose events this node has not indexed yet is held back, not an error.
+    const fresh = [...byHash.keys()].filter((h) => !c.cache.info.has(key(h)));
+    for (let i = 0; i < fresh.length; i += EVENT_CHUNK) {
+      const chunk = fresh.slice(i, i + EVENT_CHUNK);
+      const events = await c.client.bidx.queryIndexedEvents({ limit: EVENT_LIMIT, in: [{ field: 'transactionHash', values: chunk }] });
+      if (events.length >= EVENT_LIMIT) throw new Error('Terlalu banyak event untuk satu halaman riwayat Zeto');
+      for (const h of chunk) {
+        const mine = events.filter((e) => e.transactionHash === h);
+        if (!mine.length) continue; // not cached: asked again next time
+        c.cache.info.set(key(h), { movement: mine.some((e) => ZETO_MOVEMENT_TOPICS.includes(e.signature)), at: mine.find((e) => e.block?.timestamp)?.block?.timestamp ?? null });
+      }
+    }
+
+    const groups = [...byHash];
+    for (const [h] of groups) done.add(h);
+    for (let i = 0; i < groups.length && items.length < want; i += READ_GROUPS) {
+      const batch = groups.slice(i, i + READ_GROUPS);
+      // The reads of a batch run in parallel (each is several node calls); the items are built in order afterwards.
+      const results = await Promise.all(batch.map(async ([hash, rs]): Promise<{ item?: HistoryItem; hold?: true }> => {
+        const info = c.cache.info.get(key(hash));
+        if (!info) return { hold: true };
+        if (!info.movement) return {};
+        let io = c.cache.io.get(key(hash));
+        if (!io) {
+          io = await c.ioOf(hash, [...new Set(rs.map((r) => tokenOf(r.source)))]);
+          if (!io.some((x) => x.outputs.length)) return { hold: true }; // a movement with no outputs read: the node is lagging; not cached
+          c.cache.io.set(key(hash), io);
+        }
+        const g: ZetoGroup = { hash, block: rs[0]!.blockNumber, at: info.at, io };
+        const young = holdBack(c.cache.firstSeen, key(hash), g.block, newest ?? 0, now());
+        let item: HistoryItem | undefined;
+        if (party === 'BI') {
+          const bi = c.biOf!(io);
+          if (bi) item = zetoBiItem(g, bi.seen, bi.cp, c.ownerKey);
+        } else {
+          let mine = c.cache.held.get(key(hash));
+          if (!mine) {
+            mine = await c.heldOf!(hash, io);
+            if (!young) c.cache.held.set(key(hash), mine); // final: sealed (empty) or complete; a younger read may still be partial
+          }
+          if (mine.length) item = zetoBankItem(party as BankId, g, mine, { self: c.ownerKey[party], partyOf: c.partyOfKey });
+        }
+        if (item) return { item };
+        return young ? { hold: true } : { item: sealedItem(party, g) };
+      }));
+      batch.forEach(([hash], k) => {
+        const r = results[k]!;
+        if (r.hold) pending.push(hash);
+        else if (r.item && items.length < want && !items.some((x) => x.id === r.item!.id)) items.push(r.item);
+      });
+    }
+  }
+  return Object.assign(items, more && pages >= SCAN_PAGES_MAX && items.length < want ? { truncated: true as const } : {}, pending.length ? { pending } : {});
+}
+
 const DEADLINE_MS = 120_000;
 const MAX_ZETO_TX = 2; // a Paladin node has crashed under concurrent ZK proving
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -78,8 +243,8 @@ export async function exclusive<T>(senders: PartyId[], fn: () => Promise<T>): Pr
   } finally { releases.forEach((r) => r()); }
 }
 
-export function createZetoAdapter(state: ZetoState) {
-  const clients = nodeConnections.map((n) => new PaladinClient(n.clientOptions));
+export function createZetoAdapter(state: ZetoState, connections = nodeConnections) { // connections: tests point one node at a dead port
+  const clients = connections.map((n) => new PaladinClient(n.clientOptions));
   const P = Object.fromEntries(PARTY_IDS.map((id) => [id, party(clients, LOOKUP[id])])) as Record<PartyId, Party>;
   const address: Record<Token, string> = { RD: state.rd, DFABI: state.dfabi };
   const zeto = (t: Token, p: Party) => new ZetoInstance(p.c, address[t]).using(p.c);
@@ -96,13 +261,13 @@ export function createZetoAdapter(state: ZetoState) {
   let polling: Promise<unknown> = Promise.resolve();
   const left = (end: number) => Math.max(1, end - Date.now());
   const poll = (end: number) => (polling = polling.catch(() => {}).then(async () => {
-    do { if (Date.now() > end) return; } while ((await within(ledger.pollReports(), left(end), 'Cek laporan BI')) >= 200);
+    do { if (Date.now() > end) return; } while ((await ledger.pollReports()) >= REPORT_PAGE); // never raced inside the chain: an abandoned poll would run beside the next one
   }));
   async function untilVerified(ids: string[]): Promise<void> {
     const end = Date.now() + DEADLINE_MS;
     while (ids.some((id) => !ledger.verified.has(id))) {
       if (Date.now() > end) throw new Error(`Laporan BI belum terverifikasi dalam ${DEADLINE_MS / 1000} detik`);
-      await poll(end);
+      await within(poll(end), left(end), 'Cek laporan BI'); // the caller's deadline; the poll itself runs to its end
       await sleep(300);
     }
   }
@@ -258,6 +423,39 @@ export function createZetoAdapter(state: ZetoState) {
       id === req.from ? 'Query state privat di node sendiri (`pstate.queryContractStates`).' : 'Node penerima menerima state terenkripsi dan membukanya.', rdLeg(mine));
   }
 
+  // ---- history ----
+  const zetoCache = newZetoCache();
+  const ownerKey = Object.fromEntries(PARTY_IDS.map((p) => [p, lower(state.owners[p])])) as Record<PartyId, string>;
+  const partyOfKey = new Map(PARTY_IDS.map((p): [string, PartyId] => [ownerKey[p], p]));
+  const bare = [state.rd, state.dfabi].map((a) => lower(a).replace(/^0x/, '')) as [string, string]; // the receipt filter takes the address without 0x
+
+  // One sync at a time, on the shared report cursor. The timeout is the CALLER's (within(syncBi(), ...)): the sync itself is never abandoned
+  // half-way, because the next one would then run beside it and ingest the same reports twice.
+  const syncBi = joinInFlight(() => (polling = polling.catch(() => {}).then(() => ledger.sync())));
+
+  async function history(party: PartyId, limit: number): Promise<HistoryItem[] & { truncated?: true; pending?: string[] }> {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error('limit harus bilangan bulat >= 1');
+    const c = P[party].c;
+    return zetoHistory(party, Math.min(limit, HISTORY_MAX), {
+      client: c as never, sources: bare, ownerKey, partyOfKey, cache: zetoCache,
+      ioOf: (hash, tokens) => Promise.all(tokens.map(async (token): Promise<Io> => {
+        const r = await chainIO(c, hash, address[token]);
+        return { token, outputs: r.outputs.map(String), inputs: r.inputs.map(String) };
+      })),
+      heldOf: party === 'BI' ? undefined : (hash, io) => held(party, hash, io),
+      syncBi: party === 'BI' ? async () => { await within(syncBi(), DEADLINE_MS, 'Sinkron ledger BI'); } : undefined,
+      biOf: party !== 'BI' ? undefined : (io) => {
+        const outs = io.flatMap((i) => i.outputs.map((o) => ({ token: i.token, v: ledger.verified.get(o) })));
+        if (!outs.every((o) => o.v)) return null;
+        const main = io.length === 2 ? 'DFABI' : io[0]!.token;
+        return {
+          seen: outs.map((o): Held => ({ token: o.token, amount: BigInt(o.v!.output.amount), owner: lower(o.v!.output.owner) })),
+          cp: ledgerParties(ledger, io.filter((i) => i.token === main).flatMap((i) => i.outputs), io.every((i) => i.inputs.length === 0)),
+        };
+      },
+    });
+  }
+
   // Unspent, unlocked RD UTXOs of exactly LOAD_AMOUNT a bank owns on its own node.
   async function loadUtxos(bank: BankId): Promise<number> {
     const key = lower(state.owners[bank]);
@@ -275,8 +473,8 @@ export function createZetoAdapter(state: ZetoState) {
     balanceOf: balance,
     run,
     lens,
-    history: async () => { throw new NotAvailableError('Riwayat belum tersedia'); }, // step 0 stub (ARCHITECTURE.md §5), replaced per §2.3
-    network: async () => { throw new NotAvailableError('Status jaringan belum tersedia'); },
+    history,
+    network: () => besuNetwork({ paladin: true }),
     async loadCapacity() {
       return 3 * Math.min(...(await Promise.all(BANKS.map(loadUtxos))));
     },
@@ -305,5 +503,10 @@ export function createZetoAdapter(state: ZetoState) {
 
 export async function load(): Promise<ModelAdapter | null> {
   const state = readState<ZetoState>('zeto');
-  return state && state.funded !== false ? createZetoAdapter(state) : null;
+  if (!state || state.funded === false) return null;
+  const adapter = createZetoAdapter(state);
+  // BI's first history() walks every report and every Zeto event since the deploy (about 27 s on the live chain, over the route's 20 s).
+  // Start it now, in the background; a failure here just means the first real call pays and reports it.
+  void adapter.history('BI', 1).catch(() => {});
+  return adapter;
 }
