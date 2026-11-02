@@ -73,6 +73,21 @@ test('landing → Besu → Zeto riwayat, switch A to C', async ({ page }) => {
   await expect(page.getByText('Rp 1.000', { exact: true })).toHaveCount(0);
 });
 
+// ARCHITECTURE.md §2.2 v1.3: a tx C's node holds back as pending is "not indexed yet", never "Tidak terlihat"; one recheck after 10 s
+test('lensa: a pending tx is never claimed absent and is rechecked once', async ({ page }) => {
+  const tx = '0x' + '2'.repeat(64);
+  let calls = 0;
+  await page.route('**/api/history?model=zeto&party=C*', (r) => { calls++; return r.fulfill({ json: [{ id: '0x9', at: null, block: 1, flow: null, asset: null, role: 'outsider', verdict: 'sealed', amount: null, rdAmount: null, counterparty: null }], headers: { 'x-history-pending': tx } }); });
+  await page.goto(`/besu/zeto/lensa/${tx}?pihak=A`);
+  const c = page.getByRole('region', { name: 'Bank Sejahtera' });
+  await expect(c).toContainText('Belum terindeks di node pihak ini');
+  await expect(c).not.toContainText('Tidak terlihat');
+  await expect.poll(() => calls, { timeout: 15_000 }).toBe(2);
+  await expect(c).toContainText('juga setelah diperiksa ulang');
+  await page.waitForTimeout(11_000);
+  expect(calls).toBe(2); // once, not a loop
+});
+
 test('a deep link reloads into the same view', async ({ page }) => {
   await page.goto('/iroha3/dasbor?pihak=B');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Dasbor · Bank Nusantara');

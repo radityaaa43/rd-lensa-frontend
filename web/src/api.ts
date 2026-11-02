@@ -36,10 +36,15 @@ const post = <T,>(path: string, body?: unknown) =>
 export const getMeta = () => call<Meta>('/api/meta');
 export const getHealth = () => call<Health>('/api/health');
 export const getCapacity = () => call<Capacity>('/api/preflight-capacity');
-export interface HistoryPage { items: HistoryItem[]; truncated: boolean }
+// pending: tx ids this party's node holds back as not indexed yet (x-history-pending, ARCHITECTURE.md §2.2 v1.3)
+export interface HistoryPage { items: HistoryItem[]; truncated: boolean; pending: string[] }
 export const getHistory = (model: ModelId, party: PartyId, limit: number) =>
   call<HistoryPage>(`/api/history?model=${model}&party=${party}&limit=${limit}`, undefined,
-    (b, res) => ({ items: b as HistoryItem[], truncated: res.headers.get('x-history-truncated') === '1' }));
+    (b, res) => ({
+      items: b as HistoryItem[],
+      truncated: res.headers.get('x-history-truncated') === '1',
+      pending: res.headers.get('x-history-pending')?.split(',').filter(Boolean) ?? [],
+    }));
 export const getNetwork = (model: ModelId) => call<Network>(`/api/network?model=${model}`);
 export const getBalance = (model: ModelId, party: PartyId) => call<Balance>(`/api/balance?model=${model}&party=${party}`);
 export const postTx = (req: FlowRequest) => post<{ runId: string }>('/api/tx', req);

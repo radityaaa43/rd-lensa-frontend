@@ -7,7 +7,7 @@ import { columnsFromHistory, columnsFromRun } from './Lens.tsx';
 const item = (id: string, block: number, over: Partial<HistoryItem> = {}): HistoryItem => ({
   id, at: null, block, flow: 'rd-transfer', asset: 'RD', role: 'sender', verdict: 'clear', amount: '5', rdAmount: null, counterparty: { from: 'A', to: 'B' }, ...over,
 });
-const page = (items: HistoryItem[], truncated = false) => ({ data: { items, truncated }, error: null });
+const page = (items: HistoryItem[], truncated = false) => ({ data: { items, truncated, pending: [] as string[] }, error: null });
 
 test('each party shows its own item for the tx', () => {
   const cols = columnsFromHistory('0xT', {
@@ -26,6 +26,14 @@ test('absence is claimed only when that party\'s list reaches back past the tx b
     C: page([]),                                  // nothing to compare: never claim absence
   });
   expect(cols.map((c) => c.kind)).toEqual(['view', 'absent', 'out', 'out']);
+});
+
+test('v1.3: a tx the party\'s node holds back as pending is "not indexed yet", never absent', () => {
+  const cols = columnsFromHistory('0xT', {
+    BI: page([item('0xT', 50)]), A: page([item('0xT', 50)]), B: page([item('0xT', 50)]),
+    C: { data: { items: [item('0xO', 40)], truncated: false, pending: ['0xT'] }, error: null }, // oldest 40 <= 50 would claim absence
+  });
+  expect(cols[3]).toEqual({ party: 'C', kind: 'pending' });
 });
 
 test('if no party lists the tx, no column claims absence', () => {

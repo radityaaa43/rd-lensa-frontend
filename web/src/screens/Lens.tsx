@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { HISTORY_MAX } from '../../../server/src/adapter.ts';
 import { FLOWS, PLATFORM_OF, type FlowRequest, type ModelId, type PartyId } from '../../../server/src/domain.ts';
 import { getHistory, type HistoryPage, type Meta } from '../api.ts';
@@ -33,6 +34,7 @@ export function columnsFromHistory(tx: string, reads: Record<PartyId, Read>): Le
     if (!r.data) return { party, kind: 'loading' };
     const item = r.data.items.find((i) => i.id === tx);
     if (item) return { party, kind: 'view', item, showFlow: true };
+    if (r.data.pending.includes(tx)) return { party, kind: 'pending' }; // held back by this party's node: never claim absence
     const blocks = r.data.items.map((i) => i.block).filter((b): b is number => b !== null);
     const oldest = blocks.length ? Math.min(...blocks) : null;
     return { party, kind: txBlock !== null && oldest !== null && oldest <= txBlock ? 'absent' : 'out' };
@@ -42,7 +44,16 @@ export function columnsFromHistory(tx: string, reads: Record<PartyId, Read>): Le
 function FromHistory({ meta, model, tx, active }: { meta: Meta; model: ModelId; tx: string; active: PartyId }) {
   const read = (p: PartyId) => usePoll(`${model}|${p}|lensa`, () => getHistory(model, p, HISTORY_MAX));
   const reads = { BI: read('BI'), A: read('A'), B: read('B'), C: read('C') }; // fixed order: four hooks every render
-  const cols = columnsFromHistory(tx, reads);
+  const rechecked = useRef(new Set<PartyId>());
+  const cols = columnsFromHistory(tx, reads).map((c) => (c.kind === 'pending' && rechecked.current.has(c.party) ? { ...c, rechecked: true } : c));
+  // a pending column gets ONE automatic recheck after 10 s (v1.3); this component is keyed by model|tx, so "once" resets per tx
+  const pendingParties = cols.filter((c) => c.kind === 'pending').map((c) => c.party).join(',');
+  useEffect(() => {
+    const due = (pendingParties ? (pendingParties.split(',') as PartyId[]) : []).filter((p) => !rechecked.current.has(p));
+    if (!due.length) return;
+    const t = setTimeout(() => due.forEach((p) => { rechecked.current.add(p); reads[p].reload(); }), 10_000);
+    return () => clearTimeout(t);
+  }, [pendingParties]); // eslint-disable-line react-hooks/exhaustive-deps -- reads are re-created each render; the party list is the trigger
   const seen = cols.find((c): c is ViewCol => c.kind === 'view');
   return <Body meta={meta} model={model} tx={tx} block={seen?.item.block ?? null} note="Dari riwayat yang dibaca node tiap pihak." cols={cols} active={active} />;
 }

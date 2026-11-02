@@ -10,6 +10,7 @@ import { nodeLabel, roleLabel } from './copy.ts';
 export type LensCol =
   | { party: PartyId; kind: 'view'; item: HistoryItem; showFlow: boolean; onChain?: { label: string; value: string }[]; method?: string }
   | { party: PartyId; kind: 'loading' | 'absent' | 'out' }
+  | { party: PartyId; kind: 'pending'; rechecked?: boolean }
   | { party: PartyId; kind: 'error'; reason: string; notAvailable: boolean };
 
 // "nothing readable" for one column → one row seal (DESIGN.md §6.1). A run column never shows the flow (it comes from the
@@ -22,6 +23,7 @@ const NOTE = {
   loading: 'Memuat…',
   absent: 'Tidak terlihat oleh pihak ini. Transaksi tidak muncul di riwayat yang dibaca node-nya.',
   out: 'Di luar jangkauan riwayat. Riwayat pihak ini tidak menjangkau blok transaksi ini.',
+  pending: 'Belum terindeks di node pihak ini. Diperiksa ulang otomatis dalam 10 detik.',
 };
 
 export function Lenses({ meta, model, cols, active, txHash }: { meta: Meta; model: ModelId; cols: LensCol[]; active: PartyId; txHash: string }) {
@@ -40,7 +42,9 @@ export function Lenses({ meta, model, cols, active, txHash }: { meta: Meta; mode
           return (
             <section key={col.party} className={`lens2 note${mine ? ' mine' : ''}`} aria-label={name(col.party)}>
               {head}
-              <p>{col.kind === 'error' ? (col.notAvailable ? `Belum tersedia di platform ini: ${col.reason}` : col.reason) : NOTE[col.kind]}</p>
+              <p>{col.kind === 'error' ? (col.notAvailable ? `Belum tersedia di platform ini: ${col.reason}` : col.reason)
+                : col.kind === 'pending' && col.rechecked ? 'Belum terindeks di node pihak ini, juga setelah diperiksa ulang. Buka lagi nanti.'
+                : NOTE[col.kind]}</p>
             </section>
           );
         }

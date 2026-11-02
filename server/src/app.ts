@@ -178,6 +178,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       return [...items];
     } catch (e) {
       if (e instanceof NotAvailableError) return reply.code(501).send({ reason: e.message });
+      request.log.error({ err: e }, `history ${model} ${party}`); // the original stays in the server log; the client gets the scrubbed reason
       return reply.code(502).send({ reason: `Riwayat ${MODEL_NAMES[model]} untuk ${PARTIES[party].name} tidak dapat dibaca: ${msg(e)}` });
     }
   });
@@ -190,6 +191,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       return await withDeadline(a.network(), NETWORK_MS, 'Status jaringan');
     } catch (e) {
       if (e instanceof NotAvailableError) return reply.code(501).send({ reason: e.message });
+      request.log.error({ err: e }, `network ${model}`); // the original stays in the server log; the client gets the scrubbed reason
       return reply.code(502).send({ reason: `Status jaringan ${MODEL_NAMES[model]} tidak dapat dibaca: ${msg(e)}` });
     }
   });
@@ -203,6 +205,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     const got = await Promise.allSettled(assets.map((asset) => withDeadline(a.balanceOf(party, asset), HEALTH_MS, 'Cek saldo')));
     return Object.fromEntries(assets.map((asset, i) => {
       const r = got[i];
+      if (r.status === 'rejected') request.log.error({ err: r.reason }, `balance ${model} ${party} ${asset}`);
       return [asset, r.status === 'fulfilled' ? { amount: r.value.toString() } : { error: msg(r.reason) }];
     }));
   });

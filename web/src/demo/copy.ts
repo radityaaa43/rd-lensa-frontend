@@ -56,9 +56,9 @@ export const SEAL_WHY: Record<ModelId, string> = {
   iroha3: 'Iroha 3 tidak merahasiakan data. Nilai ini kosong karena node {pihak} tidak mengembalikannya.',
 };
 
-// Typical duration of one demo transaction, ONLY from measured live runs (T7, 2026-11-02): iroha3 DvP 45 s, fabricx DvP 4,8 s.
-// Besu models get a value after their live run. Shown as a typical figure, never as a promise.
-export const TYPICAL_SECONDS: Partial<Record<ModelId, number>> = { iroha3: 45, fabricx: 5 };
+// Typical duration of one demo transaction, ONLY from measured live runs (T7, 2026-11-02): iroha3 DvP 45 s, fabricx DvP 4,8 s,
+// noto DvP 15,4 s. Stealth and Zeto get a value after their live run. Shown as a typical figure, never as a promise.
+export const TYPICAL_SECONDS: Partial<Record<ModelId, number>> = { iroha3: 45, fabricx: 5, noto: 15 };
 
 // Dasbor stat card "Model privasi" (DESIGN.md §7.4)
 export const MODEL_STYLE: Record<ModelId, string> = {
