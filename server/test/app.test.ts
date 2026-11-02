@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, expect, test } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { NotAvailableError, type ModelAdapter } from '../src/adapter.ts';
+import { NotAvailableError, WarmingUpError, type ModelAdapter } from '../src/adapter.ts';
 import { buildApp, safeReason } from '../src/app.ts';
 import { rpcUp } from '../src/health.ts';
 import type { FlowRequest, ModelId } from '../src/domain.ts';
@@ -539,4 +539,18 @@ test('history sets x-history-pending only when the adapter holds back fresh unre
   const res = await app.inject('/api/history?model=noto&party=C');
   expect(res.headers['x-history-pending']).toBe('0xaa,0xbb');
   expect(res.json()).toEqual([]);
+});
+
+test('WarmingUpError becomes 503 + Retry-After (history and network), not a 502 (v1.4)', async () => {
+  const a = fakeAdapter('zeto');
+  a.history = async () => { throw new WarmingUpError('Sinkronisasi pertama BI sedang berjalan…', 30); };
+  a.network = async () => { throw new WarmingUpError('Status jaringan sedang disiapkan', 5); };
+  const app = make({ zeto: a });
+  const h = await app.inject('/api/history?model=zeto&party=BI');
+  expect(h.statusCode).toBe(503);
+  expect(h.headers['retry-after']).toBe('30');
+  expect(h.json()).toEqual({ reason: 'Sinkronisasi pertama BI sedang berjalan…' });
+  const n = await app.inject('/api/network?model=zeto');
+  expect(n.statusCode).toBe(503);
+  expect(n.headers['retry-after']).toBe('5');
 });

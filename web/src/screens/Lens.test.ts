@@ -36,6 +36,14 @@ test('v1.3: a tx the party\'s node holds back as pending is "not indexed yet", n
   expect(cols[3]).toEqual({ party: 'C', kind: 'pending' });
 });
 
+test('v1.4: a warming-up party column is loading with its reason', () => {
+  const cols = columnsFromHistory('0xT', {
+    BI: { data: undefined, error: null, warming: 'Sinkronisasi pertama BI sedang berjalan, ±30 detik' },
+    A: page([item('0xT', 5)]), B: page([item('0xT', 5)]), C: page([item('0xT', 5)]),
+  });
+  expect(cols[0]).toEqual({ party: 'BI', kind: 'loading', reason: 'Sinkronisasi pertama BI sedang berjalan, ±30 detik' });
+});
+
 test('if no party lists the tx, no column claims absence', () => {
   const cols = columnsFromHistory('0xT', { BI: page([item('0xA', 10)]), A: page([item('0xA', 10)]), B: page([]), C: page([]) });
   expect(cols.every((c) => c.kind === 'out')).toBe(true);

@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
 
 // DESIGN.md §7.12. Empty (nothing exists) is a dashed box and never shares a style with Sealed.
-export function Loading({ rows = 3 }: { rows?: number }) {
+// text: a visible reason for a longer wait (503 warming up), announced once
+export function Loading({ rows = 3, text }: { rows?: number; text?: string }) {
   return (
     <div className="skel" aria-busy="true">
-      <span className="vh">Memuat…</span>
+      {text ? <p className="warming" role="status">{text}</p> : <span className="vh">Memuat…</span>}
       {Array.from({ length: rows }, (_, i) => <i key={i} />)}
     </div>
   );
@@ -31,9 +32,9 @@ export function ErrorState({ reason, onRetry }: { reason: string; onRetry?: () =
 
 // one switch for every usePoll-backed panel: error (501 neutral, else retry) → loading → content
 export function Polled<T>({ p, children, rows }: {
-  p: { data: T | undefined; error: string | null; status?: number; reload(): void }; children: (d: T) => ReactNode; rows?: number;
+  p: { data: T | undefined; error: string | null; status?: number; warming?: string; reload(): void }; children: (d: T) => ReactNode; rows?: number;
 }) {
   if (p.error !== null) return p.status === 501 ? <NotAvailable reason={p.error} /> : <ErrorState reason={p.error} onRetry={p.reload} />;
-  if (p.data === undefined) return <Loading rows={rows} />;
+  if (p.data === undefined) return <Loading rows={rows} text={p.warming} />;
   return <>{children(p.data)}</>;
 }

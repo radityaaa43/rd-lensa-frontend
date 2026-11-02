@@ -9,7 +9,8 @@ import { nodeLabel, roleLabel } from './copy.ts';
 // One column per party in the comparison (DESIGN.md §7.10). Every value is that party's own read; nothing is derived.
 export type LensCol =
   | { party: PartyId; kind: 'view'; item: HistoryItem; showFlow: boolean; onChain?: { label: string; value: string }[]; method?: string }
-  | { party: PartyId; kind: 'loading' | 'absent' | 'out' }
+  | { party: PartyId; kind: 'loading'; reason?: string } // reason: a 503 warming-up text (v1.4)
+  | { party: PartyId; kind: 'absent' | 'out' }
   | { party: PartyId; kind: 'pending'; rechecked?: boolean }
   | { party: PartyId; kind: 'error'; reason: string; notAvailable: boolean };
 
@@ -44,6 +45,7 @@ export function Lenses({ meta, model, cols, active, txHash }: { meta: Meta; mode
               {head}
               <p>{col.kind === 'error' ? (col.notAvailable ? `Belum tersedia di platform ini: ${col.reason}` : col.reason)
                 : col.kind === 'pending' && col.rechecked ? 'Belum terindeks di node pihak ini, juga setelah diperiksa ulang. Buka lagi nanti.'
+                : col.kind === 'loading' && col.reason ? col.reason
                 : NOTE[col.kind]}</p>
             </section>
           );

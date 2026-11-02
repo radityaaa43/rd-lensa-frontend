@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { HISTORY_MAX, NotAvailableError, type Capability, type LensView, type ModelAdapter } from './adapter.ts';
+import { HISTORY_MAX, NotAvailableError, WarmingUpError, type Capability, type LensView, type ModelAdapter } from './adapter.ts';
 import { withDeadline } from './deadline.ts';
 import {
   FLOWS, MODEL_NAMES, PARTIES, PRICE_PER_UNIT, validateRequest,
@@ -178,6 +178,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       return [...items];
     } catch (e) {
       if (e instanceof NotAvailableError) return reply.code(501).send({ reason: e.message });
+      if (e instanceof WarmingUpError) return reply.code(503).header('retry-after', String(e.retryAfterS)).send({ reason: e.message }); // v1.4: loading, not an error
       request.log.error({ err: e }, `history ${model} ${party}`); // the original stays in the server log; the client gets the scrubbed reason
       return reply.code(502).send({ reason: `Riwayat ${MODEL_NAMES[model]} untuk ${PARTIES[party].name} tidak dapat dibaca: ${msg(e)}` });
     }
@@ -191,6 +192,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       return await withDeadline(a.network(), NETWORK_MS, 'Status jaringan');
     } catch (e) {
       if (e instanceof NotAvailableError) return reply.code(501).send({ reason: e.message });
+      if (e instanceof WarmingUpError) return reply.code(503).header('retry-after', String(e.retryAfterS)).send({ reason: e.message }); // v1.4: loading, not an error
       request.log.error({ err: e }, `network ${model}`); // the original stays in the server log; the client gets the scrubbed reason
       return reply.code(502).send({ reason: `Status jaringan ${MODEL_NAMES[model]} tidak dapat dibaca: ${msg(e)}` });
     }

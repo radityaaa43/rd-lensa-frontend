@@ -135,6 +135,12 @@ export function roleFromParties(party: PartyId, cp: Counterparty | null, issuer:
   An adapter throws it when a platform has no source for the read (and the step 0 stubs throw
   it). The route maps it to 501 `{ reason: e.message }`. Any other throw stays 502. The UI shows
   501 as the neutral state "Belum tersedia di platform ini", with no retry.
+- **503 warming up** (v1.4, 2026-11-03). An adapter whose read waits on a known one-time cold
+  start (the Zeto BI ledger sync, ~27 s after a server start) throws `WarmingUpError(reason,
+  retryAfterS)` (exported from adapter.ts) instead of letting the route hit its 20 s deadline. The
+  route answers 503 `{ reason }` + `Retry-After`. The UI shows the reason ("Sinkronisasi pertama BI
+  sedang berjalan…") as a loading state, not an error, and retries once after `Retry-After`. Any
+  later failure is the normal 502.
 - **`x-history-pending: <id,id,…>`** header (v1.3, 2026-11-02). An adapter that holds back a
   fresh unreadable tx (the R1 race rule: Fabric-X and Noto) lists those tx ids on the result as
   `pending: string[]`, next to `truncated`. The route turns them into this header. Lensa never

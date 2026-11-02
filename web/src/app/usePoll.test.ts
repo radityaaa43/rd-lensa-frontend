@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import type { Reply } from '../api.ts';
 import { createPoll, pick, type PollState } from './usePoll.ts';
 
@@ -69,6 +69,52 @@ test('a failed read keeps its HTTP status, so 501 (not available) is told apart 
   expect(states.at(-1)).toEqual({ key: 'zeto|A', data: undefined, error: 'Riwayat belum tersedia', status: 501 });
   expect(pick(states.at(-1)!, 'zeto|A').status).toBe(501);
   expect(pick(states.at(-1)!, 'zeto|C').status).toBeUndefined();
+});
+
+// ARCHITECTURE.md §2.2 v1.4: 503 + Retry-After = a known one-time cold start: loading with its reason, ONE retry
+test('503 warming up is a loading state with its reason, retried once after Retry-After', async () => {
+  vi.useFakeTimers();
+  try {
+    const states: PollState<string>[] = [];
+    const poll = createPoll<string>((s) => states.push(s));
+    const replies: Reply<string>[] = [
+      { ok: false, status: 503, reason: 'Sinkronisasi pertama BI sedang berjalan…', retryAfterS: 30 },
+      { ok: true, body: 'data' },
+    ];
+    let calls = 0;
+    const fetch = async () => replies[calls++];
+    await poll.request('zeto|BI', fetch, true);
+    expect(states.at(-1)).toEqual({ key: 'zeto|BI', data: undefined, error: null, warming: 'Sinkronisasi pertama BI sedang berjalan…' });
+    expect(pick(states.at(-1)!, 'zeto|BI')).toMatchObject({ loading: true, warming: 'Sinkronisasi pertama BI sedang berjalan…', error: null });
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(calls).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toBe(2);
+    expect(states.at(-1)).toEqual({ key: 'zeto|BI', data: 'data', error: null });
+  } finally { vi.useRealTimers(); }
+});
+
+test('a second 503 after the one retry is a normal error; a retry never fires for a key that is gone', async () => {
+  vi.useFakeTimers();
+  try {
+    const states: PollState<string>[] = [];
+    const poll = createPoll<string>((s) => states.push(s));
+    const warm: Reply<string> = { ok: false, status: 503, reason: 'warm', retryAfterS: 5 };
+    let calls = 0;
+    await poll.request('k', async () => { calls++; return warm; }, true);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls).toBe(2);
+    expect(states.at(-1)).toEqual({ key: 'k', data: undefined, error: 'warm', status: 503 });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls).toBe(2); // once, not a loop
+
+    let other = 0;
+    await poll.request('a', async () => { other++; return warm; }, true);
+    await poll.request('b', async () => ({ ok: true, body: 'b' }), true); // party switch before the retry
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(other).toBe(1);
+    expect(states.at(-1)).toEqual({ key: 'b', data: 'b', error: null });
+  } finally { vi.useRealTimers(); }
 });
 
 test('a failed read becomes an error with no data, never an empty value', async () => {

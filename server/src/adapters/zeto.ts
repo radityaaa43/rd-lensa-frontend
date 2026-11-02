@@ -3,7 +3,7 @@ import {
   BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf,
   type BankId, type FlowId, type FlowRequest, type PartyId,
 } from '../domain.ts';
-import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, WarmingUpError } from '../adapter.ts';
 import { besuNetwork, holdBack, joinInFlight, receiptPage, type ReceiptLike } from './besu-network.ts';
 import type { EventLike } from './noto.ts';
 import { afterLock } from '../deadline.ts';
@@ -431,10 +431,15 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
 
   // One sync at a time, on the shared report cursor. The timeout is the CALLER's (within(syncBi(), ...)): the sync itself is never abandoned
   // half-way, because the next one would then run beside it and ingest the same reports twice.
-  const syncBi = joinInFlight(() => (polling = polling.catch(() => {}).then(() => ledger.sync())));
+  let biSynced = false; // the first sync of this process is the cold one (~27 s); later ones only read the new reports
+  const syncBi = joinInFlight(() => (polling = polling.catch(() => {}).then(() => ledger.sync())).then((r) => { biSynced = true; return r; }));
 
   async function history(party: PartyId, limit: number): Promise<HistoryItem[] & { truncated?: true; pending?: string[] }> {
     if (!Number.isInteger(limit) || limit < 1) throw new Error('limit harus bilangan bulat >= 1');
+    if (party === 'BI' && !biSynced) { // never wait for the cold sync: it keeps running, the caller retries
+      syncBi().catch((e) => console.error('[zeto] sinkron pertama BI gagal:', e));
+      throw new WarmingUpError('Sinkronisasi pertama BI sedang berjalan, ±30 detik', 15);
+    }
     const c = P[party].c;
     return zetoHistory(party, Math.min(limit, HISTORY_MAX), {
       client: c as never, sources: bare, ownerKey, partyOfKey, cache: zetoCache,

@@ -54,3 +54,13 @@ export const CANCELLED = 'Dibatalkan';
 
 // Thrown by an adapter whose history()/network() is not built yet; the route answers 501.
 export class NotAvailableError extends Error {}
+
+// Thrown by an adapter whose read waits on a known one-time cold start (Zeto BI's first ledger sync); the route answers 503 + Retry-After.
+// The work keeps running in the background, so a retry after retryAfterS finds it done.
+export class WarmingUpError extends Error {
+  retryAfterS: number;
+  constructor(reason: string, retryAfterS: number) {
+    super(reason);
+    this.retryAfterS = retryAfterS;
+  }
+}

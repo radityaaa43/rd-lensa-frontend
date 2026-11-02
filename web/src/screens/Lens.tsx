@@ -13,7 +13,7 @@ import { Empty } from '../ui/States.tsx';
 
 type ModelRoute = Extract<Route, { page: 'model' }>;
 type ViewCol = Extract<LensCol, { kind: 'view' }>;
-type Read = { data: HistoryPage | undefined; error: string | null; status?: number };
+type Read = { data: HistoryPage | undefined; error: string | null; status?: number; warming?: string };
 const ORDER: PartyId[] = ['BI', 'A', 'B', 'C'];
 
 // The last run: each party's lens() as returned. The flow comes from the request only to format amounts; it is not shown per column.
@@ -31,7 +31,7 @@ export function columnsFromHistory(tx: string, reads: Record<PartyId, Read>): Le
   return ORDER.map((party): LensCol => {
     const r = reads[party];
     if (r.error !== null) return { party, kind: 'error', reason: r.error, notAvailable: r.status === 501 };
-    if (!r.data) return { party, kind: 'loading' };
+    if (!r.data) return r.warming ? { party, kind: 'loading', reason: r.warming } : { party, kind: 'loading' };
     const item = r.data.items.find((i) => i.id === tx);
     if (item) return { party, kind: 'view', item, showFlow: true };
     if (r.data.pending.includes(tx)) return { party, kind: 'pending' }; // held back by this party's node: never claim absence

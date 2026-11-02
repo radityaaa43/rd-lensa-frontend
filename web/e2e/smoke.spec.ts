@@ -88,6 +88,22 @@ test('lensa: a pending tx is never claimed absent and is rechecked once', async 
   expect(calls).toBe(2); // once, not a loop
 });
 
+// ARCHITECTURE.md §2.2 v1.4: a 503 + Retry-After is a loading state with its reason, retried once, then data
+test('riwayat: 503 warming up shows the reason as loading, retries once, then the data', async ({ page }) => {
+  let calls = 0;
+  await page.route('**/api/history?model=zeto&party=BI*', (r) => {
+    calls++;
+    return calls === 1
+      ? r.fulfill({ status: 503, json: { reason: 'Sinkronisasi pertama BI sedang berjalan…' }, headers: { 'retry-after': '2' } })
+      : r.continue();
+  });
+  await page.goto('/besu/zeto/riwayat?pihak=BI');
+  await expect(page.getByRole('status').filter({ hasText: 'Sinkronisasi pertama BI sedang berjalan…' })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0); // not the error block
+  await expect(page.locator('table.hist tbody tr').first()).toBeVisible({ timeout: 10_000 });
+  expect(calls).toBe(2);
+});
+
 test('a deep link reloads into the same view', async ({ page }) => {
   await page.goto('/iroha3/dasbor?pihak=B');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Dasbor · Bank Nusantara');

@@ -14,8 +14,9 @@ export interface Health {
 }
 export type Capacity = Partial<Record<ModelId, number>>;
 export type Balance = Record<'RD' | 'DFABI', { amount: string } | { error: string }>;
-// status: the HTTP status of a failed reply (501 = not available on this platform); absent when the server was unreachable
-export type Reply<T> = { ok: true; body: T } | { ok: false; reason: string; status?: number };
+// status: the HTTP status of a failed reply (501 = not available on this platform); absent when the server was unreachable.
+// retryAfterS: from Retry-After on a 503 (a known one-time cold start, ARCHITECTURE.md §2.2 v1.4)
+export type Reply<T> = { ok: true; body: T } | { ok: false; reason: string; status?: number; retryAfterS?: number };
 
 const OFFLINE = 'Tidak dapat terhubung ke server';
 
@@ -24,7 +25,9 @@ async function call<T>(path: string, init?: RequestInit, read: (body: unknown, r
     const res = await fetch(path, init);
     const body = await res.json().catch(() => null);
     if (res.ok) return { ok: true, body: read(body, res) };
-    return { ok: false, status: res.status, reason: (body as { reason?: string } | null)?.reason ?? `Server menjawab ${res.status}` };
+    const reason = (body as { reason?: string } | null)?.reason ?? `Server menjawab ${res.status}`;
+    const retry = Number(res.headers.get('retry-after'));
+    return res.status === 503 && retry > 0 ? { ok: false, status: 503, reason, retryAfterS: retry } : { ok: false, status: res.status, reason };
   } catch {
     return { ok: false, reason: OFFLINE };
   }
