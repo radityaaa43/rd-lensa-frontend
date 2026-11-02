@@ -55,6 +55,8 @@ h1,h2{font-family:var(--display);text-wrap:balance}
 .nav[aria-disabled=true]{color:var(--faint);cursor:not-allowed;flex-wrap:wrap}
 .nav[aria-disabled=true]:hover{background:none}
 .nav small{flex-basis:100%;padding-left:32px;font-size:12px;line-height:1.35;color:var(--muted)}
+/* a long reason is clamped to 2 lines; the full text stays in the DOM (read by screen readers) and in the item's title */
+.nav[aria-disabled=true] small{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}
 .ico{width:20px;height:20px;flex:none}
 .platcard{margin-top:auto;background:var(--ink-panel);color:var(--on-ink);border-radius:var(--r-card);padding:18px}
 .platcard b{display:block;font:600 16px var(--display)}

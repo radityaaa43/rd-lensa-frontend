@@ -117,6 +117,10 @@ test('zeto DvP disabled by capabilities: nav item and DvP screen show the reason
   await page.goto('/besu/zeto/dasbor?pihak=A');
   const nav = page.locator('.side .nav[aria-disabled=true]', { hasText: 'DvP' });
   await expect(nav).toContainText(PREFIX);
+  // a long reason is clamped to 2 lines in the sidebar; the full text stays in the DOM (accessible name) and in title
+  const lines = await nav.locator('small').evaluate((e) => e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight));
+  expect(lines).toBeLessThanOrEqual(2.05);
+  await expect(nav).toHaveAttribute('title', new RegExp(`DvP: ${reason.replace(/[()]/g, '\\$&')}`));
   await expect(page.getByRole('link', { name: 'DvP', exact: true })).toHaveCount(0);
   await page.goto('/besu/zeto/dvp?pihak=A'); // a deep link still explains itself
   await expect(page.locator('.compose2 .notice')).toHaveText(PREFIX);
