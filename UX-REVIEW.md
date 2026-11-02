@@ -83,6 +83,34 @@ and fe's headless checks (no horizontal scroll, 0 console errors). The live pass
 | P2-4 | TPS | Over-time chart: sparklines per model instead of Ref B's line chart with tooltip | Accepted deviation (no shared time axis) | — | Accepted |
 | P2-5 | Results | Horizontal bars instead of Ref A's vertical columns | Accepted deviation (5 model labels) | — | Accepted |
 
+## Pass 2 (live: Iroha 3 + Fabric-X, 2026-11-02, T7 part 1)
+
+Evidence: the real server (`src/main.ts`) against the live cluster, 8 views (2 platforms × BI/A/B/C) on Dasbor, Riwayat and Lensa. Every Riwayat row and every Lensa column was compared field by field with `/api/history` of the same party: 156/156 rows and 32/32 columns match. One demo DvP per platform through the UI (1 unit DFABI, Bank Mandala → Bank Nusantara). Keyboard walk Landing → Dasbor → party switch → Transfer → Riwayat → Lensa → TPS. 0 console errors. Screenshots `live-*` (fe's scratchpad). Besu (Zeto/Noto/Stealth) follows in T7 part 2.
+
+| Criterion | Iroha 3 | Fabric-X | Note |
+|---|---|---|---|
+| Time to first insight | 2 | 5 | Iroha Dasbor takes 8–9 s: `history(limit=5)` 8,06 s, slower than `limit=20` (3,97 s). Fabric-X history 0,17 s. Negative until blockhain's fix (fixed page of 100) |
+| Privacy clarity | 5 | 5 | Iroha: four identical columns + "Sama untuk semua pihak" + the transparency notice; nothing looks protected. Fabric-X DvP lens: BI "Laporan terverifikasi" + both legs, buyer/seller read the RD leg from their own lens, Bank Sejahtera one chip "Transaksi tersegel" |
+| Wayfinding | 5 | 5 | Deep links reload into the same view; focus goes to the page h1 after navigation (fixed in this pass, 0f53e2e) |
+| Party switching | 5 | 5 | Arrow keys switch party on the pills, the screen and focus stay; URL `?pihak=` follows |
+| States | 3 | 5 | Iroha: Torii 429 "Reached the limit of parallel queries" on 2 of 8 Dasbor loads, shown as raw English text in the hero/stat card. Fabric-X BI: "BI tidak memegang saldo transfer" shown as the hero text, as designed |
+| Recovery | 4 | 4 | Not exercised live (both DvPs succeeded); covered on the mock |
+| Slow actions | 3 | 5 | Iroha DvP 45 s (Torii 20 s + pipeline 22 s): the 4-step progress shows where it is, but no time estimate. Fabric-X DvP 4,8 s. TPS dialog: modal, focus on "Batal", Esc cancels (P2-2 fixed); no stress run live |
+| Terms | 4 | 5 | Only the raw Torii 429 message breaks the Indonesian copy |
+| Accessibility | 5 | 5 | Every control reachable by Tab/Shift+Tab; seal disclosure Enter/Esc with focus back; network nodes focusable with a label |
+| Narrow layout | 4 | 4 | Not re-shot live; unchanged from the mock pass |
+| Density vs refs | 4 | 4 | As in the mock pass |
+
+| Id | Screen | Problem | Fix | Owner | Status |
+|---|---|---|---|---|---|
+| P2-1 | Lensa | (above) | Fully sealed column = one chip, verdict badge hidden; `columnSealed()` tested | fe | Fixed |
+| P2-2 | TPS | (above) | Already `showModal()`; focus now on "Batal" after opening, Esc cancels; Playwright checks `:modal` | fe | Fixed |
+| P2-3 | Laporan | (above) | `biVerdict` fake option; table verified with data on zeto, noto, stealth, fabricx | blockhain + fe | Fixed |
+| L2-1 | All screens | After in-app navigation focus fell back to `<body>` | Focus the new page h1; party switch keeps focus on the pill | fe | Fixed (0f53e2e) |
+| L2-2 | Iroha Dasbor | 8–9 s load; a small history limit is slower than a large one | Fixed page of 100 in the adapter | blockhain | Open |
+| L2-3 | Iroha Dasbor | Torii 429 on parallel queries, raw English message | Balance in the same query lane + Indonesian message | blockhain | Open |
+| L2-4 | Fabric-X | "Belum dilaporkan bank" has no live case (BI: 13 reported, 6 clear, 0 sealed) | Unit-tested; re-check when a bank-offline case exists | — | Accepted |
+
 ## Pass 2 (after screens exist)
 
 Re-walk P1–P4 on the running app (mock first, then live). Score each criterion 1–5, with

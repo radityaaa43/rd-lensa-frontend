@@ -138,6 +138,16 @@ export function roleFromParties(party: PartyId, cp: Counterparty | null, issuer:
 - **`x-history-truncated: 1`** header when the adapter's bounded scan hit its cap (§2.3). The
   adapter signals it by returning the array with a `truncated: true` property; the route turns
   that into the header.
+- **No server internals in error bodies** (2026-11-02, user requirement). A 4xx or 5xx body never
+  contains a filesystem path, a kubeconfig/`--kubeconfig` argument, or a `Command failed:` command
+  line. Two layers:
+  1. Each adapter maps a CLI or kubectl failure to a fixed Indonesian text plus the exit code
+     (blockhain).
+  2. One `safeReason(msg)` in `app.ts` scrubs every 4xx/5xx `reason`, and every SSE `error` event,
+     before sending: it removes absolute paths (`/…`) and `--kubeconfig …`, and cuts at
+     `Command failed:` (fe).
+  Test: the fake adapter throws a message containing `/home/x/alibaba.yaml` and
+  `Command failed: kubectl --kubeconfig /p`; the history/network/tx bodies contain neither.
 - **SPA fallback** (path routing, §3.2). In `setNotFoundHandler`: when `webDist` is set, the
   method is GET, the path does not start with `/api/` and has no file extension, reply with
   `index.html`. Everything else keeps the JSON 404 `{ reason: 'Tidak ditemukan' }`. Tests: a deep

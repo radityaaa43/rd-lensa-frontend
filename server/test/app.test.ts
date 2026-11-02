@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, expect, test } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { NotAvailableError, type ModelAdapter } from '../src/adapter.ts';
-import { buildApp } from '../src/app.ts';
+import { buildApp, safeReason } from '../src/app.ts';
 import { rpcUp } from '../src/health.ts';
 import type { FlowRequest, ModelId } from '../src/domain.ts';
 import { fakeAdapter } from './fake-adapter.ts';
@@ -465,4 +465,66 @@ test('deep links get index.html; /api and missing assets keep 404', async () => 
   expect(asset.statusCode).toBe(404);
   expect(asset.json()).toEqual({ reason: 'Tidak ditemukan' });
   expect((await app.inject({ method: 'POST', url: '/besu/zeto/dasbor' })).statusCode).toBe(404);
+});
+
+// ---- no server internals in error bodies (ARCHITECTURE.md §2.2, user requirement) ----
+
+const KUBE = 'Command failed: kubectl --kubeconfig /home/x/alibaba.yaml -n fabricx exec deploy/rdbi-driver -- api history\nerror: forbidden';
+const ENOENT = "ENOENT: no such file or directory, open '/home/x/state/zeto.json'";
+const leaks = (text: string) => ['/home', 'alibaba.yaml', '--kubeconfig', 'Command failed'].filter((s) => text.includes(s));
+
+test('safeReason drops the command line, kubeconfig and absolute paths but keeps a readable reason', () => {
+  expect(safeReason(`Gagal membaca riwayat: ${KUBE}`)).toBe('Gagal membaca riwayat: Perintah ke node gagal');
+  expect(safeReason(KUBE)).toBe('Perintah ke node gagal');
+  expect(safeReason(ENOENT)).toBe("ENOENT: no such file or directory, open '(berkas server)'");
+  expect(safeReason('run --kubeconfig=/etc/k.yaml now')).toBe('run now');
+  expect(safeReason('rpc http://127.0.0.1:31548/rpc putus')).toBe('rpc http://127.0.0.1:31548/rpc putus'); // URLs stay
+  expect(safeReason('Saldo Bank Mandala tidak cukup')).toBe('Saldo Bank Mandala tidak cukup');
+});
+
+test.each([['kubectl', KUBE], ['missing file', ENOENT]])('history, network and balance bodies never leak a %s error', async (_n, m) => {
+  const a = fakeAdapter('fabricx');
+  a.history = async () => { throw new Error(m); };
+  a.network = async () => { throw new Error(m); };
+  a.balanceOf = async () => { throw new Error(m); };
+  const app = make({ fabricx: a });
+  for (const url of ['/api/history?model=fabricx&party=A', '/api/network?model=fabricx', '/api/balance?model=fabricx&party=A']) {
+    const res = await app.inject(url);
+    expect(leaks(res.body), url).toEqual([]);
+    expect(res.body, url).toMatch(/tidak dapat dibaca|Perintah ke node gagal|berkas server/);
+  }
+  expect((await app.inject('/api/history?model=fabricx&party=A')).json().reason).toMatch(/^Riwayat Fabric-X untuk Bank Mandala tidak dapat dibaca: /);
+});
+
+test('health and network detail are scrubbed too', async () => {
+  const a = fakeAdapter('fabricx');
+  a.health = async () => ({ ready: false, detail: ENOENT });
+  a.network = async () => ({ nodes: [{ id: 'n', label: 'Node', kind: 'fsc-node', owner: 'A', status: 'down', detail: KUBE }], links: [] });
+  const app = make({ fabricx: a });
+  expect(leaks((await app.inject('/api/health')).body)).toEqual([]);
+  const net = await app.inject('/api/network?model=fabricx');
+  expect(leaks(net.body)).toEqual([]);
+  expect(net.json().nodes[0].detail).toBe('Perintah ke node gagal');
+});
+
+test('a tx run error event never leaks', async () => {
+  const z = fakeAdapter('zeto');
+  z.run = async () => { throw new Error(`Kirim gagal: ${KUBE}`); };
+  const a = make({ zeto: z });
+  const base = await listen(a);
+  const { runId } = (await post(a, '/api/tx', req)).json();
+  const events = await readSse(base, `/api/tx/${runId}/events`);
+  expect(events).toEqual([{ event: 'error', data: { reason: 'Kirim gagal: Perintah ke node gagal' } }]);
+});
+
+test('stress snapshots (events and GET) never leak firstError internals', async () => {
+  const z = fakeAdapter('zeto', { tps: 50 });
+  z.transferForLoad = async () => { throw new Error(ENOENT); };
+  const a = make({ zeto: z });
+  const base = await listen(a);
+  await post(a, '/api/stress', { models: ['zeto'], count: 3, concurrency: 1, limitS: 120 });
+  const events = await readSse(base, '/api/stress/events');
+  expect(leaks(JSON.stringify(events))).toEqual([]);
+  const snap = await stressState(a);
+  expect(snap.models.zeto.firstError).toBe("ENOENT: no such file or directory, open '(berkas server)'");
 });

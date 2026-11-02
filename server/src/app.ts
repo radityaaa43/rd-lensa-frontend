@@ -56,9 +56,30 @@ const partyQuery = {
 const json =(v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x));
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+// No server internals in what a client receives (ARCHITECTURE.md §2.2): cut a CLI command line, drop `--kubeconfig …`,
+// replace absolute paths. URLs survive: their '/' never follows whitespace, a quote, '(', '=', ':' or ','.
+const CMD = 'Command failed:';
+const ABS_PATH = /(?<=^|[\s'"(=:,])\/(?:[\w.@+-]+\/)*[\w.@+-]+/g;
+export function safeReason(m: string): string {
+  let s = m;
+  const at = s.indexOf(CMD);
+  if (at >= 0) {
+    const before = s.slice(0, at).trim();
+    s = before === '' ? 'Perintah ke node gagal' : before.endsWith(':') ? `${before} Perintah ke node gagal` : before;
+  }
+  return s.replace(/--kubeconfig(?:=|\s+)\S+\s*/g, '').replace(ABS_PATH, '(berkas server)').replace(/\s{2,}/g, ' ').trim();
+}
+// every error-ish text field of a JSON body or SSE event, at any depth
+const SCRUBBED = new Set(['reason', 'error', 'detail', 'firstError']);
+function scrub(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(scrub);
+  if (v === null || typeof v !== 'object') return v;
+  return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, typeof x === 'string' && SCRUBBED.has(k) ? safeReason(x) : scrub(x)]));
+}
+
 interface Sse { send(event: string, data: unknown): void; end(): void }
 
-export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: Probe } = {}): FastifyInstance {
+export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: Probe; loadFailures?: Partial<Record<ModelId, string>> } = {}): FastifyInstance {
   const app = Fastify({
     logger: { level: process.env.VITEST ? 'silent' : 'error' }, // real errors reach the console; tests stay quiet
     forceCloseConnections: true, // shutdown must not wait on keep-alive / SSE sockets
@@ -72,6 +93,8 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
   let lastStress: StressRun | null = null;
   const streams = new Set<ServerResponse>();
   app.addHook('onClose', async () => { for (const r of streams) r.end(); });
+  // one place for every JSON reply (4xx, 5xx, and 200 bodies that carry an error/detail text)
+  app.addHook('preSerialization', async (_req, _reply, payload) => scrub(payload));
 
   // SPA fallback for History-API deep links: only GET, never /api/, never a path with an extension (a missing asset stays 404)
   app.setNotFoundHandler((req, reply) => {
@@ -106,7 +129,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     raw.on('close', cleanup);
     raw.on('error', () => { /* write to a gone client; close handler cleans up */ });
     return {
-      send: (event, data) => write(`event: ${event}\ndata: ${json(data)}\n\n`),
+      send: (event, data) => write(`event: ${event}\ndata: ${json(scrub(data))}\n\n`), // SSE bypasses preSerialization
       end: () => { clearInterval(beat); try { raw.end(); } catch { /* already closed */ } },
     };
   }
@@ -131,7 +154,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       probe().catch(() => ({ besu: false, paladin: [false, false, false, false] })),
       ...MODELS.map((m) => {
         const a = adapters[m];
-        if (!a) return { ready: false, detail: NA };
+        if (!a) return { ready: false, detail: opts.loadFailures?.[m] ?? NA }; // a model whose load() threw says so
         return withDeadline(a.health(), HEALTH_POLL_MS, 'Cek kesiapan').catch((e) => ({ ready: false, detail: msg(e) }));
       }),
     ]);
