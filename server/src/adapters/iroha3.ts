@@ -33,14 +33,14 @@ const INTENT_PY = fileURLToPath(new URL('./iroha3-intent.py', import.meta.url));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-// Torii caps parallel queries per node (HTTP 429 "Reached the limit of parallel queries", default config); a read that
-// hits the cap is retried. Writes are never retried: a resubmit would be a second transaction.
+// Torii caps parallel requests per node (HTTP 429, default config). A query that hits the cap is retried, and so is a
+// submit Torii answered 429: it refused admission, so nothing was queued. Any other failed write is never retried.
 export const irohaCli = (dir: string): Cli => {
   const once = runCli(dir);
   return async (config, args, stdin) => {
     for (let attempt = 1; ; attempt++) {
       try { return await once(config, args, stdin); } catch (e) {
-        if (attempt >= 10 || !/query failed; HTTP 429/.test(errMsg(e))) throw e;
+        if (attempt >= 10 || !/query failed; HTTP 429|Unexpected transaction response; status: 429/.test(errMsg(e))) throw e;
         await sleep(100 * attempt);
       }
     }
@@ -105,11 +105,17 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli) {
   }
   const render = async (signer: PartyId, args: string[]) => (JSON.parse(await cli(CONFIG[signer], ['-o', ...args])) as string[])[0]!;
 
-  // A rejected tx stores its reason as a Norito-encoded string; show its longest readable run.
+  // A rejected tx stores its reason Norito-encoded: some carry a message (shown), others only enum codes the CLI cannot name.
   async function rejection(hash: string): Promise<string> {
     const err = (await json<TxGet>(op('BI'), ['--machine', 'ledger', 'transaction', 'get', '--hash', hash]).catch(() => null))?.result?.Err;
     const text = err ? (Buffer.from(err, 'base64').toString('latin1').match(/[ -~]{12,}/g) ?? []).sort((a, b) => b.length - a.length)[0] : undefined;
-    return text ?? 'alasan tidak terbaca';
+    return text ?? `alasan hanya tersimpan sebagai kode Norito (tx ${hash})`;
+  }
+
+  // The chain rejects an overdraft too, but only with an unnamed code; check first so the user sees why.
+  async function ensureBalance(party: PartyId, asset: 'RD' | 'DFABI', need: bigint) {
+    const have = await balanceOf(party, asset);
+    if (have < need) throw new Error(`Saldo ${asset} ${PARTIES[party].name} tidak cukup: ${have} < ${need}`);
   }
 
   // Polls the typed pipeline status; returns when the tx was first seen and when it was applied.
@@ -144,6 +150,8 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli) {
     const dvp = FLOWS[req.flow].dvp;
     const sid = dvp ? `dvp_${Date.now()}_${randomBytes(3).toString('hex')}` : undefined;
     const p = plan(req, amount, sid);
+    if (dvp) await Promise.all([ensureBalance(req.from, 'DFABI', amount), ensureBalance(req.to, 'RD', amount * PRICE_PER_UNIT)]);
+    else if (!FLOWS[req.flow].issuer) await ensureBalance(req.from, FLOWS[req.flow].asset, amount);
     const t0 = Date.now();
     let hash: string, block: number;
     if (dvp) {
@@ -155,7 +163,10 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli) {
       emit(0, Date.now() - t0);
       // `app settlement dvp` has no --no-wait: it returns once applied, so lane and block share one boundary.
       const t1 = Date.now();
-      hash = (await json<{ hash: string }>(CONFIG[p.signer], [...SUBMIT, ...p.args])).hash;
+      hash = (await json<{ hash: string }>(CONFIG[p.signer], [...SUBMIT, ...p.args]).catch(async (e) => {
+        const rejected = /transaction ([0-9a-f]{64}) reached .*`Rejected`/.exec(errMsg(e));
+        throw rejected ? new Error(`Transaksi Rejected: ${await rejection(rejected[1]!)}`) : e;
+      })).hash;
       const ms = Date.now() - t1;
       emit(1, ms);
       emit(2, ms);

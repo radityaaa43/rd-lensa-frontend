@@ -25,7 +25,7 @@ const state: Iroha3State = {
 
 // A fake CLI: records (config, args, stdin) of every call; `-o` renders the args as the instruction (the DvP fixture for
 // a settlement), and the ledger serves back whatever was rendered last, signed by `authority`.
-function fake(opts: { status?: string; authority?: string; stored?: string } = {}) {
+function fake(opts: { status?: string; authority?: string; stored?: string; balance?: string } = {}) {
   const calls: { config: string; args: string[]; stdin?: string }[] = [];
   let rendered = '';
   const cli: Cli = async (config, args, stdin) => {
@@ -36,6 +36,7 @@ function fake(opts: { status?: string; authority?: string; stored?: string } = {
       return JSON.stringify({ block_hash: 'hash:00', result: { Err: Buffer.from('\u0001insufficient asset quantity').toString('base64') },
         entrypoint: { External: { payload: { authority: opts.authority ?? 'acct-A', instructions: { Instructions: [opts.stored ?? rendered] } } } } });
     }
+    if (args.includes('asset') && args.includes('get')) return JSON.stringify({ value: opts.balance ?? '10000000000' });
     if (args.includes('query')) {
       return JSON.stringify({ content: { details: { value: { delivery: { source: 'DFABI-ID#acct-A', destination: 'DFABI-ID#acct-B', quantity: '2' } } } } });
     }
@@ -87,6 +88,14 @@ describe('iroha3 run', () => {
     expect(seen.map((s) => s.label)).toEqual(a.stepLabels);
     expect(seen.map((s) => s.index)).toEqual([0, 1, 2, 3]);
     expect(r).toMatchObject({ txHash: H, block: 7 });
+  });
+
+  it('an overdraft is refused before anything is submitted, with the balance in the message', async () => {
+    const f = fake({ balance: '5' });
+    const a = createIroha3Adapter(state, f.cli);
+    await expect(a.run(req('dvp', 'A', 'B', '1'), 1n, () => {})).rejects.toThrow('Saldo RD Bank Nusantara tidak cukup: 5 < 1000000');
+    await expect(a.run(req('rd-transfer', 'A', 'B', '6'), 6n, () => {})).rejects.toThrow('Saldo RD Bank Mandala tidak cukup');
+    expect(f.submits()).toEqual([]);
   });
 
   it('a rejected tx surfaces the stored reason', async () => {
