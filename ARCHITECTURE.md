@@ -184,7 +184,7 @@ retired. The live demo txs (blocks 121, 127) proved that `/v1/explorer/*` serves
 - **Network.** 4 `iroha-peer` nodes. Status: `GET /health` with `Accept: text/plain`.
   `detail` = `blok {n}` from `/status`. Full mesh.
 
-**Fabric-X** (`fabricx.ts`), **BLOCKED on a chain-interface decision**
+**Fabric-X** (`fabricx.ts`). The driver command `api history` was approved by the user and reviewed by lead
 - **Fact** (blockhain): `rdbi-driver api` has no listing command. The library has a per-node
   `acceptedTransactionHistory` view (filters SenderWallet, RecipientWallet, From, To,
   ActionTypes, Statuses, IDs) that the driver does not expose; it passes only IDs and drops the
@@ -201,8 +201,11 @@ retired. The live demo txs (blocks 121, 127) proved that `/v1/explorer/*` serves
   the table and column names first; they differ from `sc_db` on committer-db-0.
 - **`at`** = the record `timestamp` (node submission time, labelled as such in a code comment).
   Sealed items have `at: null`.
-- **Not blocked: network.** One `kubectl get pods -o json -n fabricx`. Kinds: `fsc-node`
-  (rdbi-bi/bank*), `fabricx-committer` (committer stack), `fabricx-orderer` (fca-orderer-*).
+- **Network** (built). One `kubectl get pods -o json -n fabricx` gives 9 nodes: `fsc-node`
+  rdbi-bi/bank2/3/4; one shared `fabricx-committer` (6 pods); `fabricx-orderer` orderer-1..4. Each
+  orderer groups the assembler, batcher, consenter and router pods of org N, and is up only
+  when all 4 are Ready. `fca-orderer-*` are Fabric CAs, not orderers, so they are not listed,
+  and neither are the block explorer and rdbi-driver.
   Owner: rdbi-bi = BI, rdbi-bank2/3/4 = A/B/C, shared stack = null. Status = Ready. A
   container-level view is not needed in v1.
 

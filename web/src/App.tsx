@@ -1,70 +1,101 @@
 import { useEffect, useState } from 'react';
-import { getHealth, getMeta, type Health, type Meta } from './api.ts';
-import { DemoView } from './demo/DemoView.tsx';
+import type { StressSnapshot } from '../../server/src/stress.ts';
+import { PLATFORM_OF } from '../../server/src/domain.ts';
+import { getHealth, getMeta, getNetwork, getStress, stopStress, type Health, type Meta } from './api.ts';
+import { Header } from './app/Header.tsx';
+import { Sidebar } from './app/Sidebar.tsx';
+import type { Route } from './app/route.ts';
+import { usePoll } from './app/usePoll.ts';
+import { linkTo, useRoute } from './app/useRoute.ts';
+import { Dashboard } from './screens/Dashboard.tsx';
+import { History } from './screens/History.tsx';
+import { Landing } from './screens/Landing.tsx';
 import { StressView } from './stress/StressView.tsx';
 
-const DOWN = '#C24A4A';
-const dot = (up: boolean | undefined) =>
-  up === undefined ? { background: 'var(--faint)', animation: 'none' } : up ? undefined : { background: DOWN, animation: 'none' };
+type ModelRoute = Extract<Route, { page: 'model' }>;
 
-const status = (name: string, up: boolean | undefined) =>
-  `${name}: ${up === undefined ? 'memeriksa' : up ? 'terhubung' : 'tidak terjangkau'}`;
+const SCREEN_TITLE: Record<ModelRoute['screen'], string> = {
+  dasbor: 'Dasbor', riwayat: 'Riwayat transaksi', transfer: 'Transfer', dvp: 'DvP', lensa: 'Lensa', laporan: 'Laporan ke BI', tps: 'Stress test TPS',
+};
 
-function useHealth(): Health | null | undefined {
-  // undefined = not asked yet, null = server unreachable
-  const [h, setH] = useState<Health | null | undefined>();
-  useEffect(() => {
-    let alive = true, inFlight = false;
-    const poll = async () => {
-      if (inFlight) return; // an older reply must never overwrite a newer one
-      inFlight = true;
-      const r = await getHealth();
-      inFlight = false;
-      if (alive) setH(r.ok ? r.body : null);
-    };
-    poll();
-    const t = setInterval(poll, 5000);
-    return () => { alive = false; clearInterval(t); };
-  }, []);
-  return h;
+// muted one-line subtitle under every page heading (Ref A "You can find all the information…"); {pihak} = viewing party
+const SCREEN_SUB: Record<ModelRoute['screen'], string> = {
+  dasbor: 'Saldo, aktivitas, dan node sebagaimana terbaca oleh {pihak}.',
+  riwayat: 'Transaksi yang teramati oleh node {pihak}. Yang tidak terbaca ditandai tersegel.',
+  transfer: 'Dikirim oleh {pihak}.',
+  dvp: 'DFABI ditukar RD secara atomik.',
+  lensa: 'Satu transaksi dari sisi BI dan tiga bank.',
+  laporan: 'Laporan bank ke BI, dicocokkan dengan chain.',
+  tps: 'Beban transfer antarbank pada jaringan nyata.',
+};
+
+function stressProgress(s: StressSnapshot) {
+  const done = Object.values(s.models).reduce((n, m) => n + (m ? m.summary.ok + m.summary.failed : 0), 0);
+  return `${done}/${s.config.count * s.config.models.length}`;
+}
+
+// ARCHITECTURE.md §3.3: one App-level poll each for health (5 s), network of the current model (10 s), stress (5 s while running)
+function Shell({ meta, route, stress, reloadStress }: { meta: Meta; route: ModelRoute; stress: StressSnapshot | null | undefined; reloadStress(): void }) {
+  const network = usePoll(`net|${route.model}`, () => getNetwork(route.model), 10_000);
+  const party = meta.parties[route.party].name;
+  const title = route.screen === 'dasbor' ? `Dasbor · ${party}` : SCREEN_TITLE[route.screen];
+
+  return (
+    <div className="app">
+      <Sidebar meta={meta} route={route} />
+      <div>
+        <Header meta={meta} route={route} network={network.data} />
+        {stress?.state === 'running' && (
+          <div className="banner stress" role="status">
+            <span>Stress test berjalan · {stressProgress(stress)} transaksi</span>
+            <a {...linkTo({ ...route, screen: 'tps', tx: undefined })}>Lihat</a>
+            <button type="button" onClick={() => void stopStress().then(reloadStress)}>Hentikan</button>
+          </div>
+        )}
+        {PLATFORM_OF[route.model] === 'iroha3' && (
+          <details className="banner iroha">
+            <summary>Iroha 3 tanpa privasi: keempat pihak melihat semua transaksi dalam bentuk terbuka. Selengkapnya</summary>
+            <p>Torii hanya membatasi akun yang boleh membaca. Itu kontrol akses, bukan kerahasiaan.</p>
+          </details>
+        )}
+        <p className="vh" aria-live="polite">Menampilkan data sebagai {party}</p>
+        <main className="main" id="konten">
+          <div className="title"><h1>{title}</h1><p>{SCREEN_SUB[route.screen].replace('{pihak}', party)}</p></div>
+          {route.screen === 'dasbor' ? <Dashboard meta={meta} route={route} network={network} />
+            : route.screen === 'riwayat' ? <History key={`${route.model}|${route.party}`} meta={meta} route={route} />
+            : route.screen === 'tps' ? <StressView meta={meta} hidden={false} />
+            : <div className="placeholder">Layar ini dibangun di langkah berikutnya.</div>}
+        </main>
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
+  const route = useRoute();
   const [meta, setMeta] = useState<Meta | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [view, setView] = useState<'demo' | 'tps'>('demo');
-  const health = useHealth();
   const load = () => getMeta().then((r) => (r.ok ? (setErr(null), setMeta(r.body)) : setErr(r.reason)));
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, []);
 
-  const besu = health === undefined ? undefined : health?.nodes.besu === true;
-  const paladin = health === undefined ? undefined : health !== null && health.nodes.paladin.length === 4 && health.nodes.paladin.every(Boolean);
+  const health = usePoll<Health>('health', getHealth, 5_000);
+  // the stress poll's interval depends on its own last answer, so "running" is kept as state
+  const [stressRunning, setStressRunning] = useState(false);
+  const stress = usePoll<StressSnapshot | null>('stress', getStress, stressRunning ? 5_000 : undefined);
+  useEffect(() => { setStressRunning(stress.data?.state === 'running'); }, [stress.data]);
+
   return (
     <>
-      <header>
-        <div className="brand">
-          <svg className="i" style={{ width: 18, height: 18 }} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
-          Lensa Privasi
-        </div>
-        <nav>
-          <button aria-current={view === 'demo' ? 'page' : undefined} onClick={() => setView('demo')}>Demo transaksi</button>
-          <button aria-current={view === 'tps' ? 'page' : undefined} onClick={() => setView('tps')}>Stress test TPS</button>
-        </nav>
-        <div className="net">
-          <span title={status('Besu', besu)} aria-label={status('Besu', besu)}><i className="pulse" aria-hidden="true" style={dot(besu)} />Besu · 4 validator</span>
-          <span title={status('Paladin', paladin)} aria-label={status('Paladin', paladin)}><i className="pulse" aria-hidden="true" style={dot(paladin)} />Paladin · 4 node (BI + 3 bank)</span>
-        </div>
-      </header>
-      {meta ? (
-        <>
-          <DemoView meta={meta} hidden={view !== 'demo'} />
-          <StressView meta={meta} hidden={view !== 'tps'} />
-        </>
-      ) : (
+      <a className="skip" href="#konten">Lewati ke konten</a>
+      {!meta ? (
         <div className="empty">
           <h3>{err ? 'Tidak dapat memuat data' : 'Memuat…'}</h3>
-          {err && <><p>{err}</p><button className="ghost" onClick={load}>Coba lagi</button></>}
+          {err && <><p>{err}</p><button className="ghost" onClick={() => void load()}>Coba lagi</button></>}
         </div>
+      ) : route.page === 'landing' ? (
+        <Landing health={health.data} />
+      ) : (
+        <Shell meta={meta} route={route} stress={stress.data} reloadStress={stress.reload} />
       )}
     </>
   );

@@ -160,6 +160,7 @@ State lives in the URL (History API, no router dependency): `/besu/zeto/dasbor?p
 
 Rules:
 - The seal chip has a **fixed width per field type** (amount 112px, party 96px, flow 120px), so its width never leaks the length of the hidden value.
+- **Whole row sealed.** When every content field of a transaction is null (flow, asset, amount, RD leg, both counterparty sides), the row shows ONE chip across the content columns: "Transaksi tersegel · ada di chain, tidak terbaca oleh {pihak}", same hatch, lock and "Kenapa tersegel?" disclosure. Time and block stay visible. The text is the same for every row, so it leaks nothing. Per-field chips are only for a partly readable row (`partial`, or one counterparty side).
 - A sealed field is never computed, guessed, or copied from another party's lens (contract v1.1).
 - `Counterparty` with one side `null` shows that side sealed and the other side readable: `Bank Mandala → [Tersegel]`.
 - `flow: null` shows a sealed flow chip with a neutral transaction icon. `asset: null` shows a sealed asset chip.
@@ -258,7 +259,7 @@ Switching party is the demo's core gesture, so all four parties stay visible: a 
 
 ### 7.4 Stat card  · Ref B (UX M1, M2)
 
-`--r-card`, platform tint background, black icon tile, figure in `--t-h1` Poppins, label below in `--t-small`. No sparkline: none of the three values has a time series. Dasbor row, three cards:
+`--r-card`, platform tint background, black icon tile left, figure in Poppins 600 with the label under it. No sparkline: none of the three values has a time series. ≥1280 the three cards stack beside the RD hero; 768–1279 they sit in a row under it. Long figures never get abbreviated (the figure is proof): font size steps down by character count (≤14 / ≤18 / ≤23 / ≤28 / longer), on the hero too. Target: one line at ≥1280, at most two at 390. Dasbor, three cards:
 
 | Card | Figure | Source |
 |---|---|---|
@@ -285,6 +286,8 @@ Desktop: semantic `<table>` with caption "Riwayat transaksi sebagai {pihak}". Co
 | Kaki RD | DvP only: `rdAmount` | `null` on DvP → seal; non-DvP → `—` |
 | Status | verdict badge (§6.3) | — |
 | Waktu | `at` formatted `id-ID`, block in mono below | `at` null → "Tanpa cap waktu" in `--muted` (Fabric-X), never sealed (absence of a timestamp is not redaction) |
+
+A row with nothing readable collapses its five content columns into one row-wide seal chip (§6.1); icon link and Waktu stay.
 
 Row hover: `--canvas` background. Selected row (opened in the lens): `--aqua-tint` pill row, `--r-tile` (Ref B highlighted Sell Order row). Rows are `<tr>` with a real `<button>` in the first cell for "Buka di lensa".
 

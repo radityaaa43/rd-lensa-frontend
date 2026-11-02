@@ -1,4 +1,4 @@
-import type { Capability } from '../../server/src/adapter.ts';
+import type { Capability, HistoryItem, Network } from '../../server/src/adapter.ts';
 import type { FlowId, FlowRequest, ModelId, PartyId } from '../../server/src/domain.ts';
 import type { StressConfig, StressSnapshot } from '../../server/src/stress.ts';
 import type { TxResult } from './demo/demoState.ts';
@@ -13,16 +13,18 @@ export interface Health {
   nodes: { besu: boolean; paladin: boolean[] };
 }
 export type Capacity = Partial<Record<ModelId, number>>;
-export type Reply<T> = { ok: true; body: T } | { ok: false; reason: string };
+export type Balance = Record<'RD' | 'DFABI', { amount: string } | { error: string }>;
+// status: the HTTP status of a failed reply (501 = not available on this platform); absent when the server was unreachable
+export type Reply<T> = { ok: true; body: T } | { ok: false; reason: string; status?: number };
 
 const OFFLINE = 'Tidak dapat terhubung ke server';
 
-async function call<T>(path: string, init?: RequestInit): Promise<Reply<T>> {
+async function call<T>(path: string, init?: RequestInit, read: (body: unknown, res: Response) => T = (b) => b as T): Promise<Reply<T>> {
   try {
     const res = await fetch(path, init);
     const body = await res.json().catch(() => null);
-    if (res.ok) return { ok: true, body: body as T };
-    return { ok: false, reason: (body as { reason?: string } | null)?.reason ?? `Server menjawab ${res.status}` };
+    if (res.ok) return { ok: true, body: read(body, res) };
+    return { ok: false, status: res.status, reason: (body as { reason?: string } | null)?.reason ?? `Server menjawab ${res.status}` };
   } catch {
     return { ok: false, reason: OFFLINE };
   }
@@ -34,6 +36,12 @@ const post = <T,>(path: string, body?: unknown) =>
 export const getMeta = () => call<Meta>('/api/meta');
 export const getHealth = () => call<Health>('/api/health');
 export const getCapacity = () => call<Capacity>('/api/preflight-capacity');
+export interface HistoryPage { items: HistoryItem[]; truncated: boolean }
+export const getHistory = (model: ModelId, party: PartyId, limit: number) =>
+  call<HistoryPage>(`/api/history?model=${model}&party=${party}&limit=${limit}`, undefined,
+    (b, res) => ({ items: b as HistoryItem[], truncated: res.headers.get('x-history-truncated') === '1' }));
+export const getNetwork = (model: ModelId) => call<Network>(`/api/network?model=${model}`);
+export const getBalance = (model: ModelId, party: PartyId) => call<Balance>(`/api/balance?model=${model}&party=${party}`);
 export const postTx = (req: FlowRequest) => post<{ runId: string }>('/api/tx', req);
 export const getStress = () => call<StressSnapshot | null>('/api/stress'); // body is null (204) before the first run
 export const postStress = (cfg: StressConfig) => post<StressSnapshot>('/api/stress', cfg);

@@ -1,4 +1,4 @@
-import type { FlowId, ModelId, PartyId } from '../../../server/src/domain.ts';
+import type { FlowId, ModelId, PartyId, PlatformId } from '../../../server/src/domain.ts';
 
 // Static Indonesian copy from the approved prototype. Party names come from /api/meta, never from here.
 export const GROUPS: [string, string, FlowId[]][] = [
@@ -39,7 +39,29 @@ export const MODEL_COPY: Record<ModelId, { tag: string; story: string }> = {
   },
 };
 
-export const nodeLabel = (model: ModelId, node: number) => (model === 'stealth' ? 'Akun Besu' : model === 'fabricx' ? `Node Fabric-X ${node}` : model === 'iroha3' ? `Validator Iroha ${node}` : `Paladin node ${node}`);
+// Landing tiles (DESIGN.md §7.1, UX H3): the model's claim of who reads a transaction's content; Lensa is the proof.
+export const PLATFORM_COPY: Record<PlatformId, { tagline: string; sees: [boolean, boolean, boolean]; note?: string }> = {
+  besu: { tagline: 'Tiga model privasi: Zeto, Noto, Stealth', sees: [true, true, false] },
+  fabricx: { tagline: 'Bukti ZK dan pseudonim Idemix, endorsement 3 dari 4', sees: [true, true, false] },
+  iroha3: { tagline: 'Lane publik, tanpa privasi', sees: [true, true, true], note: 'tanpa privasi' },
+};
+export const SEES_LABELS = ['BI', 'Pihak transaksi', 'Bank lain'] as const;
+
+// "Kenapa tersegel?" (DESIGN.md §6.1, UX M3); {pihak} = viewing party's name
+export const SEAL_WHY: Record<ModelId, string> = {
+  zeto: 'Chain hanya menyimpan commitment dan bukti ZK. Node {pihak} tidak memegang kunci untuk membukanya.',
+  noto: 'Bank di luar transaksi hanya melihat hash state. Isinya hanya dibagikan ke pihak transaksi dan notary BI.',
+  stealth: 'Alamat penerima sekali pakai dan identitas pengirim terenkripsi. Tanpa view key, {pihak} tidak bisa memetakannya.',
+  fabricx: 'Ledger hanya menyimpan commitment Pedersen dan bukti ZK. {pihak} tidak memegang kunci untuk membukanya.',
+  iroha3: 'Iroha 3 tidak merahasiakan data. Nilai ini kosong karena node {pihak} tidak mengembalikannya.',
+};
+
+// Dasbor stat card "Model privasi" (DESIGN.md §7.4)
+export const MODEL_STYLE: Record<ModelId, string> = {
+  zeto: 'Bukti ZK', noto: 'Notary BI', stealth: 'Alamat sekali pakai', fabricx: 'Bukti ZK + Idemix', iroha3: 'Tanpa privasi',
+};
+
+export const nodeLabel =(model: ModelId, node: number) => (model === 'stealth' ? 'Akun Besu' : model === 'fabricx' ? `Node Fabric-X ${node}` : model === 'iroha3' ? `Validator Iroha ${node}` : `Paladin node ${node}`);
 export const roleHelp = (issuer: boolean, dvp: boolean) =>
   issuer ? 'Penerbitan hanya dijalankan BI.' : dvp ? 'Pilih bank penjual DFABI.' : 'Pilih bank pengirim.';
 
