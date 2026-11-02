@@ -2,11 +2,13 @@ import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Capability, Counterparty, FlowResult, LensView, ModelAdapter, StepEvent } from '../adapter.ts';
-import { CANCELLED, LOAD_AMOUNT, NotAvailableError } from '../adapter.ts';
-import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
+import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, StepEvent } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
+import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
+import { loadAuth, partyKey, signedHeaders, type Auth } from './iroha3-auth.ts';
+import { decodeBox, type Decoded, type NoritoCtx } from './iroha3-norito.ts';
 
 // Iroha 3 (071e281e), public lane, no APS yet: RD and DFABI are plain assets, DvP is the native DvpIsi.
 // Every call goes through the official `iroha` CLI in state/iroha3/bin with one party's client config; each party talks
@@ -76,7 +78,15 @@ interface TxGet {
 interface Movement { source: string; destination: string; quantity: string }
 interface Ctx { sid?: string }
 
-export function createIroha3Adapter(s: Iroha3State, cli: Cli) {
+// What history() needs on top of the CLI: each party's operator key (signs the Torii account reads) and the decoder context.
+// `init` runs on the first history() call, not at startup: a broken op toml must not take the whole server down.
+export interface ReadDeps { init: () => Promise<{ auth: Record<PartyId, Auth>; ctx: NoritoCtx }>; fetch?: typeof fetch }
+interface AccountRow { authority: string; entrypoint_hash: string; result_ok: boolean; timestamp_ms: number }
+// ponytail: page cap per account list, add a cursor-based index if real volume needs it
+const SCAN_PAGES_MAX = 3;
+const DECODE_BATCH = 5; // `transaction get` CLI spawns in flight
+
+export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
   const acct = s.accounts;
   const partyOf = new Map(Object.entries(acct).map(([p, id]) => [id, p as PartyId]));
   const json = async <T>(config: string, args: string[], stdin?: string) => JSON.parse(await cli(config, args, stdin)) as T;
@@ -219,6 +229,131 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli) {
     return { party, role, verdict: 'clear', amount, counterparty, onChain, method };
   }
 
+  // History: every read goes to the party's OWN Torii, signed as its operator account. Iroha 3 is transparent (each
+  // validator holds the plaintext), so the party reads all four accounts' transactions from its own node; the comment in
+  // lens() says the same. The /v1/explorer/* routes are not used: they list genesis only (queue_plan_synced txs are merged
+  // outside the block body they scan, observed on the live cluster 2026-11-02).
+  // Built once and cached; a failed build is not cached (the next call retries) and surfaces as a normal Error (route: 502).
+  let ready: Promise<{ auth: Record<PartyId, Auth>; ctx: NoritoCtx }> | undefined;
+  const deps = () => (ready ??= (read ? read.init() : Promise.reject(new Error('tidak dikonfigurasi'))).catch((e) => {
+    ready = undefined;
+    throw new Error(`Kunci operator Iroha 3 tidak dapat dimuat: ${errMsg(e)}`);
+  }));
+  const http = read?.fetch ?? fetch;
+  async function toriiGet<T>(party: PartyId, path: string, query: URLSearchParams): Promise<T> {
+    const { auth } = await deps();
+    for (let attempt = 1; ; attempt++) {
+      const url = new URL(`${path}?${query}`, s.torii[party]);
+      const res = await http(url, { headers: { Accept: 'application/json', ...signedHeaders(auth[party], 'GET', path, query) }, signal: AbortSignal.timeout(10_000) });
+      if (res.status === 429 && attempt < 10) { // one account query at a time per Torii (query_capacity_exceeded): wait what it asks
+        const w = Number(((await res.json().catch(() => null)) as { details?: { retry_after_seconds?: number } } | null)?.details?.retry_after_seconds);
+        await sleep(Math.max(100 * attempt, (Number.isFinite(w) ? Math.min(w, 5) : 1) * 1000)); // the node's hint, capped; 1 s when it gives none
+        continue;
+      }
+      if (!res.ok) throw new Error(`Torii ${PARTIES[party].name} menjawab HTTP ${res.status}: ${(await res.text()).slice(0, 120)}`);
+      return (await res.json()) as T;
+    }
+  }
+
+  // Newest-first list of one account's transactions; `cut` = the page cap stopped the list before its end.
+  // A page shorter than `limit` is the end of the list: the response has no pagination field (`total` only repeats the page
+  // size, also with count_mode=exact, checked live), but Torii never lowers a limit silently, it rejects one above the
+  // node's maximum with HTTP 400 (routing.rs:4541-4552, 500 on this cluster), which toriiGet throws. offset + limit must
+  // stay within the node's 500-row fetch budget: SCAN_PAGES_MAX * page <= 300.
+  async function accountRows(party: PartyId, account: string, page: number): Promise<{ rows: AccountRow[]; cut: boolean }> {
+    const rows: AccountRow[] = [];
+    for (let n = 0; n < SCAN_PAGES_MAX; n++) {
+      const { items } = await toriiGet<{ items: AccountRow[] }>(party, `/v1/accounts/${encodeURIComponent(account)}/transactions`,
+        new URLSearchParams({ limit: String(page), offset: String(n * page) }));
+      rows.push(...items);
+      if (items.length < page) return { rows, cut: false };
+    }
+    return { rows, cut: true };
+  }
+
+  // A Torii answers one account query at a time (HTTP 429 query_capacity_exceeded otherwise): reads of one party queue up.
+  const lanes = new Map<PartyId, Promise<unknown>>();
+  function inLane<T>(party: PartyId, fn: () => Promise<T>): Promise<T> {
+    const run = (lanes.get(party) ?? Promise.resolve()).catch(() => {}).then(fn);
+    lanes.set(party, run);
+    return run;
+  }
+
+  // A tx's content never changes, so its decode is cached; per party, because each party reads on its own node.
+  const decoded = new Map<string, Promise<Decoded | null>>();
+  function decodeTx(party: PartyId, hash: string): Promise<Decoded | null> {
+    const key = `${party}|${hash}`;
+    let p = decoded.get(key);
+    if (!p) {
+      p = (async () => {
+        if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error(`Hash transaksi tidak valid: ${hash.slice(0, 80)}`); // it goes to the CLI as an argument
+        const { ctx } = await deps();
+        const tx = await json<TxGet>(op(party), ['--machine', 'ledger', 'transaction', 'get', '--hash', hash]);
+        const found = tx.entrypoint.External.payload.instructions.Instructions.flatMap((box) => {
+          try { return decodeBox(box, ctx) ?? []; } catch (e) { throw new Error(`Transaksi ${hash}: ${errMsg(e)}`); }
+        });
+        if (found.length > 1) throw new Error(`Transaksi ${hash} memuat lebih dari satu perpindahan RD/DFABI`);
+        return found[0] ?? null;
+      })();
+      decoded.set(key, p);
+      p.catch(() => decoded.delete(key)); // a failed read is retried next time
+    }
+    return p;
+  }
+
+  function itemOf(party: PartyId, row: AccountRow, d: Decoded): HistoryItem {
+    const base = { id: row.entrypoint_hash, at: new Date(row.timestamp_ms).toISOString(), block: null, verdict: 'clear' as const }; // block: the account route does not carry it
+    if (d.kind === 'dvp') {
+      const counterparty = { from: d.delivery.from, to: d.delivery.to };
+      return { ...base, flow: 'dvp', asset: 'DFABI', role: roleFromParties(party, counterparty, false), amount: d.delivery.quantity, rdAmount: d.payment.quantity, counterparty };
+    }
+    const issue = d.kind === 'mint';
+    const counterparty = issue ? { from: partyOf.get(row.authority) ?? null, to: d.to } : { from: d.from, to: d.to };
+    const flow = `${d.asset === 'RD' ? 'rd' : 'dfabi'}-${issue ? 'issue' : 'transfer'}` as FlowId;
+    return { ...base, flow, asset: d.asset, role: roleFromParties(party, counterparty, issue), amount: d.quantity, rdAmount: null, counterparty };
+  }
+
+  async function history(party: PartyId, limit: number): Promise<HistoryItem[] & { truncated?: true }> {
+    if (!Number.isInteger(limit) || limit < 1) throw new Error('limit harus bilangan bulat >= 1');
+    const want = Math.min(limit, HISTORY_MAX);
+    // Rows per request: most rows of an account are RD/DFABI movements, the rest (consent grants…) are skipped after decoding.
+    const page = Math.min(100, Math.max(10, want * 3));
+    // Lists and decodes both go through the party's operator account on its Torii, so they run in its lane, one after another.
+    return inLane(party, async () => {
+      const lists: Awaited<ReturnType<typeof accountRows>>[] = [];
+      for (const p of Object.keys(acct) as PartyId[]) lists.push(await accountRows(party, acct[p], page));
+      const byHash = new Map<string, AccountRow>();
+      for (const { rows } of lists) for (const r of rows) byHash.set(r.entrypoint_hash, r);
+      // Rows older than the newest oldest-row of a cut list may be missing others from that list: stop there and say so.
+      const boundary = Math.max(0, ...lists.filter((l) => l.cut).map((l) => l.rows.at(-1)!.timestamp_ms));
+      // A rejected tx (result_ok false) moved nothing, so it is not an RD/DFABI movement and is not listed (ARCHITECTURE.md §2.3 mapping rule).
+      const sorted = [...byHash.values()].filter((r) => r.result_ok && r.timestamp_ms >= boundary).sort((a, b) => b.timestamp_ms - a.timestamp_ms);
+      const items: HistoryItem[] = [];
+      for (let i = 0; i < sorted.length && items.length < want; i += DECODE_BATCH) {
+        const batch = sorted.slice(i, i + DECODE_BATCH);
+        const ds = await Promise.all(batch.map((r) => decodeTx(party, r.entrypoint_hash)));
+        batch.forEach((r, k) => { const d = ds[k]; if (d && items.length < want) items.push(itemOf(party, r, d)); });
+      }
+      return lists.some((l) => l.cut) && items.length < want ? Object.assign(items, { truncated: true as const }) : items;
+    });
+  }
+
+  async function network(): Promise<Network> {
+    const parties = Object.keys(s.torii) as PartyId[];
+    const nodes = await Promise.all(parties.map(async (p): Promise<NetworkNode> => {
+      const node = { id: `iroha-${p.toLowerCase()}`, label: `Validator ${PARTIES[p].name}`, kind: 'iroha-peer' as const, owner: p };
+      const signal = AbortSignal.timeout(3_000); // one deadline for the node's two probes
+      try {
+        const h = await http(new URL('health', s.torii[p]), { headers: { Accept: 'text/plain' }, signal }); // /health answers text/plain only
+        if (!h.ok) return { ...node, status: 'down', detail: `/health HTTP ${h.status}` };
+        const st = await http(new URL('status', s.torii[p]), { headers: { Accept: 'application/json' }, signal }).then((r) => r.json() as Promise<{ blocks: number }>).catch(() => null);
+        return { ...node, status: 'up', detail: st ? `blok ${st.blocks}` : 'sehat' };
+      } catch (e) { return { ...node, status: 'down', detail: errMsg(e) }; }
+    }));
+    const links = nodes.flatMap((a, i) => nodes.slice(i + 1).map((b) => ({ from: a.id, to: b.id }))); // full mesh of the four validators
+    return { nodes, links };
+  }
+
   const mint = async (to: BankId, asset: 'RD' | 'DFABI', amount: bigint) =>
     cli('bi', [...SUBMIT, 'ledger', 'asset', 'mint', '--definition', s.assets[asset], '--account', acct[to], '--quantity', amount.toString()]);
 
@@ -241,8 +376,8 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli) {
     balanceOf,
     run,
     lens,
-    history: async () => { throw new NotAvailableError('Riwayat belum tersedia'); }, // step 0 stub (ARCHITECTURE.md §5), replaced per §2.3
-    network: async () => { throw new NotAvailableError('Status jaringan belum tersedia'); },
+    history,
+    network,
     async loadCapacity() {
       const balances = await Promise.all(BANKS.map((b) => balanceOf(b, 'RD')));
       return 3 * Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT);
@@ -268,5 +403,13 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli) {
 
 export async function load(stateDir?: string): Promise<ModelAdapter | null> {
   const s = readState<Iroha3State>('iroha3', stateDir);
-  return s && s.funded !== false ? createIroha3Adapter(s, irohaCli(s.dir)) : null;
+  if (!s || s.funded === false) return null;
+  return createIroha3Adapter(s, irohaCli(s.dir), {
+    init: async () => {
+      const parties = Object.keys(CONFIG) as PartyId[];
+      const auth = Object.fromEntries(await Promise.all(parties.map(async (p) => [p, await loadAuth(s.dir, CONFIG[p])]))) as Record<PartyId, Auth>;
+      const keys = Object.fromEntries(parties.map((p) => [p, partyKey(s.dir, CONFIG[p])])) as Record<PartyId, string>;
+      return { auth, ctx: { assets: s.assets, parties: keys } };
+    },
+  });
 }
