@@ -33,6 +33,9 @@ const SCREEN_SUB: Record<ModelRoute['screen'], string> = {
   tps: 'Beban transfer antarbank pada jaringan nyata.',
 };
 
+// true until App's first commit: child effects run before App's, so the page that loads first keeps the browser's focus
+let initialLoad = true;
+
 function stressProgress(s: StressSnapshot) {
   const done = Object.values(s.models).reduce((n, m) => n + (m ? m.summary.ok + m.summary.failed : 0), 0);
   return `${done}/${s.config.count * s.config.models.length}`;
@@ -46,6 +49,10 @@ function Shell({ meta, route, stress, reloadStress, tx }: { meta: Meta; route: M
   const network = usePoll(`net|${route.model}`, () => getNetwork(route.model), 10_000);
   const party = meta.parties[route.party].name;
   const title = route.screen === 'dasbor' ? `Dasbor · ${party}` : SCREEN_TITLE[route.screen];
+  // after in-app navigation, focus the new page heading so Tab and screen readers start there (DESIGN.md §9);
+  // a party switch keeps focus on its pill, so the key leaves the party out; the first load keeps focus at the top
+  const h1 = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { if (!initialLoad) h1.current?.focus(); }, [route.model, route.screen, route.tx]);
 
   return (
     <div className="app">
@@ -67,7 +74,7 @@ function Shell({ meta, route, stress, reloadStress, tx }: { meta: Meta; route: M
         )}
         <p className="vh" aria-live="polite">Menampilkan data sebagai {party}</p>
         <main className="main" id="konten">
-          <div className="title"><h1>{title}</h1><p>{SCREEN_SUB[route.screen].replace('{pihak}', party)}</p></div>
+          <div className="title"><h1 ref={h1} tabIndex={-1}>{title}</h1><p>{SCREEN_SUB[route.screen].replace('{pihak}', party)}</p></div>
           {route.screen === 'dasbor' ? <Dashboard meta={meta} route={route} network={network} />
             : route.screen === 'riwayat' ? <History key={`${route.model}|${route.party}`} meta={meta} route={route} />
             : route.screen === 'transfer' || route.screen === 'dvp'
@@ -87,6 +94,7 @@ export default function App() {
   const [err, setErr] = useState<string | null>(null);
   const load = () => getMeta().then((r) => (r.ok ? (setErr(null), setMeta(r.body)) : setErr(r.reason)));
   useEffect(() => { void load(); }, []);
+  useEffect(() => { if (meta) initialLoad = false; }, [meta]);
 
   const health = usePoll<Health>('health', getHealth, 5_000);
   // the stress poll's interval depends on its own last answer, so "running" is kept as state
