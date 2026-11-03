@@ -60,9 +60,6 @@ const EVENT_CHUNK = 25;
 const EVENT_LIMIT = 1000;
 const READ_GROUPS = 4; // groups read in parallel
 
-// Evidence: after one prepareSpendLock the Paladin coordinator of that (node, token) never dispatches its next tx until the pod restarts
-// (investigation 2026-11-02, 3 cases + controls). The route answers 409 with this reason; remove once Paladin is fixed.
-export const DVP_OFF: Capability = { enabled: false, reason: 'DvP Zeto dinonaktifkan sementara: setelah satu DvP, koordinator Paladin token itu macet sampai node di-restart (masalah di Paladin, sedang diperbaiki)' };
 export interface Held { token: Token; amount: bigint; owner: string } // a state a node holds, owner = lower-case BabyJubJub key
 export interface ZetoGroup { hash: string; block: number; at: string | null; io: Io[] }
 const sealedItem = (party: PartyId, g: ZetoGroup): HistoryItem =>
@@ -474,7 +471,7 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
   const adapter: ModelAdapter & { fund: typeof fund } = {
     id: 'zeto',
     stepLabels: ['Bangun bukti ZK', 'Kirim ke node Paladin', 'Masuk block Besu', 'Laporan BI terverifikasi'],
-    capabilities: () => Object.fromEntries((Object.keys(FLOWS) as FlowId[]).map((f): [FlowId, Capability] => [f, f === 'dvp' ? DVP_OFF : { enabled: true }])) as Record<FlowId, Capability>,
+    capabilities: () => Object.fromEntries((Object.keys(FLOWS) as FlowId[]).map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
     async health() {
       const heights = await Promise.all(clients.map((c) => c.bidx.getConfirmedBlockHeight()));
       return { ready: true, detail: `4 node Paladin siap, block ${heights[0]}` };

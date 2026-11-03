@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createZetoAdapter, load, type ZetoState } from '../../src/adapters/zeto.ts';
 import { nodeConnections } from '../../../../besu/zeto/src/common.ts';
 import { readState } from '../../src/state.ts';
-import { PRICE_PER_UNIT, type PartyId } from '../../src/domain.ts';
+import { BANKS, PRICE_PER_UNIT, type BankId, type PartyId } from '../../src/domain.ts';
 import { type FlowRequest } from '../../src/domain.ts';
 import { LOAD_AMOUNT, WarmingUpError, type StepEvent } from '../../src/adapter.ts';
 
@@ -82,10 +82,13 @@ describe('zeto history + network live', () => {
     }
   });
 
-  // Skipped: a DvP wedges the Paladin coordinator of that token until the node restarts (UX-REVIEW.md, "Zeto DvP dinonaktifkan"). NO Zeto DvP against the live cluster.
-  it.skip('a fresh dvp A->B: one item per party; amount = DFABI leg, rdAmount equal to the party\'s own lens', async () => {
+  // Needs the prepare-only flush fix on the bank nodes (Paladin prepfix2); before it a DvP wedged that token's coordinator.
+  // DVP_PAIR=C-A picks seller-buyer (default A-B).
+  it('a fresh dvp: one item per party; amount = DFABI leg, rdAmount equal to the party\'s own lens', async () => {
     const a = (await load())!;
-    const req: FlowRequest = { model: 'zeto', flow: 'dvp', from: 'A', to: 'B', amount: '1' };
+    const [from, to] = (process.env.DVP_PAIR ?? 'A-B').split('-') as [BankId, BankId];
+    if (!BANKS.includes(from) || !BANKS.includes(to) || from === to) throw new Error('DVP_PAIR must be two different banks, e.g. A-B'); // BI's node1 is unpatched
+    const req: FlowRequest = { model: 'zeto', flow: 'dvp', from, to, amount: '1' };
     const res = await a.run(req, 1n, () => {});
     for (const p of P) {
       const lens = await a.lens(req, res, p);
@@ -93,7 +96,7 @@ describe('zeto history + network live', () => {
       expect(item, `${p} history has the dvp`).toBeDefined();
       expect(item).toMatchObject({ verdict: lens.verdict, amount: lens.amount, rdAmount: lens.rdAmount, counterparty: lens.counterparty, role: lens.role });
     }
-    expect((await a.lens(req, res, 'A')).rdAmount).toBe(String(PRICE_PER_UNIT));
+    expect((await a.lens(req, res, from)).rdAmount).toBe(String(PRICE_PER_UNIT));
   });
 
   it('network(): 4 validators + 4 Paladin nodes, all up', async () => {

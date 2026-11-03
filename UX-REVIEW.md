@@ -117,26 +117,11 @@ Re-walk P1–P4 on the running app (mock first, then live). Score each criterion
 screenshots: time to first insight, privacy clarity, wayfinding, party switching, states,
 recovery, slow actions, terms, a11y, narrow layout, density.
 
-## Zeto DvP dinonaktifkan
+## Zeto DvP (resolved 2026-11-03)
 
-Status (INTERIM: the goal is a working Zeto DvP, this is only the fallback until the Paladin wedge is fixed): `capabilities().dvp` of the Zeto adapter is `{ enabled: false, reason: 'DvP Zeto dinonaktifkan sementara: setelah satu DvP, koordinator Paladin token itu macet sampai node di-restart (masalah di Paladin, sedang diperbaiki)' }` (`DVP_OFF` in `server/src/adapters/zeto.ts`). The route answers 409 with that reason. The DvP code stays; re-enabling is one flag. `transferForLoad` / stress is a plain RD transfer and never uses DvP. The live DvP test in `server/test/live/zeto.live.ts` is `it.skip`. No Zeto DvP against the live cluster, from any server or test.
+Zeto DvP is enabled again: `capabilities().dvp` is `{ enabled: true }`, and the live DvP test in `server/test/live/zeto.live.ts` runs again (`DVP_PAIR` picks seller-buyer, default A-B). The cause was a Paladin coordinator wedge after a prepare-only tx (`prepareSpendLock`), fixed by the Paladin prepare-only flush patch (image `prepfix2` on node2/3/4): Paladin build-v1 branch `lensa/prepare-dispatch-flush`, commits `1953f5dff` (fix) + `ca2418e94` (tests) + `0da5af7b6` (comment); image `ghcr.io/radityaaa43/paladin@sha256:6f113f38…9f71`. The investigation is in git history (this section before the fix).
 
-Cause (hypothesis, **not proven in code**): after a `prepareSpendLock` (a `spendLock` with `submit_mode=external`, the PREPARE intent) has been dispatched on a (node, token contract) Paladin coordinator, the next transaction on that same coordinator logs "Preparing transaction" and is then never dispatched (no "SyncPoints flush-writer", no "Inserting prepared public transaction", no row in `dispatches`) until the pod restarts. `debug_getTransactionStatus(contract, id)` shows the stuck tx as `Prepared` / `Event_PreDispatchRequestReceived`: the originator answered the pre-dispatch handshake, the coordinator never dispatched. The restart alone cures it only until the next prepare.
-
-Image: `ghcr.io/radityaaa43/paladin:main-zeto-v1-rsfix-1d600fc6f` (source checkout `~/eksplorasi-paladin/build-v1/paladin` @1d600fc6f; no newer upstream sequencer fix in `~/eksplorasi-paladin/paladin` HEAD 4ab578f3a).
-
-Cases (2026-11-02, times UTC; all on pods named `paladin-nodeN-0`):
-
-| Where | prepareSpendLock before | Next tx on the same coordinator |
-|---|---|---|
-| node2 / DFABI `0x2ecc2fe5` | `ae68f9ce` 15:37:45 (receipt) | createLock `f3b29e3e` 15:39:51: wedged (and `a0eed36e` 15:42:01) |
-| node2 / DFABI, after the 16:00 restart | `bc16b8ef` 16:03:05 (no receipt) | createLock `41b4337a` 16:22:20: wedged. (Before the prepare, createLock `a848cb31` 16:03:03 was fine.) |
-| node3 / RD `0xdef2e64a` | `eda9d5b0` 15:37:47 (receipt) | createLock `479c3c47` 16:03:05: wedged, then transfer `6a35a99c` 16:12:04: wedged |
-
-Controls (no prepare on that coordinator, all fine): node3 / DFABI transfer B->C 1 (27 s, 16:11); node2 / RD transfers 16:01-16:03; node3 / RD after its restart is clean.
-
-Ruled out: nonce gap or stuck public tx (node3 `public_txns` for the bankB key: nonces 0..8, DB next nonce 9 = chain 9, none without completion); gas (gasPrice 0); DB (no idle-in-transaction, no ungranted locks); config (`maxDispatchAhead` etc. are defaults, 50). Code candidates (unconfirmed): a prepared tx never leaves the coordinator's in-flight/ordering state; or the loopback path for the pre-dispatch handshake (`sequencer/transport/loopback_transport_writer.go:32`, queue capacity 1, one synchronous sender goroutine).
-
-Why not proven: no goroutine dump. The debug/pprof server is disabled (`DebugServer.Enabled` default false, not in the node config; enabling it needs a config change and a restart), and PID 1 of the paladin container is `java` (the JVM hosts the Go core), so `kill -QUIT 1` would only give a Java thread dump. The wedge was restored by `kubectl delete pod` each time (node2 at 16:00, node3 at 16:21).
-
-Next (needs approval): minimal repro on a clean coordinator (node4 / DFABI: createLock -> prepareSpendLock -> plain transfer) with the debug server enabled, then an upstream issue.
+Standing hazards:
+- `paladin-operator` must stay scaled to 0: at 1 it reverts node2/3/4 to `rsfix` and the wedge returns.
+- node1 (BI) runs `rsfix`; it is not in the bank-to-bank DvP path. A BI->bank award DvP (primary market, not offered in Lensa) would run on node1 and needs node1 patched first.
+- About 500 DvPs per (bank node, token) per pod lifetime, then `PD012642` until that pod restarts.
