@@ -283,7 +283,7 @@ Desktop: semantic `<table>` with caption "Riwayat transaksi sebagai {pihak}". Co
 | Transaksi | `flowName` + asset | flow/asset null → seal chip |
 | Pihak | `counterpartyLine()` | per side seal |
 | Nominal | right-aligned, tabular | seal chip (fixed width) |
-| Kaki RD | DvP only: `rdAmount` | `null` on DvP → seal; non-DvP → `—` |
+| Kaki RD | DvP and award (`isDvpFlow`): `rdAmount` | `null` on DvP/award → seal; other flows → `—` |
 | Status | verdict badge (§6.3) | — |
 | Waktu | `at` formatted `id-ID`, block in mono below | `at` null → "Tanpa cap waktu" in `--muted` (Fabric-X), never sealed (absence of a timestamp is not redaction) |
 
@@ -335,10 +335,23 @@ Restyle of `Compose.tsx`. Inputs 40px, `--r-control`, `--control` border, label 
 - **Subtitle** (UX M5): "Dikirim oleh {pihak}". The progress panel keeps "Dikirim oleh {pihak saat kirim}" for the whole run, even after a party switch.
 - **Recovery** (UX M4): form values stay after an error. The error block shows the server reason and one action: "Coba lagi" for 502/503, "Lihat stress test" when a stress test holds the lock (409). Focus moves to the block.
 - The run survives navigation: leaving the screen and coming back shows the same progress or result.
+- **Award, BI variant** (ARCHITECTURE.md §7): the `/dvp` screen as party BI is the primary-market sale. Same layout as DvP, no new component.
+  - Title `FLOW_NAME.award` "Penjualan perdana DFABI ↔ RD"; subtitle "Dikirim oleh Bank Indonesia". BI is the seller through the route party, never a field.
+  - Fields: "Bank pembeli" (A/B/C select), "Jumlah (unit DFABI)". The hint and price line are the DvP ones: "{n} unit DFABI · dibayar Rp {n × 1.000.000}" and "Harga per unit Rp 1.000.000 (ketentuan transaksi)", from the shared `PRICE_PER_UNIT`, never typed by the user.
+  - Primary button "Jalankan penjualan" (not "Terbitkan": RD moves too). Same four-step progress, "Selesai di blok", "Buka di lensa".
+  - No BI stock line in the MVP. A missing stock surfaces as the server's error block (UX M4).
+  - Disabled model: the adapter's `award` reason as the `.notice` above the button, button disabled (same as a disabled DvP).
+- **Nav label per party:** the `/dvp` item reads "Penjualan perdana" for BI and "DvP" for a bank. Same swap icon, same position.
 
 ### 7.10 Lens view (one transaction, four parties)  · existing Lenses · Flow
 
 Four columns (2×2 on tablet, stacked on mobile), one per party in `PARTY_ORDER`. Each: party name + role label (`roleLabel()`), verdict badge, fields (amount, counterparty, flow) using §6.1, "Di chain" key/value list in mono, `method` line in `--muted`. The column for the party selected in the header is outlined in `--ink` with "Pihak Anda".
+
+**Award row and columns** (history §7.6 and lens, same rules):
+- Icon: the DvP swap glyph (any `isDvpFlow` flow). Transaksi cell: "Penjualan perdana DFABI ↔ RD"; Pihak: "Bank Indonesia → {bank}"; Nominal in DFABI units; Kaki RD readable or sealed (§6.1).
+- Role chips (`roleLabel`, dvp = true): BI "Penerbit & pengawas" (BI is a party here, never "Pengawas"), buyer "Pembeli DFABI", other banks "Tidak terlibat".
+- Verdicts: BI and the buyer read their own legs, so `clear`. BI shows no "Laporan terverifikasi" and the row never appears in "Laporan ke BI" (§7.11).
+- Outsider banks follow the model, never the flow: one row-wide seal on Zeto and Noto, `partial` on Stealth, clear on Iroha 3 under its "Sama untuk semua pihak" badge (§6.2). Nothing is derived from BI's or the buyer's column.
 
 ### 7.11 BI report panel  · Ref B Sell Order
 
@@ -420,7 +433,7 @@ Per platform/model, ?pihak=BI|A|B|C on every URL (7.3):
   /dasbor     Dasbor · {pihak}: RD hero card (7.5) · 3 stat cards (7.4) · network graph (7.7) · recent history (7.6, 5 rows)
   /riwayat    Riwayat transaksi: full history table (7.6), "Muat lebih banyak"
   /transfer   Transfer: RD/DFABI issue + transfer form (7.9) → progress → lens (7.10)
-  /dvp        DvP: DFABI ↔ RD form (7.9) → progress → lens (7.10)
+  /dvp        DvP (bank) or Penjualan perdana (BI): DFABI ↔ RD form (7.9) → progress → lens (7.10)
   /lensa/:tx  Lensa: one transaction from four parties (7.10)
   /laporan    Laporan ke BI (7.11), Zeto + Fabric-X only
   /tps        Stress test TPS: config (existing StressConfig) · live line chart · results bar chart (7.8)
@@ -430,7 +443,7 @@ Sidebar items (Indonesian, in order): "Dasbor", "Riwayat", "Transfer", "DvP", "L
 
 Disabled items stay in the nav with their reason as hint text, never hidden (UX journey (e)):
 - a flow the adapter reports as disabled (`capabilities()`): the adapter's `reason`;
-- "DvP" for party BI: "DvP dijalankan oleh bank";
+- "Penjualan perdana" for party BI (the `/dvp` item): the adapter's `award` reason while that model has no award (e.g. "Belum dibangun");
 - "Laporan ke BI" for a bank: "Hanya BI yang menerima laporan". On Iroha 3 the item is hidden (no reports on a transparent lane).
 
 Data per screen (ARCHITECTURE.md §3.3 is authoritative):
