@@ -35,9 +35,9 @@ export function mockAdapter(id: ModelId) {
   function view(tx: Tx, party: PartyId) {
     const r = tx.req, role = roleOf(r, party), pol = POLICY[id], f = FLOWS[r.flow];
     const dvp = isDvpFlow(r.flow), rd = dvp ? (BigInt(r.amount) * PRICE_PER_UNIT).toString() : null;
-    if (role === 'outsider' && pol.outsider !== 'clear') {
+    if (role === 'outsider' && pol.outsider !== 'clear') { // live Stealth: the outsider's read has no flow either (amount only)
       const open = pol.outsider === 'partial';
-      return { role, verdict: (open ? 'partial' : 'sealed') as Verdict, flow: open ? r.flow : null, asset: open ? f.asset : null, amount: open ? r.amount : null, rdAmount: open ? rd : null, counterparty: null };
+      return { role, verdict: (open ? 'partial' : 'sealed') as Verdict, flow: null, asset: open ? f.asset : null, amount: open ? r.amount : null, rdAmount: open ? rd : null, counterparty: null };
     }
     const verdict: Verdict = role === 'regulator' ? pol.bi : 'clear';
     return { role, verdict, flow: r.flow, asset: f.asset, amount: r.amount, rdAmount: rd, counterparty: { from: r.from, to: r.to } };

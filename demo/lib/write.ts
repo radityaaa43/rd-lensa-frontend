@@ -57,7 +57,7 @@ export async function checkBalanceScreen(d: Ctx, p: PartyId, bal?: Balance) {
 
 // All four lens columns against each party's own history (read-only, waits for the ~10 s hold-back and the 503 warm-up).
 // showFlow: a column built from history shows the flow; the column of a just-run tx does not.
-export async function checkLensColumns(d: Ctx, tx: string, showFlow: boolean) {
+export async function checkLensColumns(d: Ctx, tx: string, showFlow: boolean, flow?: FlowId) {
   const { page, model, names } = d;
   await expect(sel.lensCols(page)).toHaveCount(4, SLOW);
   await expect(sel.lensNotes(page).filter({ hasText: /Memuat|Belum terindeks/ })).toHaveCount(0, { timeout: 120_000 }); // a pending column re-checks itself after 10 s
@@ -65,7 +65,7 @@ export async function checkLensColumns(d: Ctx, tx: string, showFlow: boolean) {
     const { items, pending } = await d.api.settled(model, p, 100);
     const item = items.find((i) => i.id === tx);
     const text = (await sel.lensCol(page, names[p]).innerText()).replace(/Cara [\s\S]* membaca[\s\S]*/, '');
-    if (item) d.checkDiff(`lensa ${p}`, diff(text, item, names, { showFlow }));
+    if (item) d.checkDiff(`lensa ${p}`, diff(text, item, names, { showFlow, flow }));
     else if (pending.includes(tx)) throw new Error(`lensa ${p}: node masih menahan tx ini setelah 45 detik (x-history-pending); tidak bisa dibandingkan`);
     else if (showFlow) d.check(`lensa ${p} (tidak ada di riwayatnya)`, /Tidak terlihat|jangkauan/.test(text) ? 'tidak terlihat' : text.slice(0, 80), 'tidak terlihat');
     else d.checks.push({ label: `lensa ${p} (tidak ada di riwayatnya, kolom dari hasil run)`, screen: 'dibaca dari hasil run', api: 'tidak ada item', ok: true });
@@ -135,7 +135,7 @@ export async function write(d: Ctx, w: WriteSpec): Promise<string> {
     // the lens of the run, opened from the result link (the run lives in the page: any reload would drop it, so this comes first)
     await d.step('Lensa hasil run: empat kolom', async () => {
       await d.click(sel.progressDone(page).locator('a'));
-      await checkLensColumns(d, tx, false);
+      await checkLensColumns(d, tx, false, w.flow);
       await d.hold('Satu transaksi, empat pembacaan: tiap pihak hanya melihat bagiannya.', 2200);
       await d.shot(`${w.key}-lensa`);
     });

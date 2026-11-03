@@ -38,8 +38,10 @@ export const s2: Scenario = {
       });
 
       await d.step(`Riwayat ${d.names[p]}`, async () => {
-        await d.goto('riwayat', p);
+        // API first: it waits out the node's ~10 s hold-back. The page fetches its list once per load, so loading it after the wait
+        // gives both the same rows (loading first showed 19 rows against 20 on Fabric-X and Noto in the first live run).
         const items = await d.api.history(model, p, PAGE);
+        await d.goto('riwayat', p);
         const rows = sel.histRows(page);
         if (items.length === 0) { await expect(page.getByText('Belum ada transaksi').first()).toBeVisible(SLOW); return; }
         await expect(rows).toHaveCount(items.length, SLOW);

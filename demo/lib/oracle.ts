@@ -24,7 +24,8 @@ export const flowText = (it: HistoryItem) => (it.flow === 'dfabi-issue' && it.co
 
 // Returns what is wrong on screen for this item (empty = it matches). `text` is the flattened text of ONE row or ONE lens column.
 // showFlow false = a lens column of a just-run tx (the flow is not printed there). A sealed part must not leak, a readable part must show.
-export function diff(text: string, it: HistoryItem, names: Record<PartyId, string>, opts: { showFlow: boolean }): string[] {
+export function diff(text: string, it: HistoryItem, names: Record<PartyId, string>, opts: { showFlow: boolean; flow?: FlowId }): string[] {
+  // flow: the request's flow, known for a column built from a just-run tx (the UI uses it there even when the party's own read has no flow)
   const t = flat(text);
   const bad: string[] = [];
   const cp = it.counterparty;
@@ -34,7 +35,8 @@ export function diff(text: string, it: HistoryItem, names: Record<PartyId, strin
     if (/Rp \d|\d unit DFABI/.test(t)) bad.push('sealed row leaks an amount');
     return bad;
   }
-  const dvp = isDvp(it.flow);
+  const known = opts.flow ?? it.flow;
+  const dvp = isDvp(known);
   if (!t.includes(roleText(it.role, dvp))) bad.push(`role "${roleText(it.role, dvp)}"`);
   if (!t.includes(VERDICT_TEXT[it.verdict])) bad.push(`verdict "${VERDICT_TEXT[it.verdict]}"`);
   if (opts.showFlow && it.flow && !t.includes(flowText(it))) bad.push(`flow "${flowText(it)}"`);
@@ -48,7 +50,7 @@ export function diff(text: string, it: HistoryItem, names: Record<PartyId, strin
   // sealed chips: one per hidden field; the verdict badge of a sealed read is one more "Tersegel"
   const seals = (t.match(/Tersegel/g) ?? []).length - (it.verdict === 'sealed' ? 1 : 0);
   const want = (['from', 'to'] as const).filter((s) => !cp?.[s]).length + (it.amount === null ? 1 : 0)
-    + (it.rdAmount === null && (dvp || it.flow === null) ? 1 : 0) + (opts.showFlow && it.flow === null ? 1 : 0);
+    + (it.rdAmount === null && (dvp || (opts.flow === undefined && it.flow === null)) ? 1 : 0) + (opts.showFlow && it.flow === null ? 1 : 0);
   if (seals !== want) bad.push(`sealed chips ${seals} != ${want}`);
   return bad;
 }
