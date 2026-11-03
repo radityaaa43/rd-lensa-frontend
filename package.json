@@ -8,6 +8,8 @@
     "build": "npm run build -w web",
     "test": "npm test -ws",
     "bootstrap": "npm run bootstrap -w server --",
-    "preflight": "npm run preflight -w server --"
+    "preflight": "npm run preflight -w server --",
+    "demo": "tsx demo/cli.ts",
+    "demo:mock": "tsx demo/cli.ts --mock"
   }
 }
