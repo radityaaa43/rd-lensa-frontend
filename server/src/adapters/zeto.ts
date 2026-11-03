@@ -50,6 +50,18 @@ export function ledgerParties(
   const to = owners.size === 1 ? PARTY_OF.get([...owners][0]!) ?? null : null;
   return from === null && to === null ? null : { from, to };
 }
+// BI's read of one tx from its ledger (bank reports + its own states); null until every output is verified. An award is a DvP whose RD
+// leg went to BI's own key: BI is then the issuer-side party, so the ledger names BI as the sender.
+export function biRead(io: Io[], ledger: { verified: Map<string, { output: { owner: string; amount: string }; reporters: Set<string> }>; ownerOf(key: string): string }, biKey: string): { seen: Held[]; cp: Counterparty | null } | null {
+  const outs = io.flatMap((i) => i.outputs.map((o) => ({ token: i.token, v: ledger.verified.get(o) })));
+  if (!outs.every((o) => o.v)) return null;
+  const main = io.length === 2 ? 'DFABI' : io[0]!.token;
+  const award = io.length === 2 && outs.some((o) => o.token === 'RD' && lower(o.v!.output.owner) === biKey); // the RD leg went to BI's key
+  return {
+    seen: outs.map((o): Held => ({ token: o.token, amount: BigInt(o.v!.output.amount), owner: lower(o.v!.output.owner) })),
+    cp: ledgerParties(ledger, io.filter((i) => i.token === main).flatMap((i) => i.outputs), io.every((i) => i.inputs.length === 0) || award),
+  };
+}
 // History (ARCHITECTURE.md §2.3). One tx = one base-ledger hash; the party's own node lists the receipts of the two Zeto contracts. Events tell
 // movements (mint, transfer, spent lock) from lock bookkeeping. A bank reads what its own node holds of the tx's outputs (nothing = sealed);
 // BI reads its ledger (bank reports + its own states), brought up to date from node1 first.
@@ -467,16 +479,7 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
       })),
       heldOf: party === 'BI' ? undefined : (hash, io) => held(party, hash, io),
       syncBi: party === 'BI' ? async () => { await within(syncBi(), DEADLINE_MS, 'Sinkron ledger BI'); } : undefined,
-      biOf: party !== 'BI' ? undefined : (io) => {
-        const outs = io.flatMap((i) => i.outputs.map((o) => ({ token: i.token, v: ledger.verified.get(o) })));
-        if (!outs.every((o) => o.v)) return null;
-        const main = io.length === 2 ? 'DFABI' : io[0]!.token;
-        const award = io.length === 2 && outs.some((o) => o.token === 'RD' && lower(o.v!.output.owner) === ownerKey.BI); // the RD leg went to BI's key
-        return {
-          seen: outs.map((o): Held => ({ token: o.token, amount: BigInt(o.v!.output.amount), owner: lower(o.v!.output.owner) })),
-          cp: ledgerParties(ledger, io.filter((i) => i.token === main).flatMap((i) => i.outputs), io.every((i) => i.inputs.length === 0) || award),
-        };
-      },
+      biOf: party !== 'BI' ? undefined : (io) => biRead(io, ledger, ownerKey.BI),
     });
   }
 
