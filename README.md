@@ -6,19 +6,19 @@ Server di port 8790 (`PORT` mengganti). Port 8791 dipakai server mock untuk Play
 
 ## Prasyarat
 
+- Kubeconfig cluster hanya satu: `alibaba.yaml` di root repo (di-gitignore, jangan di-commit). Semua perintah `kubectl` di bawah memakai `export KUBECONFIG=<repo>/alibaba.yaml`.
 - Port-forward Paladin aktif: node1..4 di `127.0.0.1:31548`, `:31648`, `:31748`, `:31848`. Skripnya `besu/noto+pente/scripts/port-forward-start.sh` (atau `alibaba-kube/Paladin/scripts/port-forward-start.sh` di host demo).
 - Tunnel Besu RPC ke `127.0.0.1:8545`:
 
   ```bash
-  KUBECONFIG=/home/ecs-user/alibaba-kube/alibaba.yaml kubectl port-forward svc/besu-node-validator-1 8545:8545 -n besu
+  kubectl port-forward svc/besu-node-validator-1 8545:8545 -n besu
   ```
 
 - Stealth butuh `besu/stealth-address/.env.smoke`.
-- Fabric-X butuh `kubectl` dan kubeconfig ke cluster (namespace `fabricx`, deployment `rdbi-driver`). Tanpa port-forward: adapter memanggil `kubectl exec`. Kubeconfig dari env `FABRICX_KUBECONFIG`, default `/home/ecs-user/.kube/alibaba.yaml`.
+- Fabric-X butuh `kubectl` dan kubeconfig ke cluster (namespace `fabricx`, deployment `rdbi-driver`). Tanpa port-forward: adapter memanggil `kubectl exec`. Adapter tidak membaca `KUBECONFIG`: isi env `FABRICX_KUBECONFIG` dengan path `alibaba.yaml` yang sama.
 - Iroha 3 butuh port-forward Torii keempat validator (namespace `iroha3`) dan `python3` (hitung intent hash DvP):
 
   ```bash
-  export KUBECONFIG=../iroha3/alibaba.yaml
   i=0; for p in bi bank-a bank-b bank-c; do nohup kubectl -n iroha3 port-forward svc/$p $((38080+i)):8080 --address 127.0.0.1 >/dev/null 2>&1 & i=$((i+1)); done
   ```
 
