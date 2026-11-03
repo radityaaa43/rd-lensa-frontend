@@ -111,6 +111,8 @@ npm run test:live -w server -- test/live/fabricx.live.ts   # butuh kubectl, tanp
 npm run test:live -w server -- test/live/iroha3.live.ts    # butuh port-forward Iroha 3
 ```
 
+Peragaan otomatis di browser (tur, transaksi nyata, Lensa, dengan keterangan di layar) dan modenya tanpa chain: lihat `demo/README.md`.
+
 Tes live Paladin (zeto, noto) jalan di bawah lock supaya tidak bertabrakan:
 
 ```bash
