@@ -4,7 +4,7 @@ Owner: `lead`. Engineers implement within this document. A change to anything he
 interfaces, data shapes, dependencies, patterns) goes to `lead` first.
 Visual design lives in [DESIGN.md](DESIGN.md) (owner `fe`). This file decides code only.
 
-Status: v2, 2026-11-02, branch `feat/frontend-revamp`. §2.3 now comes from blockhain's
+Status: v2, 2026-11-02; built on `feat/frontend-revamp`, merged into `feat/fabric-x-multibank` (e5b0387). §2.3 now comes from blockhain's
 needs-and-risks report. §2.2 and §3 are still pending confirmation in fe's report. An engineer
 who finds a fact in here wrong reports it rather than building on it.
 
@@ -293,15 +293,15 @@ web/src/
   main.tsx        unchanged
   App.tsx         shell: <Sidebar/> <Header/> + screen switch on route.screen; holds the last tx run result
   api.ts          + getHistory, getNetwork, getBalance (same call<T> helper)
+  format.ts       shared number/date formatting
   app/            route.ts, route.test.ts, useRoute.ts, usePoll.ts, usePoll.test.ts,
                   Sidebar.tsx, Header.tsx, PartySwitcher.tsx, ModelSelector.tsx
   screens/        Landing, Dashboard, History, Transfer (also renders DvP via `dvp` prop), Lens, Report (.tsx);
                   TPS = <StressView/> directly (no one-line wrapper files)
   ui/             Sealed, States (Empty/Error/Loading), StatCard, BalanceCard, HistoryTable,
-                  NetworkGraph, BarChart, LineChart (.tsx)
-  demo/           keep demoState, Compose, Timeline, Lenses, JsonView, counterparty, copy (restyled);
-                  delete Sidebar.tsx and DemoView.tsx (replaced by the route + screens/Transfer, Dvp)
-  stress/         logic unchanged, restyled; screens/Tps.tsx renders <StressView/>
+                  NetworkGraph (.tsx)
+  demo/           demoState, Compose, Timeline, Lenses, JsonView, counterparty, copy (restyled)
+  stress/         logic unchanged, restyled; App renders <StressView/> for the `tps` screen
   styles.css      DESIGN.md tokens as CSS custom properties, light + dark
 ```
 No other folders, no component library, no CSS-in-JS.
