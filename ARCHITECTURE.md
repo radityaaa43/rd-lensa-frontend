@@ -490,6 +490,10 @@ award: { asset: 'DFABI', issuer: true, dvp: true },
   party's own read shows (Stealth: `flow: null`). It is never hidden. The web may label a BI→BI
   issue "Penerbitan ke persediaan BI". `validateRequest` still rejects `to: 'BI'` for requests:
   only adapters mint to inventory.
+- **BI balance.** `balanceOf('BI', asset)` = the sum over every identity BI holds that asset with
+  in that model (Noto: cashIssuer + bondCustodian; Stealth: every BI stealth address its own view
+  key finds, inventory and award receipts included; Zeto/Iroha: BI's account). It is read only
+  from BI's own node/keys.
 - **Laporan.** An award has BI as a party, so it creates no report row. BI's verdict on its own
   award is `clear`, not `reported`.
 
