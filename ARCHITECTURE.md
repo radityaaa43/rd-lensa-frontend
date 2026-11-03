@@ -486,8 +486,9 @@ award: { asset: 'DFABI', issuer: true, dvp: true },
 - **BI inventory.** Where BI must hold DFABI before it can sell (Iroha 3, Stealth, Zeto), the
   adapter mints to BI's own inventory. It mints in batches (top-up of 1000 units when stock <
   amount), never per award. Each top-up is a real chain tx and stays visible in history as
-  `flow: 'dfabi-issue'`, counterparty `{ from: 'BI', to: 'BI' }`, or as whatever the reading
-  party's own read shows (Stealth: `flow: null`). It is never hidden. The web may label a BI→BI
+  `flow: 'dfabi-issue'`, counterparty `{ from: 'BI', to: 'BI' }` in BI's own read (also in Stealth:
+  BI holds the view key of its own addresses). Another party's read shows only what its keys allow,
+  e.g. `flow: null`. It is never hidden. The web may label a BI→BI
   issue "Penerbitan ke persediaan BI". `validateRequest` still rejects `to: 'BI'` for requests:
   only adapters mint to inventory.
 - **BI balance.** `balanceOf('BI', asset)` = the sum over every identity BI holds that asset with
