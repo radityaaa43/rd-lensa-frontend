@@ -302,11 +302,10 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
   }
 
   const balance = async (id: PartyId, t: Token): Promise<bigint> => {
-    if (id === 'BI') throw new Error('BI tidak memegang saldo transfer');
+    // BI's balance is its own account's UTXOs (ARCHITECTURE §7.1 'BI balance'), read from node1 like any party's.
     return BigInt((await zeto(t, P[id]).balanceOf(P[id].v, { account: LOOKUP[id] })).totalBalance);
   };
-  // BI's own DFABI UTXOs (balance() refuses BI on purpose: it is not a transfer account).
-  const biStock = async (): Promise<bigint> => BigInt((await zeto('DFABI', P.BI).balanceOf(P.BI.v, { account: LOOKUP.BI })).totalBalance);
+  const biStock = () => balance('BI', 'DFABI'); // BI's DFABI inventory (award top-up)
   async function requireBalance(id: PartyId, t: Token, need: bigint) {
     if ((await balance(id, t)) < need) throw new Error(`Saldo ${PARTIES[id].name} tidak cukup`); // guards the N6 duplicate-input bug
   }

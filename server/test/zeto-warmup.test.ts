@@ -42,3 +42,30 @@ describe('Zeto BI history, cold start', () => {
     expect(e).not.toBeInstanceOf(WarmingUpError);
   });
 });
+
+// ARCHITECTURE §7.1 'BI balance': BI's balance is its own account's UTXOs, read from BI's node (node1) like any party's.
+describe('Zeto BI balance', () => {
+  it("balanceOf('BI') asks node1 for bi@node1's balance on the token's contract", async () => {
+    const { createServer } = await import('node:http');
+    const calls: { method: string; params: { from: string; to: string; function: string }[] }[] = [];
+    const srv = createServer((req, res) => {
+      let body = '';
+      req.on('data', (d) => (body += d));
+      req.on('end', () => {
+        const m = JSON.parse(body);
+        calls.push(m);
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { totalStates: '2', totalBalance: '1000999', overflow: false } }));
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const port = (srv.address() as { port: number }).port;
+    const conns = dead.map((n, i) => (i === 0 ? { ...n, clientOptions: { ...n.clientOptions, url: `http://127.0.0.1:${port}` } } : n));
+    try {
+      const a = createZetoAdapter(state, conns as never);
+      expect(await a.balanceOf('BI', 'DFABI')).toBe(1000999n);
+      expect(calls.at(-1)!.method).toBe('ptx_call');
+      expect(calls.at(-1)!.params[0]).toMatchObject({ from: 'bi@node1', to: state.dfabi, function: 'balanceOf' });
+    } finally { srv.close(); }
+  });
+});
