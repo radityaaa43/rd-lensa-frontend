@@ -258,10 +258,13 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
       if ('use' in plan) {
         own = free[plan.use]!;
         busy.add(lc(own.stealthAddress)); // re-read now that it is ours, as claim() does
-        if ((await balance('DFABI', own.stealthAddress)) < amount) { busy.delete(lc(own.stealthAddress)); own = undefined; }
+        let enough = false;
+        try { enough = (await balance('DFABI', own.stealthAddress)) >= amount; } finally { if (!enough) busy.delete(lc(own.stealthAddress)); }
+        if (!enough) own = undefined;
       }
+      // The top-up is not guarded here: app.ts admits one tx at a time (its synchronous busy = 'tx' lock), so two awards never race for it.
       if (!own) {
-        const issue = 'issue' in plan ? plan.issue : amount > TOP_UP_MIN ? amount : TOP_UP_MIN;
+        const { issue } = planInventory([], amount) as { issue: bigint }; // empty inventory: the same top-up rule
         const p = pay(chainId, biKeys!.metaAddress, state.deployerKey, d.bond, issue, TRANCHE_A);
         const rc = await confirm(await serial(() => asBi.bond.issueByPartitionStealth(TRANCHE_A, p.s.stealthAddress, issue, p.s.ephemeralPubKey, p.s.viewTag, p.memo, { gasPrice: gp })));
         own = scan(await txAnnouncements(rc.blockNumber, rc.hash, 'bond'), biKeys!.viewKey, biKeys!.spendKey)[0];
