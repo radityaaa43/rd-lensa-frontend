@@ -25,7 +25,7 @@ const state: Iroha3State = {
 
 // A fake CLI: records (config, args, stdin) of every call; `-o` renders the args as the instruction (the DvP fixture for
 // a settlement), and the ledger serves back whatever was rendered last, signed by `authority`.
-function fake(opts: { status?: string; authority?: string; stored?: string; balance?: string } = {}) {
+function fake(opts: { status?: string; authority?: string; stored?: string; balance?: string; dfabi?: string } = {}) {
   const calls: { config: string; args: string[]; stdin?: string }[] = [];
   let rendered = '';
   const cli: Cli = async (config, args, stdin) => {
@@ -36,7 +36,7 @@ function fake(opts: { status?: string; authority?: string; stored?: string; bala
       return JSON.stringify({ block_hash: 'hash:00', result: { Err: Buffer.from('\u0001insufficient asset quantity').toString('base64') },
         entrypoint: { External: { payload: { authority: opts.authority ?? 'acct-A', instructions: { Instructions: [opts.stored ?? rendered] } } } } });
     }
-    if (args.includes('asset') && args.includes('get')) return JSON.stringify({ value: opts.balance ?? '10000000000' });
+    if (args.includes('asset') && args.includes('get')) return JSON.stringify({ value: (args.includes('DFABI-ID') && opts.dfabi) || opts.balance || '10000000000' });
     if (args.includes('query')) {
       return JSON.stringify({ content: { details: { value: { delivery: { source: 'DFABI-ID#acct-A', destination: 'DFABI-ID#acct-B', quantity: '2' }, payment: { source: 'RD-ID#acct-B', destination: 'RD-ID#acct-A', quantity: '1999999' } } } } });
     }
@@ -79,6 +79,40 @@ describe('iroha3 run', () => {
     expect(settle!.args.slice(3)).toEqual(['app', 'settlement', 'dvp', '--settlement-id', sid,
       '--delivery-asset', 'DFABI-ID', '--delivery-quantity', '2', '--delivery-from', 'acct-A', '--delivery-to', 'acct-B',
       '--payment-asset', 'RD-ID', '--payment-quantity', (2n * PRICE_PER_UNIT).toString(), '--payment-from', 'acct-B', '--payment-to', 'acct-A']);
+  });
+
+  it('award: BI mints to itself, the bank grants consent to BI, BI settles', async () => {
+    const f = fake({ authority: 'acct-BI', dfabi: '0' });
+    const a = createIroha3Adapter(state, f.cli);
+    expect(a.capabilities().award).toEqual({ enabled: true });
+    const r = await a.run(req('award', 'BI', 'A', '2'), 2n, () => {});
+    const [mint, grant, settle] = f.calls.filter((c) => c.args.includes('--fee-payer'));
+    expect([mint!.config, ...mint!.args.slice(3)]).toEqual(['bi', 'ledger', 'asset', 'mint', '--definition', 'DFABI-ID', '--account', 'acct-BI', '--quantity', '1000']);
+    expect(grant!.config).toBe('bank-a');
+    expect(grant!.args.slice(3)).toEqual(['ledger', 'account', 'permission', 'grant', '--id', 'acct-BI']);
+    const sid = (r.context as { sid: string }).sid;
+    expect(JSON.parse(grant!.stdin!)).toEqual({ name: 'CanExecuteSettlement', payload: { debited_asset: 'RD-ID#acct-A', intent_hash: DVP_INTENT, settlement_id: sid } });
+    expect(settle!.config).toBe('bi');
+    expect(settle!.args.slice(3)).toEqual(['app', 'settlement', 'dvp', '--settlement-id', sid,
+      '--delivery-asset', 'DFABI-ID', '--delivery-quantity', '2', '--delivery-from', 'acct-BI', '--delivery-to', 'acct-A',
+      '--payment-asset', 'RD-ID', '--payment-quantity', (2n * PRICE_PER_UNIT).toString(), '--payment-from', 'acct-A', '--payment-to', 'acct-BI']);
+  });
+
+  it('award: BI tops up its DFABI stock in batches of at least 1000, never per award', async () => {
+    const mints = async (dfabi: string, amount: string) => {
+      const f = fake({ dfabi });
+      await createIroha3Adapter(state, f.cli).run(req('award', 'BI', 'A', amount), BigInt(amount), () => {});
+      return f.submits().filter((x) => x.includes('asset mint')).map((x) => x.split('--quantity ')[1]);
+    };
+    expect(await mints('5', '5')).toEqual([]);
+    expect(await mints('3', '5')).toEqual(['1000']);
+    expect(await mints('0', '1500')).toEqual(['1500']);
+  });
+
+  it('award: a bank that cannot pay stops it before BI mints', async () => {
+    const f = fake({ balance: '5' });
+    await expect(createIroha3Adapter(state, f.cli).run(req('award', 'BI', 'A', '1'), 1n, () => {})).rejects.toThrow('Saldo RD Bank Mandala tidak cukup');
+    expect(f.submits()).toEqual([]);
   });
 
   it('emits four labelled steps and reads the block', async () => {

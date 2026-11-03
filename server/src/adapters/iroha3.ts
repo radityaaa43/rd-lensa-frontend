@@ -31,6 +31,7 @@ const SUBMIT = ['--machine', '--fee-payer', 'authority'];
 const CALL_MS = 180_000;
 const DEADLINE = 120_000;
 const READ_WAIT_MS = 20_000;
+const BI_BATCH = 1000n; // smallest DFABI top-up BI mints to its own stock
 const FLOW_IDS = Object.keys(FLOWS) as FlowId[];
 const INTENT_PY = fileURLToPath(new URL('./iroha3-intent.py', import.meta.url));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -129,9 +130,9 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
   function plan(req: FlowRequest, amount: bigint, sid?: string): { signer: PartyId; args: string[] } {
     const f = FLOWS[req.flow];
     const q = amount.toString();
-    if (f.issuer) return { signer: 'BI', args: ['ledger', 'asset', 'mint', '--definition', s.assets[f.asset], '--account', acct[req.to], '--quantity', q] };
+    if (f.issuer && !f.dvp) return { signer: 'BI', args: ['ledger', 'asset', 'mint', '--definition', s.assets[f.asset], '--account', acct[req.to], '--quantity', q] };
     if (!f.dvp) return { signer: req.from, args: ['ledger', 'asset', 'transfer', '--definition', s.assets[f.asset], '--account', acct[req.from], '--to', acct[req.to], '--quantity', q] };
-    // Same economics as the other models: the seller (from) gives `amount` DFABI, the buyer (to) pays amount * PRICE_PER_UNIT RD.
+    // Same economics as the other models: the seller (from; BI in an award) gives `amount` DFABI, the buyer (to) pays amount * PRICE_PER_UNIT RD.
     return { signer: req.from, args: ['app', 'settlement', 'dvp', '--settlement-id', sid!,
       '--delivery-asset', s.assets.DFABI, '--delivery-quantity', q, '--delivery-from', acct[req.from], '--delivery-to', acct[req.to],
       '--payment-asset', s.assets.RD, '--payment-quantity', (amount * PRICE_PER_UNIT).toString(), '--payment-from', acct[req.to], '--payment-to', acct[req.from]] };
@@ -183,10 +184,15 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     const dvp = FLOWS[req.flow].dvp;
     const sid = dvp ? `dvp_${Date.now()}_${randomBytes(3).toString('hex')}` : undefined;
     const p = plan(req, amount, sid);
-    if (dvp) await Promise.all([ensureBalance(req.from, 'DFABI', amount), ensureBalance(req.to, 'RD', amount * PRICE_PER_UNIT)]);
+    const award = FLOWS[req.flow].issuer && dvp; // BI mints the DFABI to itself, then sells it: no stock check
+    if (dvp) await Promise.all([award ? undefined : ensureBalance(req.from, 'DFABI', amount), ensureBalance(req.to, 'RD', amount * PRICE_PER_UNIT)]);
     else if (!FLOWS[req.flow].issuer) await ensureBalance(req.from, FLOWS[req.flow].asset, amount);
     const t0 = Date.now();
     let hash: string, block: number;
+    if (award) { // BI tops up its own DFABI stock in batches (ARCHITECTURE §7.1), never per award; waits until applied, counted in step 0
+      const stock = await balanceOf(req.from, 'DFABI');
+      if (stock < amount) await mint(req.from, 'DFABI', amount - stock > BI_BATCH ? amount - stock : BI_BATCH);
+    }
     if (dvp) {
       // The buyer consents to exactly this DvP: CanExecuteSettlement on its RD balance, bound to the settlement id and the
       // intent hash of the whole instruction (core isi/settlement.rs:563-627). Keys in canonical (sorted) order.
@@ -334,7 +340,8 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     const base = { id: row.entrypoint_hash, at: new Date(row.timestamp_ms).toISOString(), block: null, verdict: 'clear' as const }; // block: the account route does not carry it
     if (d.kind === 'dvp') {
       const counterparty = { from: d.delivery.from, to: d.delivery.to };
-      return { ...base, flow: 'dvp', asset: 'DFABI', role: roleFromParties(party, counterparty, false), amount: d.delivery.quantity, rdAmount: d.payment.quantity, counterparty };
+      const award = counterparty.from === 'BI'; // the seller leg is owned by BI: BI is the only one that mints DFABI to itself
+      return { ...base, flow: award ? 'award' : 'dvp', asset: 'DFABI', role: roleFromParties(party, counterparty, award), amount: d.delivery.quantity, rdAmount: d.payment.quantity, counterparty };
     }
     const issue = d.kind === 'mint';
     const counterparty = issue ? { from: partyOf.get(row.authority) ?? null, to: d.to } : { from: d.from, to: d.to };
@@ -381,13 +388,13 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     return { nodes, links };
   }
 
-  const mint = async (to: BankId, asset: 'RD' | 'DFABI', amount: bigint) =>
+  const mint = async (to: PartyId, asset: 'RD' | 'DFABI', amount: bigint) =>
     cli('bi', [...SUBMIT, 'ledger', 'asset', 'mint', '--definition', s.assets[asset], '--account', acct[to], '--quantity', amount.toString()]);
 
   const adapter: ModelAdapter & { fund: typeof mint } = {
     id: 'iroha3',
     stepLabels: ['Tanda tangan & kirim ke Torii', 'Diterima pipeline', 'Commit di blok (3 dari 4 validator)', 'Tersalin ke 4 validator'],
-    capabilities: () => ({ ...Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])), award: { enabled: false, reason: 'Belum dibangun' } }) as Record<FlowId, Capability>,
+    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
     async health() {
       const down: string[] = [];
       let blocks = 0;

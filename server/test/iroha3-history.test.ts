@@ -32,7 +32,7 @@ const state: Iroha3State = {
 const seed = generateKeyPairSync('ed25519').privateKey.export({ format: 'der', type: 'pkcs8' }).subarray(-32);
 const auth = makeAuth(seed, '0x02', `hash:${'11'.repeat(32)}`);
 
-function setup(opts: { box?: Record<string, string>; fetchFail?: (url: URL) => Response | Error | undefined; lists?: typeof LISTS; delay?: number } = {}) {
+function setup(opts: { box?: Record<string, string>; fetchFail?: (url: URL) => Response | Error | undefined; lists?: typeof LISTS; delay?: number; ctx?: typeof ctx } = {}) {
   const calls: { url: URL; headers: Record<string, string> }[] = [];
   const cliCalls: { config: string; args: string[] }[] = [];
   // Torii answers one account query at a time: `bad` counts every moment a list read overlapped another list read or a decode.
@@ -64,7 +64,7 @@ function setup(opts: { box?: Record<string, string>; fetchFail?: (url: URL) => R
     return Response.json({ items: all.slice(offset, offset + Number(url.searchParams.get('limit'))) });
   }) as typeof fetch;
   const auths = Object.fromEntries((['BI', 'A', 'B', 'C'] as PartyId[]).map((p) => [p, auth])) as Record<PartyId, typeof auth>;
-  const adapter = createIroha3Adapter(state, cli, { init: async () => ({ auth: auths, ctx }), fetch: fetchFake });
+  const adapter = createIroha3Adapter(state, cli, { init: async () => ({ auth: auths, ctx: opts.ctx ?? ctx }), fetch: fetchFake });
   return { adapter, calls, cliCalls, track };
 }
 
@@ -79,6 +79,19 @@ describe('iroha3 history', () => {
     });
     expect(items[1]).toMatchObject({ flow: 'rd-transfer', asset: 'RD', amount: '100', rdAmount: null, counterparty: { from: 'A', to: 'B' } });
     expect(items[2]).toMatchObject({ flow: 'rd-issue', asset: 'RD', amount: '1000', counterparty: { from: 'BI', to: 'A' } });
+  });
+
+  test('a DvP whose seller leg is BI is an award, a bank-to-bank DvP stays dvp', async () => {
+    // swap the BI and A keys: the DVP fixture (delivery A -> B) then reads as BI -> B
+    const swapped = { ...ctx, parties: { ...ctx.parties, BI: ctx.parties.A, A: ctx.parties.BI } };
+    const award = await setup({ ctx: swapped }).adapter.history('C', 20);
+    expect(award[0]).toEqual({
+      id: H.dvp, at: new Date(3000).toISOString(), block: null, flow: 'award', asset: 'DFABI', role: 'outsider', verdict: 'clear',
+      amount: '1', rdAmount: '1000000', counterparty: { from: 'BI', to: 'B' },
+    });
+    const roles = async (p: PartyId) => (await setup({ ctx: swapped }).adapter.history(p, 1)).map((i) => i.role);
+    expect([await roles('BI'), await roles('B')]).toEqual([['issuer'], ['receiver']]);
+    expect((await setup().adapter.history('C', 1))[0]!.flow).toBe('dvp');
   });
 
   test('role comes from the party\'s own read', async () => {

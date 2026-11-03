@@ -103,6 +103,19 @@ describe('iroha3 history + network live', () => {
     }
   });
 
+  it('award BI -> A: one item per party, history == lens', async () => {
+    const a = (await load())!;
+    const req: FlowRequest = { model: 'iroha3', flow: 'award', from: 'BI', to: 'A', amount: '1' };
+    const res = await a.run(req, 1n, () => {});
+    for (const p of PARTY_IDS) {
+      const items = (await a.history(p, 20)).filter((i) => i.id === res.txHash);
+      expect(items, `${p} history has the award once`).toHaveLength(1);
+      const lens = await a.lens(req, res, p);
+      expect(items[0]).toMatchObject({ flow: 'award', asset: 'DFABI', amount: '1', rdAmount: String(PRICE_PER_UNIT), counterparty: { from: 'BI', to: 'A' }, role: lens.role });
+      expect(lens).toMatchObject({ verdict: 'clear', amount: '1', rdAmount: String(PRICE_PER_UNIT), counterparty: { from: 'BI', to: 'A' } });
+    }
+  });
+
   it('network() matches kubectl get pods (4 validators, all Ready)', async () => {
     const a = (await load())!;
     const n = await a.network();
