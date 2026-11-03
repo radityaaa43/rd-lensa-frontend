@@ -151,10 +151,10 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
     return found.map((f, i) => ({ ...f, balance: bals[i] }));
   }
 
-  // BI's own stealth addresses holding DFABI, found with BI's view key like a bank's.
-  async function biHoldings(): Promise<Holding[]> {
-    const found = scan(ofToken(await refresh(), d.bond), biKeys!.viewKey, biKeys!.spendKey);
-    const bals = await Promise.all(found.map((f) => balance('DFABI', f.stealthAddress)));
+  // BI's own stealth addresses holding the asset (DFABI inventory, RD award receipts), found with BI's view key like a bank's.
+  async function biHoldings(asset: 'RD' | 'DFABI' = 'DFABI'): Promise<Holding[]> {
+    const found = scan(ofToken(await refresh(), tokenOf(asset)), biKeys!.viewKey, biKeys!.spendKey);
+    const bals = await Promise.all(found.map((f) => balance(asset, f.stealthAddress)));
     return found.map((f, i) => ({ ...f, balance: bals[i] }));
   }
 
@@ -438,10 +438,11 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
       if (!bank) { // BI: the banks' view keys
         const row = biRows(chainId, [main], holders, kind)[0];
         if (!row) {
-          // BI's own inventory top-up (addressed to BI's stealth address): BI reads it with its own keys, so it is not a regulator view. Stays flow:null.
+          // BI's own inventory top-up (addressed to BI's stealth address): BI holds the view key of its own addresses, so it reads sender and receiver in full.
           if (biKeys && !dvp && scan([main], biKeys.viewKey, biKeys.spendKey).length) {
-            const from = partyOf(read(chainId, main, biKeys.viewKey, 'bond').sender);
-            return { ...base, flow: null, role: roleFromParties('BI', { from, to: null }, true), verdict: 'clear', counterparty: { from, to: null } };
+            const counterparty: Counterparty = { from: partyOf(read(chainId, main, biKeys.viewKey, kind).sender), to: 'BI' };
+            const issue = counterparty.from === 'BI';
+            return { ...base, flow: flowLabel(false, kind, issue), role: roleFromParties('BI', counterparty, issue), verdict: 'clear', counterparty };
           }
           return { ...base, flow: null, role: 'regulator', verdict: 'partial', counterparty: null }; // addressed to none of the banks: only token and amount are readable
         }
@@ -502,7 +503,8 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
       }
     },
     async balanceOf(party, asset) {
-      if (party === 'BI') return 0n; // BI holds no balance, it issues
+      // BI: the sum over every stealth address its own view key finds (inventory top-ups and award receipts); without a BI key, nothing to read.
+      if (party === 'BI') return biKeys ? (await biHoldings(asset)).reduce((m, h) => m + h.balance, 0n) : 0n;
       return (await holdings(party, asset)).reduce((m, h) => (h.balance > m ? h.balance : m), 0n);
     },
     run,

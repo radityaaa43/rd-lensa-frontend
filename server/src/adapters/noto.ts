@@ -190,6 +190,13 @@ export async function notoHistory(party: PartyId, want: number, c: NotoScan): Pr
   return Object.assign(items, more && pages >= SCAN_PAGES_MAX && items.length < want ? { truncated: true as const } : {}, pending.length ? { pending } : {});
 }
 
+// BI holds an asset under two identities (cash issuer, bond custodian): its balance is the sum over both, read from its own node.
+export async function biBalance(token: { balanceOf(v: { lookup: string }, o: { account: string }): Promise<{ totalBalance: string | number | bigint }> }, identities: { lookup: string }[], asset: string): Promise<bigint> {
+  const distinct = [...new Map(identities.map((v) => [v.lookup, v])).values()]; // one identity under both roles counts once
+  const parts = await Promise.all(distinct.map(async (v) => BigInt((await withDeadline(token.balanceOf(v, { account: v.lookup }), BALANCE_MS, `Saldo ${asset} BI`)).totalBalance)));
+  return parts.reduce((a, b) => a + b, 0n);
+}
+
 export function createNotoAdapter(dataDir: string): ModelAdapter {
   let platform: Promise<Platform> | undefined;
   const plat = () => (platform ??= loadPlatform(dataDir).catch((e) => {
@@ -204,10 +211,7 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
   async function balanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
     const p = await plat();
     const token = asset === 'RD' ? p.notoCash : p.notoBond;
-    if (party === 'BI') {
-      const v = asset === 'RD' ? p.node1.getVerifiers(p.data.participants.cashIssuer)[0] : p.bondCustodian;
-      return BigInt((await withDeadline(token.balanceOf(v, { account: v.lookup }), BALANCE_MS, `Saldo ${asset} BI`)).totalBalance);
-    }
+    if (party === 'BI') return biBalance(token, [p.node1.getVerifiers(p.data.participants.cashIssuer)[0]!, p.bondCustodian], asset);
     const b = bank(p, party);
     return BigInt((await withDeadline(token.using(b.client).balanceOf(b.verifier, { account: b.verifier.lookup }), BALANCE_MS, `Saldo ${asset} ${party}`)).totalBalance);
   }

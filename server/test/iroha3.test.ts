@@ -55,6 +55,15 @@ describe('iroha3 intent hash', () => {
   });
 });
 
+describe('iroha3 BI balance', () => {
+  it('reads BI\'s own account on BI\'s own node', async () => {
+    const f = fake({ balance: '42' });
+    expect(await createIroha3Adapter(state, f.cli).balanceOf('BI', 'RD')).toBe(42n);
+    expect(f.calls.at(-1)).toMatchObject({ config: 'bi' });
+    expect(f.calls.at(-1)!.args).toEqual(expect.arrayContaining(['--definition', 'RD-ID', '--account', 'acct-BI']));
+  });
+});
+
 describe('iroha3 run', () => {
   it('maps every flow to its CLI command, signed by the right party', async () => {
     const f = fake();

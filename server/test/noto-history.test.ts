@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createNotoAdapter, newNotoCache, notoHistory, notoItem, sellerFor, receiptPage, type EventLike, type NotoClient, type NotoGroup, type NotoLeg, type NotoScan, type ReceiptLike } from '../src/adapters/noto.ts';
+import { biBalance, createNotoAdapter, newNotoCache, notoHistory, notoItem, sellerFor, receiptPage, type EventLike, type NotoClient, type NotoGroup, type NotoLeg, type NotoScan, type ReceiptLike } from '../src/adapters/noto.ts';
 import type { NotoTxView } from '../../../besu/noto+pente/bond/src/lib/receipts.ts';
 import type { PartyId } from '../src/domain.ts';
 
@@ -235,5 +235,19 @@ describe('noto capabilities', () => {
     const caps = createNotoAdapter('/nonexistent').capabilities(); // the platform loads lazily: nothing is read here
     expect(caps.award.enabled).toBe(true);
     for (const c of Object.values(caps)) expect(c.enabled).toBe(true);
+  });
+});
+
+describe('biBalance (Noto BI = cash issuer + bond custodian)', () => {
+  const token = (b: Record<string, string>) => ({ balanceOf: async (_v: unknown, o: { account: string }) => ({ totalBalance: b[o.account] ?? '0' }) });
+  const issuer = { lookup: 'issuer' };
+  const custodian = { lookup: 'custodian' };
+
+  it('sums both identities for each asset', async () => {
+    expect(await biBalance(token({ issuer: '70', custodian: '5' }), [issuer, custodian], 'RD')).toBe(75n);
+    expect(await biBalance(token({ issuer: '0', custodian: '400' }), [issuer, custodian], 'DFABI')).toBe(400n);
+  });
+  it('counts one identity held under both roles once', async () => {
+    expect(await biBalance(token({ issuer: '9' }), [issuer, { lookup: 'issuer' }], 'RD')).toBe(9n);
   });
 });
