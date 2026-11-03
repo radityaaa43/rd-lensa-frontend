@@ -13,6 +13,7 @@ const TXS = JSON.parse(process.env.AWARD_TXS ?? '{}') as Record<string, string>;
 const PARTIES: P[] = ['BI', 'A', 'B', 'C'];
 const NAME: Record<P, string> = { BI: 'Bank Indonesia', A: 'Bank Mandala', B: 'Bank Nusantara', C: 'Bank Sejahtera' };
 const PATH: Record<string, string> = { zeto: 'besu/zeto', noto: 'besu/noto', stealth: 'besu/stealth', fabricx: 'fabricx', iroha3: 'iroha3' };
+const OUTSIDER: Record<string, string> = { zeto: 'sealed', noto: 'sealed', fabricx: 'sealed', stealth: 'partial', iroha3: 'clear' };
 const VERDICT: Record<string, string> = { clear: 'Terbaca utuh', reported: 'Laporan terverifikasi', notarised: 'Ditandatangani BI', viewkey: 'Dipetakan via view key', partial: 'Nominal terlihat, pihak tidak', sealed: 'Tersegel' };
 const ROLE: Record<string, string> = { issuer: 'Penerbit & pengawas', sender: 'Penjual DFABI', receiver: 'Pembeli DFABI', regulator: 'Pengawas', outsider: 'Tidak terlibat' };
 const nf = new Intl.NumberFormat('id-ID');
@@ -63,8 +64,11 @@ for (const model of Object.keys(PATH)) {
     const bi = items.BI!;
     expect(bi, 'BI history has the award').not.toBeNull();
     expect(bi).toMatchObject({ flow: 'award', role: 'issuer' });
-    expect(bi.verdict).not.toBe('reported');
-    expect(items[bi.counterparty!.to!]?.role).toBe('receiver');
+    expect(bi.verdict).toBe('clear');
+    const buyer = bi.counterparty!.to!;
+    expect(items[buyer]).toMatchObject({ role: 'receiver', verdict: 'clear' });
+    // R1: an outsider bank reads only what its model lets it (sealed, Stealth amounts only, Iroha 3 everything)
+    for (const q of PARTIES.filter((x) => x !== 'BI' && x !== buyer)) if (items[q]) expect(items[q], `outsider ${q}`).toMatchObject({ role: 'outsider', verdict: OUTSIDER[model] });
 
     await page.goto(`${base}/lensa/${encodeURIComponent(tx)}?pihak=BI`);
     await expect(page.locator('.lens2')).toHaveCount(4);
