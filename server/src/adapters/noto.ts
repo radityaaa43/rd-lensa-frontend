@@ -62,6 +62,9 @@ import { holdBack, receiptPage } from './besu-network.ts';
 export interface NotoLeg { source: 'cash' | 'bond'; read: NotoTxView }
 export interface NotoGroup { hash: string; block: number; at: string | null; legs: NotoLeg[]; dvp?: boolean } // dvp: the events say two locks were spent
 
+// The DFABI seller of a dvp-type flow: BI's custodian for an award (its unsold supply), else the selling bank's investor.
+export const sellerFor = (p: Platform, req: FlowRequest) => (req.flow === 'award' ? custodianOf(p) : p.investors.get(INVESTOR[req.from as BankId])!);
+
 // One base-ledger tx as the party's own node reads it. `known` maps an address / lookup to its party.
 export function notoItem(party: PartyId, g: NotoGroup, known: Map<string, PartyId>): HistoryItem {
   const bond = g.legs.find((l) => l.source === 'bond');
@@ -79,7 +82,10 @@ export function notoItem(party: PartyId, g: NotoGroup, known: Map<string, PartyI
     counterparty = c;
   } else counterparty = side(g.legs[0]!.read);
   const main = dvp ? bond : g.legs[0]!;
-  const award = dvp && counterparty?.from === 'BI'; // the seller of the bond leg is BI's custodian: BI sells unsold supply
+  // award: the bond leg's seller is BI's custodian (BI sells unsold supply). Read only from real owners (the bond leg's locked
+  // inputs, or the cash leg's recipient), never from the receipt sender: the custodian executes the atom of every DvP.
+  const seller = bond?.read.visible && bond.read.from.length ? who(bond.read.from) : cash?.read.visible && cash.read.to.length ? who(cash.read.to) : null;
+  const award = dvp && seller === 'BI';
   const asset = dvp ? 'DFABI' : main!.source === 'cash' ? 'RD' : 'DFABI';
   // DFABI issuance is a transfer from BI's custodian (BondTracker only mints to the custodian), so "from BI" is an issue too.
   const issue = !dvp && counterparty?.from === 'BI';
@@ -253,7 +259,7 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     };
 
     if (flow.dvp) {
-      const seller = req.flow === 'award' ? custodianOf(p) : bank(p, req.from as BankId), buyer = bank(p, to);
+      const seller = sellerFor(p, req), buyer = bank(p, to);
       const tradeId = randomUUID();
       let executedAt: number | undefined;
       const log = (m: string) => {

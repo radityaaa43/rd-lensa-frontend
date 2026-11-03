@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createNotoAdapter, newNotoCache, notoHistory, notoItem, receiptPage, type EventLike, type NotoClient, type NotoGroup, type NotoLeg, type NotoScan, type ReceiptLike } from '../src/adapters/noto.ts';
+import { createNotoAdapter, newNotoCache, notoHistory, notoItem, sellerFor, receiptPage, type EventLike, type NotoClient, type NotoGroup, type NotoLeg, type NotoScan, type ReceiptLike } from '../src/adapters/noto.ts';
 import type { NotoTxView } from '../../../besu/noto+pente/bond/src/lib/receipts.ts';
 import type { PartyId } from '../src/domain.ts';
 
@@ -107,9 +107,23 @@ describe('notoItem, more shapes', () => {
     expect(notoItem('A', group([{ source: 'cash', read: hidden() }, { source: 'bond', read: hidden() }]), known)).toMatchObject({ flow: null, role: 'outsider', verdict: 'sealed', rdAmount: null });
   });
 
-  it('an award the buyer reads through the receipt sender only (locked inputs unreadable) is still an award', () => {
+  it('an award the buyer reads without the locked inputs is still an award: the cash leg names the custodian as recipient', () => {
     const g = group([{ source: 'bond', read: read({ amount: 1n, to: ['0xb'], sender: '0xbi' }) }, { source: 'cash', read: read({ amount: 5n, from: ['0xb'], to: ['0xbi'] }) }]);
     expect(notoItem('B', g, known)).toMatchObject({ flow: 'award', role: 'receiver', counterparty: { from: 'BI', to: 'B' }, rdAmount: '5' });
+  });
+
+  it('a bank DvP whose atom BI executed stays a dvp: the receipt sender (executor) never makes an award', () => {
+    const g = group([{ source: 'bond', read: read({ amount: 1n, to: ['0xb'], sender: '0xbi' }) }, { source: 'cash', read: read({ amount: 5n, from: ['0xb'], to: ['0xa'] }) }]);
+    expect(notoItem('B', g, known)).toMatchObject({ flow: 'dvp', role: 'receiver' });
+    const onlySender = { ...group([{ source: 'bond', read: read({ amount: 1n, to: ['0xb'], sender: '0xbi' }) }]), dvp: true };
+    expect(notoItem('B', onlySender, known)).toMatchObject({ flow: 'dvp' }); // unreadable seller: fail safe to dvp, nothing leaks
+  });
+
+  it('run() sells from BI\'s custodian for an award and from the bank for a dvp', () => {
+    const inv = { name: 'investor1', node: 'node2' };
+    const p = { node1: {}, bondCustodian: { lookup: 'bondCustodian@node1' }, investors: new Map([['investor1', inv]]) } as never;
+    expect(sellerFor(p, { model: 'noto', flow: 'award', from: 'BI', to: 'A', amount: '1' })).toMatchObject({ name: 'bondCustodian', node: 'node1' });
+    expect(sellerFor(p, { model: 'noto', flow: 'dvp', from: 'A', to: 'B', amount: '1' })).toBe(inv);
   });
 
   it('BI issuing DFABI (a transfer from its custodian) reads it clear as the issuer', () => {
