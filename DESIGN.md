@@ -235,7 +235,7 @@ Every element of both references, and where it lands. A drop is deliberate and g
 
 Three large tiles in a row (stack on mobile), each a `<button>` inside a list:
 
-- Tint background (`--tint-besu|fabricx|iroha`), `--r-card`, black 48px icon tile top-left (Ref B coin tile), platform name in `--t-h2`, one-line tagline, footer row with node count and a live status dot.
+- Tint background (`--tint-besu|fabricx|iroha`), `--r-card`, black 48px tile with the platform letter (B, F, I) top-left (Ref B coin tile; letters, not glyphs, by decision), platform name in `--t-h2`, one-line tagline, footer row with node count and a live status dot.
 - Copy: "Besu" + "Tiga model privasi: Zeto, Noto, Stealth" · "Fabric-X" + "Bukti ZK dan pseudonim Idemix, endorsement 3 dari 4" · "Iroha 3" + "Lane publik, tanpa privasi".
 - States: hover raises the border to `--control`; focus ring; pressed navigates. If `/api/health` shows the platform unreachable: status dot `--down` + "Tidak terjangkau", tile stays clickable (the screens show their own error state).
 - Page headline (`--t-display`): "Satu transaksi, empat sudut pandang". Sub: "Pilih platform, lalu lihat transaksi yang sama dari sisi BI dan tiga bank." (UX H3)

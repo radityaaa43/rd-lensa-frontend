@@ -63,7 +63,7 @@ and fe's headless checks (no horizontal scroll, 0 console errors). The live pass
 
 | Criterion | Score 1–5 | Note |
 |---|---|---|
-| Time to first insight | 4 | The Landing headline and "Siapa melihat" row answer P3/P4. Platform tiles still show a letter instead of an icon |
+| Time to first insight | 4 | The Landing headline and "Siapa melihat" row answer P3/P4. Platform tiles show a letter instead of an icon: accepted, decision (DESIGN.md §7.1) |
 | Privacy clarity | 5 | Lensa with 4 columns, own column "Pihak Anda", one seal chip for a fully sealed row, "Kenapa tersegel?" |
 | Wayfinding | 5 | Breadcrumb, model, party and h1 with the party name are always visible |
 | Party switching | 5 | Pills keep the screen. A run keeps "Dikirim oleh {original}" |
