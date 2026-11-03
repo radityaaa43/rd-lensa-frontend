@@ -7,7 +7,7 @@ import { FLOW_NAME } from './copy.ts';
 import { flowOf, requestOf, type Asset, type DemoAction, type DemoState } from './demoState.ts';
 
 type ModelRoute = Extract<Route, { page: 'model' }>;
-const VERB = (issuer: boolean, dvp: boolean) => (issuer ? 'Terbitkan' : dvp ? 'Jalankan DvP' : 'Kirim transaksi');
+const VERB = (issuer: boolean, dvp: boolean) => (dvp ? (issuer ? 'Jalankan penjualan' : 'Jalankan DvP') : issuer ? 'Terbitkan' : 'Kirim transaksi');
 const ASSETS: [Asset, string][] = [['RD', 'Rupiah Digital (RD)'], ['DFABI', 'Obligasi DFABI']];
 
 // DESIGN.md §7.9: the form for Transfer (asset tabs) and DvP. The sender is the route party, never a form field.
@@ -45,7 +45,7 @@ export function Compose({ meta, route, s, dispatch, dvp, onSend }: {
         <h2>{FLOW_NAME[req.flow]}</h2>
         <div className="fields2">
           <div>
-            <label htmlFor="to">{f.issuer ? 'Diterbitkan untuk' : dvp ? 'Bank pembeli' : 'Bank penerima'}</label>
+            <label htmlFor="to">{dvp ? 'Bank pembeli' : f.issuer ? 'Diterbitkan untuk' : 'Bank penerima'}</label>
             <select id="to" value={req.to} disabled={busy} onChange={(e) => dispatch({ type: 'to', to: e.target.value as PartyId })}>
               {BANKS.filter((b) => b !== party).map((b) => <option key={b} value={b}>{name(b)}</option>)}
             </select>

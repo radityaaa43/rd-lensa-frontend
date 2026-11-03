@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import type { HistoryItem } from '../../../server/src/adapter.ts';
 import type { PartyId } from '../../../server/src/domain.ts';
-import { cells, notReported } from './HistoryTable.tsx';
+import { cells, glyphOf, notReported } from './HistoryTable.tsx';
 
 const name = (p: PartyId) => ({ BI: 'Bank Indonesia', A: 'Bank Mandala', B: 'Bank Nusantara', C: 'Bank Sejahtera' })[p];
 const base: HistoryItem = {
@@ -16,6 +16,21 @@ test('a readable transfer shows every field and "—" for the RD leg', () => {
   expect(c.from).toEqual({ t: 'text', text: 'Bank Mandala' });
   expect(c.to).toEqual({ t: 'text', text: 'Bank Nusantara' });
   expect(c.rd).toEqual({ t: 'na' });
+});
+
+test('an award row is a DvP-type row: its RD leg is shown or sealed (never "—") and it gets the swap glyph', () => {
+  const award: HistoryItem = { ...base, flow: 'award', asset: 'DFABI', role: 'receiver', amount: '2', rdAmount: '2000000', counterparty: { from: 'BI', to: 'B' } };
+  const c = cells(award, name);
+  expect(c.flow).toEqual({ t: 'text', text: 'Penjualan perdana DFABI ↔ RD' });
+  expect(c.rd).toEqual({ t: 'text', text: 'Rp 2.000.000' });
+  expect(cells({ ...award, rdAmount: null }, name).rd).toEqual({ t: 'sealed' });
+  expect(glyphOf(award)).toBe('dvp');
+});
+
+test('a BI top-up mint (dfabi-issue BI->BI) is named "Penerbitan ke persediaan BI"; an issue to a bank keeps its name', () => {
+  const mint: HistoryItem = { ...base, flow: 'dfabi-issue', asset: 'DFABI', role: 'issuer', amount: '5', counterparty: { from: 'BI', to: 'BI' } };
+  expect(cells(mint, name).flow).toEqual({ t: 'text', text: 'Penerbitan ke persediaan BI' });
+  expect(cells({ ...mint, counterparty: { from: 'BI', to: 'A' } }, name).flow).toEqual({ t: 'text', text: 'Penerbitan seri DFABI' });
 });
 
 test('a row with every content field null is one sealed row, not a chip per field', () => {

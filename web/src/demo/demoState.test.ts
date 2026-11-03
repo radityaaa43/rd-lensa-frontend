@@ -12,11 +12,12 @@ describe('demo request', () => {
     expect(requestOf(base(), 'zeto', 'C', false)).toMatchObject({ model: 'zeto', flow: 'rd-transfer', from: 'C' });
   });
 
-  test('the asset picks RD or DFABI flows; DvP is always dvp', () => {
+  test('the asset picks RD or DFABI flows; the DvP screen is dvp for a bank and award for BI', () => {
     const d = demoReducer(base(), { type: 'asset', asset: 'DFABI' });
     expect(flowOf(false, 'BI', d.asset)).toBe('dfabi-issue');
     expect(flowOf(false, 'A', d.asset)).toBe('dfabi-transfer');
     expect(flowOf(true, 'A', 'RD')).toBe('dvp');
+    expect(flowOf(true, 'BI', 'RD')).toBe('award');
   });
 
   test('the receiver is never the sender and never BI', () => {

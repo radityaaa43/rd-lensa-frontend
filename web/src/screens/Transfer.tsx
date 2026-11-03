@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FlowRequest, ModelId } from '../../../server/src/domain.ts';
+import { isDvpFlow, type FlowRequest, type ModelId } from '../../../server/src/domain.ts';
 import { TYPICAL_SECONDS } from '../demo/copy.ts';
 import type { Meta } from '../api.ts';
 import type { Route } from '../app/route.ts';
@@ -8,7 +8,6 @@ import { Compose } from '../demo/Compose.tsx';
 import { Timeline } from '../demo/Timeline.tsx';
 import type { DemoAction, DemoState } from '../demo/demoState.ts';
 import { shortHash } from '../format.ts';
-import { Empty } from '../ui/States.tsx';
 
 type ModelRoute = Extract<Route, { page: 'model' }>;
 const BUSY = 'Transaksi lain sedang diproses';
@@ -36,12 +35,9 @@ export function Transfer({ meta, route, run, dispatch, send, stressRunning, dvp 
   const errRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (run.phase === 'error') errRef.current?.focus(); }, [run.phase]);
 
-  if (dvp && route.party === 'BI') {
-    return <Empty title="DvP dijalankan oleh bank"><p>Pilih bank di Pihak untuk menjalankan DvP DFABI ↔ RD.</p></Empty>;
-  }
-  // a run is shown on the screen it belongs to: same model, and DvP vs transfer
+  // a run is shown on the screen it belongs to: same model, and DvP/award vs transfer
   const req = run.req;
-  const mine = req !== null && req.model === route.model && (req.flow === 'dvp') === dvp;
+  const mine = req !== null && req.model === route.model && isDvpFlow(req.flow) === dvp;
   const stressHoldsLock = stressRunning && run.error === BUSY;
 
   return (

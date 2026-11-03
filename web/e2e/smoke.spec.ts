@@ -35,6 +35,29 @@ test('dvp lens: the RD leg comes from each party\'s lens, sealed for the outside
   await expect(outsider).not.toContainText('Rp');
 });
 
+// ARCHITECTURE.md §7: BI's DvP screen is the primary-market sale; BI and the buyer read both legs, an outsider bank reads nothing
+test('award: BI sells DFABI to a bank; buyer and outsider lenses, and a bank keeps its DvP', async ({ page }) => {
+  await page.goto('/besu/zeto/dvp?pihak=BI');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Penjualan perdana');
+  await expect(page.getByRole('link', { name: 'Penjualan perdana', exact: true })).toHaveAttribute('aria-current', 'page');
+  await page.locator('#to').selectOption('B');
+  await page.locator('#amount').fill('2');
+  await page.getByRole('button', { name: 'Jalankan penjualan', exact: true }).click();
+  await page.getByRole('link', { name: 'Buka di lensa' }).click();
+  const bi = page.getByRole('region', { name: 'Bank Indonesia' });
+  await expect(bi).toContainText('Penerbit & pengawas');
+  await expect(bi.locator('.lrd')).toContainText('Rp 2.000.000');
+  const buyer = page.getByRole('region', { name: 'Bank Nusantara' });
+  await expect(buyer).toContainText('Pembeli DFABI');
+  await expect(buyer.locator('.lrd')).toContainText('Rp 2.000.000');
+  const outsider = page.getByRole('region', { name: 'Bank Sejahtera' });
+  await expect(outsider.locator('details.seal.row')).toHaveCount(1);
+  await expect(outsider).not.toContainText('Rp');
+  await page.goto('/besu/zeto/dvp?pihak=A');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('DvP');
+  await expect(page.getByRole('button', { name: 'Jalankan DvP', exact: true })).toBeEnabled();
+});
+
 test('stress run on Ringan shows results and a CSV with the right header', async ({ page }) => {
   await page.goto('/besu/zeto/tps');
   await page.getByRole('button', { name: '50 tx' }).click();

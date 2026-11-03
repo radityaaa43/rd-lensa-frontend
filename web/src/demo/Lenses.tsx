@@ -1,5 +1,5 @@
 import type { HistoryItem } from '../../../server/src/adapter.ts';
-import type { ModelId, PartyId } from '../../../server/src/domain.ts';
+import { isDvpFlow, type ModelId, type PartyId } from '../../../server/src/domain.ts';
 import type { Meta } from '../api.ts';
 import { shortHash, splitCode } from '../format.ts';
 import { NOT_REPORTED, Verdict, cells, notReported, type Cell } from '../ui/HistoryTable.tsx';
@@ -36,7 +36,7 @@ export function Lenses({ meta, model, cols, active, txHash }: { meta: Meta; mode
         const head = (
           <header>
             <h3>{name(col.party)}{mine && <span className="you">Pihak Anda</span>}</h3>
-            <p className="muted">{col.kind === 'view' ? `${roleLabel(col.item.role, col.item.flow === 'dvp')} · ` : ''}{nodeLabel(model, meta.parties[col.party].node)}</p>
+            <p className="muted">{col.kind === 'view' ? `${roleLabel(col.item.role, isDvpFlow(col.item.flow))} · ` : ''}{nodeLabel(model, meta.parties[col.party].node)}</p>
           </header>
         );
         if (col.kind !== 'view') {

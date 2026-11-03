@@ -14,6 +14,9 @@ export const FLOW_NAME: Record<FlowId, string> = {
   dvp: 'DvP DFABI ↔ RD',
   award: 'Penjualan perdana DFABI ↔ RD',
 };
+// The dvp screen as party BI: the primary-market sale (ARCHITECTURE.md §7, DESIGN.md §7.9); a bank keeps "DvP" there
+export const AWARD_SCREEN = { name: 'Penjualan perdana', sub: 'Dikirim oleh {pihak}.' };
+export const MINT_TO_BI = 'Penerbitan ke persediaan BI';
 export const groupName = (flow: FlowId) => GROUPS.find((g) => g[2].includes(flow))![1];
 export const flowName = (_model: ModelId, flow: FlowId) => FLOW_NAME[flow];
 

@@ -158,9 +158,12 @@ test('award checks only the buyer RD at amount x price, never BI', async () => {
 
 test('issue flows skip the balance check', async () => {
   const z = fakeAdapter('zeto');
-  z.balanceOf = async () => 0n;
+  const asked: string[] = [];
+  z.balanceOf = async (p, asset) => { asked.push(`${p}:${asset}`); return 0n; };
   const res = await post(make({ zeto: z }), '/api/tx', { ...req, flow: 'rd-issue', from: 'BI' });
   expect(res.statusCode).toBe(202);
+  expect((await post(make({ zeto: z }), '/api/tx', { ...req, flow: 'dfabi-issue', from: 'BI' })).statusCode).toBe(202);
+  expect(asked).toEqual([]);
 });
 
 test('202 then SSE delivers 4 steps and result with 4 lenses in order BI,A,B,C', async () => {

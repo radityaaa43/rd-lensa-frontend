@@ -1,5 +1,6 @@
 import { FLOWS, PLATFORMS, PLATFORM_OF, type FlowId } from '../../../server/src/domain.ts';
 import type { Meta } from '../api.ts';
+import { AWARD_SCREEN } from '../demo/copy.ts';
 import { linkTo } from './useRoute.ts';
 import type { Route, Screen } from './route.ts';
 
@@ -25,7 +26,7 @@ function reasonOf(meta: Meta, r: ModelRoute, s: Screen): string | undefined {
     const c = caps[flows[0]];
     return flows.every((f) => !caps[f].enabled) && !c.enabled ? c.reason : undefined;
   };
-  if (s === 'dvp') return r.party === 'BI' ? 'DvP dijalankan oleh bank' : allOff(['dvp']);
+  if (s === 'dvp') return allOff([r.party === 'BI' ? 'award' : 'dvp']); // BI: the primary-market sale
   if (s === 'laporan') return r.party === 'BI' ? undefined : 'Hanya BI yang menerima laporan';
   if (s === 'transfer') {
     const issuer = r.party === 'BI';
@@ -44,14 +45,15 @@ export function Sidebar({ meta, route }: { meta: Meta; route: ModelRoute }) {
         {screens.map((s) => {
           const icon = <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICON[s]} /></svg>;
           const reason = reasonOf(meta, route, s);
+          const label = s === 'dvp' && route.party === 'BI' ? AWARD_SCREEN.name : LABEL[s];
           return reason ? (
-            <span key={s} className="nav" aria-disabled="true" title={`${LABEL[s]}: ${reason}`}>
-              {icon}<span>{LABEL[s]}</span><small>{reason}</small>
+            <span key={s} className="nav" aria-disabled="true" title={`${label}: ${reason}`}>
+              {icon}<span>{label}</span><small>{reason}</small>
             </span>
           ) : (
-            <a key={s} className="nav" aria-current={route.screen === s ? 'page' : undefined} aria-label={LABEL[s]} title={LABEL[s]}
+            <a key={s} className="nav" aria-current={route.screen === s ? 'page' : undefined} aria-label={label} title={label}
               {...linkTo({ ...route, screen: s, tx: undefined })}>
-              {icon}<span>{LABEL[s]}</span>
+              {icon}<span>{label}</span>
             </a>
           );
         })}

@@ -20,7 +20,7 @@ test('award roles: BI is the issuer (never regulator), the buyer receives, the o
 test('award: BI sells to a bank; a bank as seller or BI as buyer is rejected', () => {
   expect(validateRequest(t({ flow: 'award', from: 'BI', to: 'C', amount: '2' }))).toEqual({ ok: true, amount: 2n });
   expect(validateRequest(t({ flow: 'award', from: 'A', to: 'B' }))).toEqual({ ok: false, reason: 'Penerbitan hanya dijalankan BI' });
-  expect(validateRequest(t({ flow: 'award', from: 'BI', to: 'BI' }))).toMatchObject({ ok: false });
+  expect(validateRequest(t({ flow: 'award', from: 'A', to: 'BI' }))).toEqual({ ok: false, reason: 'Penerima harus bank' });
 });
 test.each([
   ['dvp', true], ['award', true], ['rd-issue', false], ['rd-transfer', false], ['dfabi-issue', false], ['dfabi-transfer', false], [null, false],

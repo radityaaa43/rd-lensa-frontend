@@ -18,7 +18,7 @@ export interface HistoryItem {
   at: string | null; // ISO-8601
   block: number | null;
   flow: FlowId | null;
-  asset: 'RD' | 'DFABI' | null; // flow 'dvp' => 'DFABI'
+  asset: 'RD' | 'DFABI' | null; // dvp/award => 'DFABI'
   role: Role; verdict: Verdict;
   amount: string | null; // dvp => DFABI units
   rdAmount: string | null; // dvp and award: the RD leg

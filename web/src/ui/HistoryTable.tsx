@@ -1,10 +1,10 @@
 import type { HistoryItem } from '../../../server/src/adapter.ts';
-import type { ModelId, PartyId } from '../../../server/src/domain.ts';
+import { isDvpFlow, type ModelId, type PartyId } from '../../../server/src/domain.ts';
 import type { Meta } from '../api.ts';
 import type { Route } from '../app/route.ts';
 import { href } from '../app/route.ts';
 import { linkTo } from '../app/useRoute.ts';
-import { FLOW_NAME, VERDICT, roleLabel } from '../demo/copy.ts';
+import { FLOW_NAME, MINT_TO_BI, VERDICT, roleLabel } from '../demo/copy.ts';
 import { formatRupiah, formatUnits, shortHash } from '../format.ts';
 import { LOCK, Sealed } from './Sealed.tsx';
 
@@ -30,9 +30,10 @@ export function cells(it: HistoryItem, name: (p: PartyId) => string) {
   return {
     // nothing readable at all: one sealed row instead of a chip per field (DESIGN.md §7.6)
     allSealed: it.flow === null && it.asset === null && it.amount === null && it.rdAmount === null && (cp === null || (cp.from === null && cp.to === null)),
-    flow: it.flow === null ? SEALED : text(FLOW_NAME[it.flow]),
+    // a BI top-up mint for the award (ARCHITECTURE.md §7.1 "BI inventory") is a dfabi-issue BI -> BI
+    flow: it.flow === null ? SEALED : text(it.flow === 'dfabi-issue' && cp?.from === 'BI' && cp.to === 'BI' ? MINT_TO_BI : FLOW_NAME[it.flow]),
     amount: it.amount === null ? SEALED : text(money(it.amount, it.asset)),
-    rd: it.rdAmount !== null ? text(money(it.rdAmount, 'RD')) : it.flow === 'dvp' || it.flow === null ? SEALED : ({ t: 'na' } as Cell),
+    rd: it.rdAmount !== null ? text(money(it.rdAmount, 'RD')) : isDvpFlow(it.flow) || it.flow === null ? SEALED : ({ t: 'na' } as Cell),
     from: side(it.counterparty?.from),
     to: side(it.counterparty?.to),
     time: it.at === null ? 'Tanpa cap waktu' : TIME.format(new Date(it.at)),
@@ -47,7 +48,7 @@ const GLYPH: Record<string, string> = {
   sender: 'M7 17 17 7M9 7h8v8', receiver: 'M17 7 7 17M15 17H7V9', issuer: 'M12 5v14M5 12h14',
   dvp: 'M4 8h13l-3-3M20 16H7l3 3', other: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
 };
-const glyphOf = (it: HistoryItem) => (it.flow === 'dvp' ? 'dvp' : it.role in GLYPH ? it.role : 'other');
+export const glyphOf = (it: HistoryItem) => (isDvpFlow(it.flow) ? 'dvp' : it.role in GLYPH ? it.role : 'other');
 
 export function Verdict({ v }: { v: string }) {
   const d = VERDICT[v] ?? { cls: '', text: v }; // unknown verdict: shown raw
@@ -93,7 +94,7 @@ export function HistoryTable({ items, meta, route, caption }: { items: HistoryIt
                   </td>
                 ) : (
                   <>
-                    <td data-label="Transaksi"><b>{show(c.flow, 'flow')}</b><small>{roleLabel(it.role, it.flow === 'dvp')}</small></td>
+                    <td data-label="Transaksi"><b>{show(c.flow, 'flow')}</b><small>{roleLabel(it.role, isDvpFlow(it.flow))}</small></td>
                     <td data-label="Pihak"><span className="cp">{show(c.from, 'party')}<span aria-label="ke">→</span>{show(c.to, 'party')}</span></td>
                     <td data-label="Nominal" className="right amt">{show(c.amount, 'amount')}</td>
                     <td data-label="Kaki RD" className="right">{show(c.rd, 'amount')}</td>

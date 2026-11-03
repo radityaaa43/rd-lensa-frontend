@@ -30,9 +30,9 @@ const cleared = (): Pick<DemoState, 'phase' | 'tab' | 'req' | 'startedAt' | 'end
 
 export const initialDemo = (): DemoState => ({ asset: 'RD', to: 'B', amounts: { RD: '1000000000', DFABI: '1000' }, ...cleared() });
 
-// issuance is BI only; every other flow is a bank's
+// issuance and the award are BI only; every other flow is a bank's
 export const flowOf = (dvp: boolean, party: PartyId, asset: Asset): FlowId =>
-  dvp ? 'dvp' : `${asset === 'RD' ? 'rd' : 'dfabi'}-${party === 'BI' ? 'issue' : 'transfer'}`;
+  dvp ? (party === 'BI' ? 'award' : 'dvp') : `${asset === 'RD' ? 'rd' : 'dfabi'}-${party === 'BI' ? 'issue' : 'transfer'}`;
 // the receiver is always a bank other than the sender
 export const toOf = (s: DemoState, party: PartyId): PartyId => (s.to !== party && s.to !== 'BI' ? s.to : BANKS.find((b) => b !== party)!);
 

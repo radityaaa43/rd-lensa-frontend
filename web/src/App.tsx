@@ -2,6 +2,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import type { StressSnapshot } from '../../server/src/stress.ts';
 import { PLATFORM_OF, type FlowRequest } from '../../server/src/domain.ts';
 import { getHealth, getMeta, getNetwork, getStress, postTx, stopStress, watchTx, type Health, type Meta } from './api.ts';
+import { AWARD_SCREEN } from './demo/copy.ts';
 import { demoReducer, initialDemo, type DemoAction, type DemoState } from './demo/demoState.ts';
 import { Lens } from './screens/Lens.tsx';
 import { Report } from './screens/Report.tsx';
@@ -48,7 +49,8 @@ function Shell({ meta, route, stress, reloadStress, tx }: { meta: Meta; route: M
   const stressRunning = stress?.state === 'running';
   const network = usePoll(`net|${route.model}`, () => getNetwork(route.model), 10_000);
   const party = meta.parties[route.party].name;
-  const title = route.screen === 'dasbor' ? `Dasbor · ${party}` : SCREEN_TITLE[route.screen];
+  const award = route.screen === 'dvp' && route.party === 'BI';
+  const title = route.screen === 'dasbor' ? `Dasbor · ${party}` : award ? AWARD_SCREEN.name : SCREEN_TITLE[route.screen];
   // after in-app navigation, focus the new page heading so Tab and screen readers start there (DESIGN.md §9);
   // a party switch keeps focus on its pill, so the key leaves the party out; the first load keeps focus at the top
   const h1 = useRef<HTMLHeadingElement>(null);
@@ -74,7 +76,7 @@ function Shell({ meta, route, stress, reloadStress, tx }: { meta: Meta; route: M
         )}
         <p className="vh" aria-live="polite">Menampilkan data sebagai {party}</p>
         <main className="main" id="konten">
-          <div className="title"><h1 ref={h1} tabIndex={-1}>{title}</h1><p>{SCREEN_SUB[route.screen].replace('{pihak}', party)}</p></div>
+          <div className="title"><h1 ref={h1} tabIndex={-1}>{title}</h1><p>{(award ? AWARD_SCREEN.sub : SCREEN_SUB[route.screen]).replace('{pihak}', party)}</p></div>
           {route.screen === 'dasbor' ? <Dashboard meta={meta} route={route} network={network} />
             : route.screen === 'riwayat' ? <History key={`${route.model}|${route.party}`} meta={meta} route={route} />
             : route.screen === 'transfer' || route.screen === 'dvp'
