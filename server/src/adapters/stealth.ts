@@ -5,7 +5,7 @@ import { besuNetwork } from './besu-network.ts';
 import { BANKS, FLOWS, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type PartyId } from '../domain.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import type { Sample } from '../stats.ts';
-import { readState, writeState } from '../state.ts';
+import { STATE_DIR, readState, writeState } from '../state.ts';
 // Server code never imports ethers itself: everything chain-related comes from stealth-address, so one ethers copy is in play.
 import {
   Contract, JsonRpcProvider, TRANCHE_A, Wallet, announcements, artifact, biRows, cert, chainNow, contracts, pay, read,
@@ -13,10 +13,11 @@ import {
 } from '../../../../besu/stealth-address/ts/chain.ts';
 import { parseBondMetadata } from '../../../../besu/stealth-address/ts/bond.ts';
 import { openMemo } from '../../../../besu/stealth-address/ts/memo.ts';
-import { scan, scanView, type Found, type ViewKeyHolder } from '../../../../besu/stealth-address/ts/stealth.ts';
+import { generateMetaAddress, scan, scanView, type Found, type ViewKeyHolder } from '../../../../besu/stealth-address/ts/stealth.ts';
 import { parseTokenMetadata } from '../../../../besu/stealth-address/ts/token.ts';
 
 export interface BankKeys { spendKey: string; viewKey: string; metaAddress: string; identityKey: string }
+export interface BiMeta { spendKey: string; viewKey: string; metaAddress: string }
 export interface PoolEntry { stealthAddress: string; privateKey: string; used: boolean }
 export interface StealthState {
   chainId: bigint;
@@ -24,6 +25,7 @@ export interface StealthState {
   rpcUrl?: string; // Besu endpoint the stack was deployed on; load() reconnects to it
   deployed: Deployed;
   banks: Record<BankId, BankKeys>;
+  biMeta?: BiMeta; // BI's own stealth receive keys (award: BI is the seller and gets the RD leg); added by ensureBiKeys, absent = award disabled
   pool: Record<string, PoolEntry[]>; // 'A>B': funded stealth addresses of A reserved for the stress test
 }
 
@@ -34,6 +36,7 @@ const TX_MS = 120_000;
 const HEALTH_MS = 2000;
 const ESCROW_TTL = 600n; // seconds; the escrow is settled right away, the window only has to outlast the run
 const NO_BALANCE = 'Saldo di satu alamat stealth tidak cukup';
+const NO_BI_KEY = 'BI belum punya kunci penerima stealth';
 // History window (ARCHITECTURE.md §2.3). Measured 2026-11-02 against the live Besu: block time 2.0 s, head 1,965,520, a 1000-block
 // eth_getLogs page takes 5-15 ms and the announcer holds about 7 announcements per 1000 blocks. 100,000 blocks is about 2.3 days of
 // chain, 100 pages per token (about 1-2 s cold, incremental after) and about 700 announcements to scan per bank. Transactions older
@@ -63,6 +66,31 @@ export function checkOwnTx(
   }
 }
 
+// Operator step, run once with the server stopped (the server rewrites state/stealth.json from memory): adds BI's stealth
+// receive keypair to the state if it is missing. Idempotent; never prints or returns key material. true = added.
+export function ensureBiKeys(dir = STATE_DIR): boolean {
+  const s = readState<StealthState>('stealth', dir);
+  if (!s) throw new Error('state/stealth.json tidak ada: jalankan npm run bootstrap -- stealth');
+  if (s.biMeta) return false;
+  const { spendKey, viewKey, metaAddress } = generateMetaAddress();
+  writeState('stealth', { ...s, biMeta: { spendKey, viewKey, metaAddress } }, dir);
+  return true;
+}
+
+// BI's DFABI inventory (ARCHITECTURE.md §7.1): sell from the smallest BI address that covers the award; otherwise one top-up issue
+// of max(TOP_UP_MIN, amount) to one fresh BI address. `balances` are the free (not busy) BI addresses.
+export const TOP_UP_MIN = 1000n;
+export function planInventory(balances: bigint[], amount: bigint): { use: number } | { issue: bigint } {
+  let best = -1;
+  balances.forEach((b, i) => { if (b >= amount && (best < 0 || b < balances[best]!)) best = i; });
+  return best >= 0 ? { use: best } : { issue: amount > TOP_UP_MIN ? amount : TOP_UP_MIN };
+}
+
+// History label of a tx with a seller: a dvp sold by BI is an award (never 'dvp'); without an RD leg BI as sender is an issue.
+export function flowLabel(dvp: boolean, kind: 'rd' | 'bond', fromBI: boolean): FlowId {
+  return dvp ? (fromBI ? 'award' : 'dvp') : (`${kind === 'rd' ? 'rd' : 'dfabi'}-${fromBI ? 'issue' : 'transfer'}` as FlowId);
+}
+
 export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl ?? 'http://127.0.0.1:8545'): ModelAdapter {
   const provider = new JsonRpcProvider(rpcUrl, undefined, { cacheTimeout: -1 });
   const { deployed: d, chainId, banks } = state;
@@ -70,6 +98,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
   const reader = contracts(d, provider);
   const asBi = contracts(d, bi);
   const holders: ViewKeyHolder[] = BANKS.map((b) => ({ id: b, viewKey: banks[b].viewKey, metaAddress: banks[b].metaAddress }));
+  const biKeys = state.biMeta && { ...state.biMeta, identityKey: state.deployerKey }; // BI as a dvp seller
   const identity = new Map<string, PartyId>([[lc(bi.address), 'BI'], ...BANKS.map((b): [string, PartyId] => [lc(new Wallet(banks[b].identityKey).address), b])]);
   const partyOf = (addr: string | null): PartyId | null => (addr === null ? null : identity.get(lc(addr)) ?? null);
 
@@ -119,6 +148,13 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
     const skip = reserved();
     const found = scan(ofToken(await refresh(), tokenOf(asset)), k.viewKey, k.spendKey).filter((f) => !skip.has(lc(f.stealthAddress)));
     const bals = await Promise.all(found.map((f) => balance(asset, f.stealthAddress)));
+    return found.map((f, i) => ({ ...f, balance: bals[i] }));
+  }
+
+  // BI's own stealth addresses holding DFABI, found with BI's view key like a bank's.
+  async function biHoldings(): Promise<Holding[]> {
+    const found = scan(ofToken(await refresh(), d.bond), biKeys!.viewKey, biKeys!.spendKey);
+    const bals = await Promise.all(found.map((f) => balance('DFABI', f.stealthAddress)));
     return found.map((f, i) => ({ ...f, balance: bals[i] }));
   }
 
@@ -200,6 +236,8 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
 
   async function run(req: Parameters<ModelAdapter['run']>[0], amount: bigint, onStep: (s: StepEvent) => void): Promise<FlowResult> {
     const flow = FLOWS[req.flow];
+    const award = req.flow === 'award';
+    if (award && !biKeys) throw new Error(NO_BI_KEY);
     const steps: StepEvent[] = [];
     const step = async <T>(index: number, fn: () => Promise<T>): Promise<T> => {
       const t0 = performance.now();
@@ -212,6 +250,27 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
     const gp = await gasPrice();
     const taken: string[] = [];
     const take = async (bank: BankId, asset: 'RD' | 'DFABI', need: bigint) => { const h = await claim(bank, asset, need); taken.push(lc(h.stealthAddress)); return h; };
+    // Award: the escrow's seller leg is one BI inventory address that holds enough. Short of that, one top-up tx (max(1000, amount)) first.
+    const biSeller = async (): Promise<Found> => {
+      const free = (await biHoldings()).filter((h) => !busy.has(lc(h.stealthAddress)));
+      const plan = planInventory(free.map((h) => h.balance), amount);
+      let own: Found | undefined;
+      if ('use' in plan) {
+        own = free[plan.use]!;
+        busy.add(lc(own.stealthAddress)); // re-read now that it is ours, as claim() does
+        if ((await balance('DFABI', own.stealthAddress)) < amount) { busy.delete(lc(own.stealthAddress)); own = undefined; }
+      }
+      if (!own) {
+        const issue = 'issue' in plan ? plan.issue : amount > TOP_UP_MIN ? amount : TOP_UP_MIN;
+        const p = pay(chainId, biKeys!.metaAddress, state.deployerKey, d.bond, issue, TRANCHE_A);
+        const rc = await confirm(await serial(() => asBi.bond.issueByPartitionStealth(TRANCHE_A, p.s.stealthAddress, issue, p.s.ephemeralPubKey, p.s.viewTag, p.memo, { gasPrice: gp })));
+        own = scan(await txAnnouncements(rc.blockNumber, rc.hash, 'bond'), biKeys!.viewKey, biKeys!.spendKey)[0];
+        if (!own) throw new Error('BI tidak menemukan DFABI yang baru diterbitkan ke alamatnya sendiri');
+        busy.add(lc(own.stealthAddress));
+      }
+      taken.push(lc(own.stealthAddress));
+      return own;
+    };
     try {
       const rcv = banks[req.to as BankId];
       let kind: 'rd' | 'bond';
@@ -220,7 +279,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
 
       if (flow.dvp) {
         kind = 'bond';
-        const seller = banks[req.from as BankId];
+        const seller = award ? biKeys! : banks[req.from as BankId];
         const price = amount * PRICE_PER_UNIT;
         // Bond leg goes to the buyer, RD leg to the seller. Settled immediately, no expiry wait.
         const [bondLeg, rdLeg] = await step(0, async () => [
@@ -229,7 +288,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
         ]);
         leg = bondLeg;
         tx = await step(1, async () => {
-          const sellerSrc = await take(req.from as BankId, 'DFABI', amount);
+          const sellerSrc = award ? await biSeller() : await take(req.from as BankId, 'DFABI', amount);
           const buyerSrc = await take(req.to as BankId, 'RD', price);
           const sellerW = new Wallet(sellerSrc.privateKey, provider);
           const buyerW = new Wallet(buyerSrc.privateKey, provider);
@@ -372,14 +431,20 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
       const amount = md.amount.toString();
       const rdAmount = dvp ? parse('rd', g.rd!.metadata)!.amount.toString() : null;
       const base = { id: txHash, at: await atOf(g.block), block: g.block, rdAmount, amount, asset: (kind === 'rd' ? 'RD' : 'DFABI') as 'RD' | 'DFABI' };
-      const flowOf = (issue: boolean): FlowId => (dvp ? 'dvp' : (`${kind === 'rd' ? 'rd' : 'dfabi'}-${issue ? 'issue' : 'transfer'}` as FlowId));
 
       if (!bank) { // BI: the banks' view keys
         const row = biRows(chainId, [main], holders, kind)[0];
-        if (!row) return { ...base, flow: null, role: 'regulator', verdict: 'partial', counterparty: null }; // addressed to none of the banks: only token and amount are readable
+        if (!row) {
+          // BI's own inventory top-up (addressed to BI's stealth address): BI reads it with its own keys, so it is not a regulator view. Stays flow:null.
+          if (biKeys && !dvp && scan([main], biKeys.viewKey, biKeys.spendKey).length) {
+            const from = partyOf(read(chainId, main, biKeys.viewKey, 'bond').sender);
+            return { ...base, flow: null, role: roleFromParties('BI', { from, to: null }, true), verdict: 'clear', counterparty: { from, to: null } };
+          }
+          return { ...base, flow: null, role: 'regulator', verdict: 'partial', counterparty: null }; // addressed to none of the banks: only token and amount are readable
+        }
         const counterparty: Counterparty = { from: partyOf(row.sender), to: row.bank as BankId };
-        const issue = !dvp && counterparty.from === 'BI';
-        return { ...base, flow: flowOf(issue), asset: base.asset, role: roleFromParties('BI', counterparty, issue), verdict: issue ? 'clear' : 'viewkey', counterparty };
+        const issue = counterparty.from === 'BI'; // issue or, with an RD leg, award: BI is a party, so clear
+        return { ...base, flow: flowLabel(dvp, kind, issue), asset: base.asset, role: roleFromParties('BI', counterparty, issue), verdict: issue ? 'clear' : 'viewkey', counterparty };
       }
       const k = banks[bank];
       const gotMain = mine.has(lc(main.stealthAddress));
@@ -388,8 +453,8 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
         const counterparty: Counterparty = gotMain
           ? { from: partyOf(read(chainId, main, k.viewKey, kind).sender), to: bank }
           : { from: bank, to: gotRd ? partyOf(read(chainId, g.rd!, k.viewKey, 'rd').sender) : null };
-        const issue = !dvp && counterparty.from === 'BI';
-        return { ...base, flow: flowOf(issue), role: roleFromParties(party, counterparty, issue), verdict: 'clear', counterparty };
+        const issue = counterparty.from === 'BI';
+        return { ...base, flow: flowLabel(dvp, kind, issue), role: roleFromParties(party, counterparty, issue), verdict: 'clear', counterparty };
       }
       // Not its payment: the same checks lens() runs for an outsider.
       const hits = scanView([main], { id: party, viewKey: k.viewKey, metaAddress: k.metaAddress }).length;
@@ -419,7 +484,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
   return {
     id: 'stealth',
     stepLabels: LABELS,
-    capabilities: () => ({ ...Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])), award: { enabled: false, reason: 'Belum dibangun' } }) as Record<FlowId, Capability>,
+    capabilities: () => ({ ...Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])), award: biKeys ? { enabled: true } : { enabled: false, reason: NO_BI_KEY } }) as Record<FlowId, Capability>,
     async health() {
       try {
         return await withDeadline((async () => {

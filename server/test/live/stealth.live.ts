@@ -67,6 +67,17 @@ describe('stealth adapter on Besu', () => {
     expect(l.C).toMatchObject({ verdict: 'partial', counterparty: null });
   });
 
+  // Needs BI's stealth key first (operator step, server stopped): npm run stealth:bi-key
+  it('award BI -> A: BI sells A DFABI from its inventory (one top-up issue if short) for DFABI x price in RD, settled at once', async () => {
+    expect(a.capabilities().award, 'run npm run stealth:bi-key, then restart').toEqual({ enabled: true });
+    const r = req('award', 'BI', 'A', 3n);
+    const res = await a.run(r, 3n, () => {});
+    const l = await lenses(r, res);
+    expect(l.A).toMatchObject({ role: 'receiver', verdict: 'clear', amount: '3', rdAmount: String(3n * 1_000_000n), counterparty: { from: 'BI', to: 'A' } });
+    expect(l.BI).toMatchObject({ role: 'issuer', verdict: 'clear', amount: '3', rdAmount: String(3n * 1_000_000n), counterparty: { from: 'BI', to: 'A' } });
+    expect(l.C).toMatchObject({ role: 'outsider', verdict: 'partial', counterparty: null });
+  });
+
   it('transferForLoad: prepareLoad pools stealth addresses, confirmedAt is the receipt time', async () => {
     await a.prepareLoad(3);
     expect(await a.loadCapacity()).toBeGreaterThanOrEqual(6); // 3 pairs x (ceil(3/3)+1)
@@ -120,6 +131,20 @@ describe('stealth history + network live', () => {
     for (const l of lists) expect(l.length).toBeGreaterThan(0);
     expect(lists[0]!.every((i) => ['viewkey', 'clear', 'partial'].includes(i.verdict))).toBe(true);
     for (const i of lists[3]!.filter((x) => x.verdict === 'partial')) expect([i.role, i.counterparty, i.flow]).toEqual(['outsider', null, null]);
+  });
+
+  it('a fresh award BI -> A: history labels it award (never dvp) for BI and A, an outsider sees no flow', async () => {
+    const r = req('award', 'BI', 'A', 3n);
+    const res = await a.run(r, 3n, () => {});
+    const l = await lenses(r, res);
+    for (const p of P) {
+      const item = (await a.history(p, 20)).find((i) => i.id === res.txHash);
+      expect(item, `${p} history has the award`).toBeDefined();
+      expect(item).toMatchObject({ verdict: l[p].verdict, amount: l[p].amount, rdAmount: l[p].rdAmount, role: l[p].role });
+    }
+    expect((await a.history('BI', 20)).find((i) => i.id === res.txHash)).toMatchObject({ flow: 'award', role: 'issuer', counterparty: { from: 'BI', to: 'A' } });
+    expect((await a.history('A', 20)).find((i) => i.id === res.txHash)).toMatchObject({ flow: 'award', role: 'receiver', counterparty: { from: 'BI', to: 'A' } });
+    expect((await a.history('C', 20)).find((i) => i.id === res.txHash)).toMatchObject({ flow: null, role: 'outsider', verdict: 'partial', counterparty: null });
   });
 
   it('network(): 4 Besu validators, all up', async () => {
