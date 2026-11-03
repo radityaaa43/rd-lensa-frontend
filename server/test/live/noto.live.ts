@@ -175,6 +175,19 @@ describe('noto history + network live', () => {
     expect(await itemOf('C', result.txHash, false)).toMatchObject({ verdict: 'sealed', rdAmount: null });
   });
 
+  it('a fresh award BI -> A: one item per party, history == lens for BI/A/B/C', async () => {
+    const r = req('award', 'BI', 'A', '1');
+    const { result, lenses } = await runFlow(r);
+    for (const p of ['BI', 'A'] as const) {
+      const item = await itemOf(p, result.txHash, true);
+      expect(item, `${p} history has the award`).toMatchObject({ flow: 'award', asset: 'DFABI', amount: lenses[p].amount, rdAmount: lenses[p].rdAmount, counterparty: lenses[p].counterparty, role: lenses[p].role, verdict: lenses[p].verdict });
+    }
+    expect([lenses.BI.verdict, lenses.A.verdict, lenses.B.verdict, lenses.C.verdict]).toEqual(['clear', 'clear', 'sealed', 'sealed']);
+    expect([lenses.BI.role, lenses.A.role, lenses.B.role, lenses.C.role]).toEqual(['issuer', 'receiver', 'outsider', 'outsider']);
+    expect(lenses.A.rdAmount).toBe(String(PRICE_PER_UNIT));
+    for (const p of ['B', 'C'] as const) expect(await itemOf(p, result.txHash, false)).toMatchObject({ verdict: 'sealed', rdAmount: null });
+  });
+
   it('network(): 4 validators + 4 Paladin nodes, all up', async () => {
     const n = await adapter.network();
     expect(n.nodes.filter((x) => x.kind === 'besu-validator')).toHaveLength(4);

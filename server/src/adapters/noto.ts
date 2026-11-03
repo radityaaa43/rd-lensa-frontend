@@ -10,7 +10,7 @@ import type { Sample } from '../stats.ts';
 import { appendTrade, loadPlatform, type Platform } from '../../../../besu/noto+pente/bond/src/lib/platform.ts';
 import { transferNoto } from '../../../../besu/noto+pente/bond/src/lib/transfer.ts';
 import { issueBond, issueCash } from '../../../../besu/noto+pente/bond/src/lib/issue.ts';
-import { executeOutright } from '../../../../besu/noto+pente/bond/src/lib/outright.ts';
+import { custodianOf, executeOutright } from '../../../../besu/noto+pente/bond/src/lib/outright.ts';
 import { readNotoTx, readStateHashes, readTxReceipt, tradeSpendTxIds, waitTxIndexed, watchDispatch, type NotoTxView } from '../../../../besu/noto+pente/bond/src/lib/receipts.ts';
 
 const DEADLINE = 120_000;
@@ -79,15 +79,16 @@ export function notoItem(party: PartyId, g: NotoGroup, known: Map<string, PartyI
     counterparty = c;
   } else counterparty = side(g.legs[0]!.read);
   const main = dvp ? bond : g.legs[0]!;
+  const award = dvp && counterparty?.from === 'BI'; // the seller of the bond leg is BI's custodian: BI sells unsold supply
   const asset = dvp ? 'DFABI' : main!.source === 'cash' ? 'RD' : 'DFABI';
   // DFABI issuance is a transfer from BI's custodian (BondTracker only mints to the custodian), so "from BI" is an issue too.
   const issue = !dvp && counterparty?.from === 'BI';
-  const role = roleFromParties(party, counterparty, issue);
+  const role = roleFromParties(party, counterparty, issue || award);
   const amountOf = (l?: NotoLeg) => (l?.read.visible ? (l.read.amount?.toString() ?? null) : null);
   return {
     id: g.hash, at: g.at, block: g.block,
-    flow: dvp ? 'dvp' : (`${asset === 'RD' ? 'rd' : 'dfabi'}-${issue ? 'issue' : 'transfer'}` as FlowId), asset, role,
-    verdict: party === 'BI' && !issue ? 'notarised' : 'clear',
+    flow: award ? 'award' : dvp ? 'dvp' : (`${asset === 'RD' ? 'rd' : 'dfabi'}-${issue ? 'issue' : 'transfer'}` as FlowId), asset, role,
+    verdict: party === 'BI' && !issue && !award ? 'notarised' : 'clear',
     amount: amountOf(main),
     rdAmount: dvp ? amountOf(cash) : null,
     counterparty,
@@ -252,7 +253,7 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     };
 
     if (flow.dvp) {
-      const seller = bank(p, req.from as BankId), buyer = bank(p, to);
+      const seller = req.flow === 'award' ? custodianOf(p) : bank(p, req.from as BankId), buyer = bank(p, to);
       const tradeId = randomUUID();
       let executedAt: number | undefined;
       const log = (m: string) => {
@@ -317,7 +318,7 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     id: 'noto',
     stepLabels: ['Notary BI memeriksa', 'Kirim ke node Paladin', 'Masuk block Besu', 'State dibagikan ke pihak terkait'],
 
-    capabilities: () => ({ ...Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])), award: { enabled: false, reason: 'Belum dibangun' } }) as Record<FlowId, Capability>,
+    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
 
     async health() {
       try {

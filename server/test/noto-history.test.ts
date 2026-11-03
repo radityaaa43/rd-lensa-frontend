@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { newNotoCache, notoHistory, notoItem, receiptPage, type EventLike, type NotoClient, type NotoGroup, type NotoLeg, type NotoScan, type ReceiptLike } from '../src/adapters/noto.ts';
+import { createNotoAdapter, newNotoCache, notoHistory, notoItem, receiptPage, type EventLike, type NotoClient, type NotoGroup, type NotoLeg, type NotoScan, type ReceiptLike } from '../src/adapters/noto.ts';
 import type { NotoTxView } from '../../../besu/noto+pente/bond/src/lib/receipts.ts';
 import type { PartyId } from '../src/domain.ts';
 
@@ -94,6 +94,22 @@ describe('notoItem, more shapes', () => {
   it('a dvp the events show (two locks spent) with a single leg receipt is still a dvp, not a transfer', () => {
     const g = { ...group([{ source: 'bond', read: read({ amount: 7n, from: ['0xa'], to: ['0xb'] }) }]), dvp: true };
     expect(notoItem('A', g, known)).toMatchObject({ flow: 'dvp', amount: '7', rdAmount: null });
+  });
+
+  it('an award (bond leg custodian -> bank, cash leg bank -> custodian) is an award, not a dvp; BI is the issuer, not the regulator', () => {
+    const g = group([
+      { source: 'cash', read: read({ amount: 1_000_000n, from: ['0xb'], to: ['0xbi'] }) },
+      { source: 'bond', read: read({ amount: 1n, from: ['0xbi'], to: ['0xb'] }) },
+    ]);
+    const base = { flow: 'award', asset: 'DFABI', amount: '1', rdAmount: '1000000', counterparty: { from: 'BI', to: 'B' } };
+    expect(notoItem('BI', g, known)).toMatchObject({ ...base, role: 'issuer', verdict: 'clear' });
+    expect(notoItem('B', g, known)).toMatchObject({ ...base, role: 'receiver', verdict: 'clear' });
+    expect(notoItem('A', group([{ source: 'cash', read: hidden() }, { source: 'bond', read: hidden() }]), known)).toMatchObject({ flow: null, role: 'outsider', verdict: 'sealed', rdAmount: null });
+  });
+
+  it('an award the buyer reads through the receipt sender only (locked inputs unreadable) is still an award', () => {
+    const g = group([{ source: 'bond', read: read({ amount: 1n, to: ['0xb'], sender: '0xbi' }) }, { source: 'cash', read: read({ amount: 5n, from: ['0xb'], to: ['0xbi'] }) }]);
+    expect(notoItem('B', g, known)).toMatchObject({ flow: 'award', role: 'receiver', counterparty: { from: 'BI', to: 'B' }, rdAmount: '5' });
   });
 
   it('BI issuing DFABI (a transfer from its custodian) reads it clear as the issuer', () => {
@@ -197,5 +213,13 @@ describe('notoHistory', () => {
     const items = await notoHistory('A', 10, setup(rs, evs, {}).scan());
     expect(items.length).toBe(0);
     expect(items.truncated).toBe(true);
+  });
+});
+
+describe('noto capabilities', () => {
+  it('every flow is enabled, award included', () => {
+    const caps = createNotoAdapter('/nonexistent').capabilities(); // the platform loads lazily: nothing is read here
+    expect(caps.award.enabled).toBe(true);
+    for (const c of Object.values(caps)) expect(c.enabled).toBe(true);
   });
 });
