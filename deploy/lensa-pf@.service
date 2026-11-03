@@ -7,4 +7,6 @@ Type=simple
 EnvironmentFile=%h/.config/lensa/lensa.env
 ExecStart=/bin/bash -c 'exec "$LENSA_ROOT/frontend/deploy/pf.sh" %i'
 Restart=always
-RestartSec=3
+RestartSec=5
+RestartSteps=5
+RestartMaxDelaySec=60

@@ -90,7 +90,11 @@ systemctl --user stop 'lensa-pf@*'      # hentikan semua forward
 deploy/update.sh                        # build web lalu restart server
 journalctl --user -u lensa -f           # log server; forward: -u 'lensa-pf@*'
 systemctl --user status lensa 'lensa-pf@*'
+systemctl --user reset-failed lensa     # setelah 5 kali gagal start dalam 10 menit systemd berhenti mencoba; ini membuka lagi
 ```
+
+`deploy/update.sh` membangun ke `web/dist.new` dulu dan baru menukarnya dengan `web/dist` kalau build berhasil; build yang
+gagal tidak menyentuh `dist` maupun server yang sedang jalan.
 
 Rollback ke cara manual: `systemctl --user disable --now lensa 'lensa-pf@*'`, lalu jalankan seperti di atas
 (`npm start`) dengan port-forward sendiri.
