@@ -130,32 +130,37 @@ export async function write(d: Ctx, w: WriteSpec): Promise<string> {
   d.recordWrite({ flow: w.flow, from: w.from, to: w.to, amount: AMOUNT.toString(), tx });
   d.save(w.key, tx);
 
-  // the lens of the run, opened from the result link (the run lives in the page: any reload would drop it, so this comes first)
-  await d.step('Lensa hasil run: empat kolom', async () => {
-    await d.click(sel.progressDone(page).locator('a'));
-    await checkLensColumns(d, tx, false);
-    await d.hold('Satu transaksi, empat pembacaan: tiap pihak hanya melihat bagiannya.', 2200);
-    await d.shot(`${w.key}-lensa`);
-  });
+  // ANY failure after the tx was sent (lens, balance delta, Dasbor) stops every later write too: the chain state is no longer known to be as expected
+  try {
+    // the lens of the run, opened from the result link (the run lives in the page: any reload would drop it, so this comes first)
+    await d.step('Lensa hasil run: empat kolom', async () => {
+      await d.click(sel.progressDone(page).locator('a'));
+      await checkLensColumns(d, tx, false);
+      await d.hold('Satu transaksi, empat pembacaan: tiap pihak hanya melihat bagiannya.', 2200);
+      await d.shot(`${w.key}-lensa`);
+    });
 
-  // the balances moved by exactly this tx (read-only polling: a node may lag a few seconds)
-  await d.step(`Saldo setelah ${w.flow}: selisih tepat`, async () => {
-    const want = expected(w.flow, w.from, w.to);
-    for (const [k, delta] of Object.entries(want) as [`${PartyId}.${'RD' | 'DFABI'}`, bigint][]) {
-      const [p, asset] = k.split('.') as [PartyId, 'RD' | 'DFABI'];
-      const base = amt(before[p]!, asset);
-      let now = base;
-      for (let i = 0; i < 30; i++) { now = amt(await api.balance(model, p), asset); if (now - base === delta) break; await d.page.waitForTimeout(3000); }
-      d.check(`selisih ${asset} ${p}`, (now - base).toString(), delta.toString());
-    }
-    const after = await api.balance(model, 'BI');
-    d.checks.push({ label: 'saldo BI (info, tidak ditegaskan)', screen: `RD ${amt(bi, 'RD')} -> ${amt(after, 'RD')}`, api: `DFABI ${amt(bi, 'DFABI')} -> ${amt(after, 'DFABI')}`, ok: true });
-  }).catch((e: Error) => fail(e.message)); // a tx that was sent but moved the wrong amount stops all later writes too
+    // the balances moved by exactly this tx (read-only polling: a node may lag a few seconds)
+    await d.step(`Saldo setelah ${w.flow}: selisih tepat`, async () => {
+      const want = expected(w.flow, w.from, w.to);
+      for (const [k, delta] of Object.entries(want) as [`${PartyId}.${'RD' | 'DFABI'}`, bigint][]) {
+        const [p, asset] = k.split('.') as [PartyId, 'RD' | 'DFABI'];
+        const base = amt(before[p]!, asset);
+        let now = base;
+        for (let i = 0; i < 30; i++) { now = amt(await api.balance(model, p), asset); if (now - base === delta) break; await d.page.waitForTimeout(3000); }
+        d.check(`selisih ${asset} ${p}`, (now - base).toString(), delta.toString());
+      }
+      const after = await api.balance(model, 'BI');
+      d.checks.push({ label: 'saldo BI (info, tidak ditegaskan)', screen: `RD ${amt(bi, 'RD')} -> ${amt(after, 'RD')}`, api: `DFABI ${amt(bi, 'DFABI')} -> ${amt(after, 'DFABI')}`, ok: true });
+    });
 
-  // each party's Dasbor shows its API balance
-  await d.step('Dasbor sama dengan saldo node', async () => {
-    for (const p of involved) await checkBalanceScreen(d, p);
-  });
+    // each party's Dasbor shows its API balance
+    await d.step('Dasbor sama dengan saldo node', async () => {
+      for (const p of involved) await checkBalanceScreen(d, p);
+    });
+  } catch (e) {
+    return fail((e as Error).message.split('\n')[0]);
+  }
 
   return tx;
 }

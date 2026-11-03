@@ -57,7 +57,7 @@ export function mockAdapter(id: ModelId) {
         steps.push({ index, label, ms: 250 + index * 40 });
         onStep(steps[index]);
       }
-      apply(req, amount);
+      if (process.env.DEMO_INJECT_FAIL !== `skew:${req.flow}`) apply(req, amount); // skew: the tx succeeds but the balances do not move (self-test: failure AFTER a successful send)
       const tx = push(req, Date.now());
       return { txHash: tx.id, block: tx.block, steps, context: null };
     },

@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { expect } from '@playwright/test';
-import { MOCK, type Scenario } from '../lib/ctx.ts';
+import { MOCK, abortWrites, type Scenario } from '../lib/ctx.ts';
 import { SCENARIOS } from '../lib/spec.ts';
 import { sel } from '../lib/sel.ts';
 
@@ -41,27 +41,34 @@ export const s10: Scenario = {
       d.check('status server setelah batal', await d.api.stressState(), 'idle');
     });
 
-    await d.step('Mulai dan tunggu hasil', async () => {
-      await d.click(page.getByRole('button', { name: 'Mulai stress test' }));
-      await d.click(page.getByRole('button', { name: 'Mulai', exact: true }));
-      await expect(page.locator('.banner.stress')).toBeVisible();
-      await d.caption('Stress test berjalan: transfer dan DvP diblokir sampai selesai.');
-      await expect(page.getByRole('heading', { name: 'Hasil perbandingan' })).toBeVisible({ timeout: MOCK ? 60_000 : 10 * 60_000 });
-      await d.shot('hasil');
-    });
+    let started = false;
+    try {
+      await d.step('Mulai dan tunggu hasil', async () => {
+        await d.click(page.getByRole('button', { name: 'Mulai stress test' }));
+        started = true; // from here a failure or a stuck run blocks every later write
+        await d.click(page.getByRole('button', { name: 'Mulai', exact: true }));
+        await expect(page.locator('.banner.stress')).toBeVisible();
+        await d.caption('Stress test berjalan: transfer dan DvP diblokir sampai selesai.');
+        await expect(page.getByRole('heading', { name: 'Hasil perbandingan' })).toBeVisible({ timeout: MOCK ? 60_000 : 10 * 60_000 });
+        await d.shot('hasil');
+      });
 
-    await d.step('Hasil di layar sama dengan snapshot server dan CSV', async () => {
-      const snap = (await (await page.request.get('/api/stress')).json()) as { state: string; models: Record<string, { summary: { ok: number; failed: number } }> };
-      const s = snap.models[model].summary;
-      const cells = page.locator('table.res tbody tr').first().locator('td');
-      d.check('model', await cells.nth(0).innerText(), name);
-      d.check('berhasil', await cells.nth(5).innerText(), s.ok.toLocaleString('id-ID'));
-      d.check('gagal', await cells.nth(6).innerText(), String(s.failed));
-      d.check('transaksi stress terkirim', String(s.ok + s.failed), '50');
-      const download = page.waitForEvent('download');
-      await page.getByRole('link', { name: /Unduh hasil/ }).click();
-      const header = (await readFile(await (await download).path(), 'utf8')).split('\n')[0].trim();
-      d.check('header CSV', header, 'model,tps_avg,tps_peak,p50_s,p95_s,ok,failed,duration_s');
-    });
+      await d.step('Hasil di layar sama dengan snapshot server dan CSV', async () => {
+        const snap = (await (await page.request.get('/api/stress')).json()) as { state: string; models: Record<string, { summary: { ok: number; failed: number } }> };
+        const s = snap.models[model].summary;
+        const cells = page.locator('table.res tbody tr').first().locator('td');
+        d.check('model', await cells.nth(0).innerText(), name);
+        d.check('berhasil', await cells.nth(5).innerText(), s.ok.toLocaleString('id-ID'));
+        d.check('gagal', await cells.nth(6).innerText(), String(s.failed));
+        d.check('transaksi stress terkirim', String(s.ok + s.failed), '50');
+        const download = page.waitForEvent('download');
+        await page.getByRole('link', { name: /Unduh hasil/ }).click();
+        const header = (await readFile(await (await download).path(), 'utf8')).split('\n')[0].trim();
+        d.check('header CSV', header, 'model,tps_avg,tps_peak,p50_s,p95_s,ok,failed,duration_s');
+      });
+    } catch (e) {
+      if (started) abortWrites(`${model} stress: ${(e as Error).message.split('\n')[0]}`);
+      throw e;
+    }
   },
 };

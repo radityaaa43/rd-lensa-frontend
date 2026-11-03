@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { APIRequestContext, Locator, Page, TestInfo } from '@playwright/test';
 import type { ModelId, PartyId } from '../../server/src/domain.ts';
 import { api, type Api, type Meta } from './api.ts';
@@ -12,10 +12,12 @@ export const OUT = process.env.DEMO_OUT ?? 'demo/out/adhoc';
 export const MOCK = process.env.DEMO_MOCK === '1';
 type Saved = Record<string, Record<string, string>>; // model -> key -> tx hash, shared by S3-S6 -> S7 (the worker may restart after a failure)
 const STATE = join(OUT, 'state.json');
-// Written by the first failed write (phase 2, ctx.write). From then on no scenario with writes starts, for any model.
-const ABORT = join(OUT, 'ABORT');
+// Written by the first failed write (write.ts) or stuck stress run. From then on no scenario with writes starts, for any model.
+// Lives in demo/out/ (not the per-run folder) so it survives into the next run: a write run refuses while it exists. Delete it by hand
+// after investigating. The mock has its own file so a self-test (--inject-fail) never blocks the live run.
+export const ABORT = join(dirname(OUT), MOCK ? 'ABORT-mock' : 'ABORT');
 export const abortReason = (): string | null => (existsSync(ABORT) ? readFileSync(ABORT, 'utf8') : null);
-export function abortWrites(why: string) { mkdirSync(OUT, { recursive: true }); if (!existsSync(ABORT)) writeFileSync(ABORT, why); }
+export function abortWrites(why: string) { mkdirSync(dirname(ABORT), { recursive: true }); if (!existsSync(ABORT)) writeFileSync(ABORT, why); }
 const readState = (): Saved => { try { return JSON.parse(readFileSync(STATE, 'utf8')) as Saved; } catch { return {}; } };
 
 export interface Scenario extends ScenarioMeta { run(d: Ctx): Promise<void> }

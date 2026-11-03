@@ -1,7 +1,7 @@
 // npm run demo -- --list | --all | --scenario <id> [--platform <model>] [--headed] [--include-stress] [--allow-writes] [--speed slow|normal|fast]
-// npm run demo:mock -- ...   (same, against the demo mock on :8791; no chain, no gate; --inject-fail <flow> makes that flow fail, to self-test the abort rule)
+// npm run demo:mock -- ...   (same, against the demo mock on :8791; no chain, no gate; --inject-fail <flow> or skew:<flow> makes that flow fail (skew: succeed without moving balances), to self-test the abort rule)
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -55,6 +55,13 @@ const planned = run.reduce((n, s) => n + s.writes, 0) * models.length;
 if (!mock && planned > 0 && !a['allow-writes']) {
   console.error(`demo: mode live akan mengirim ${planned} transaksi nyata (${run.filter((s) => s.writes).map((s) => `${s.id}=${s.writes}`).join(' ')} per platform, ${models.length} platform, berurutan).`);
   console.error('demo: tambahkan --allow-writes hanya setelah izin lead. Tanpa itu tidak ada yang dijalankan.');
+  process.exit(2);
+}
+
+// a failed write left the marker: no write run starts until someone has investigated and deleted it
+const marker = join(here, 'out', mock ? 'ABORT-mock' : 'ABORT');
+if (planned > 0 && existsSync(marker)) {
+  console.error(`demo: ada penanda henti dari tulis yang gagal: ${marker}\ndemo: ${readFileSync(marker, 'utf8')}\ndemo: selidiki (saldo, riwayat), lalu hapus berkas itu sendiri. Tidak ada transaksi dikirim.`);
   process.exit(2);
 }
 

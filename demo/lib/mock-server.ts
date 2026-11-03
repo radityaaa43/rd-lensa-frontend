@@ -22,5 +22,6 @@ app.post<{ Body: { model: ModelId; flow: FlowId; reason: string | null } }>('/de
   return { ok: true };
 });
 const port = Number(process.env.PORT ?? 8791);
+if (port === 8790) throw new Error('the demo mock never listens on 8790 (the live service port)');
 await app.listen({ host: '127.0.0.1', port });
 console.log(`demo mock: http://127.0.0.1:${port} (web: ${dist})`);

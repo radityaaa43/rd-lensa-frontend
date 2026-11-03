@@ -4,6 +4,8 @@ import { defineConfig } from '@playwright/test';
 // (stateful, from lib/mock-server.ts) that builds the web into demo/out/.mock/web/dist, never into the served web/dist.
 const mock = process.env.DEMO_MOCK === '1';
 const port = process.env.DEMO_MOCK_PORT ?? '8791';
+const live = new URL(process.env.DEMO_BASE ?? 'http://127.0.0.1:8790').port;
+if (mock && (port === live || port === '8790')) throw new Error(`DEMO_MOCK_PORT=${port} is the live service port: the mock must never take it`);
 const out = process.env.DEMO_OUT ?? 'out/adhoc';
 
 export default defineConfig({

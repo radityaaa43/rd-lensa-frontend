@@ -110,7 +110,7 @@ Dijaga oleh kode:
 
 1. Transaksi berurutan, satu per satu, dengan nominal 1. Pembeli selalu bank, penerbit selalu BI.
 2. Tanpa pengiriman ulang otomatis setelah error atau timeout. Tombol "Coba lagi" tidak pernah diklik.
-3. Transaksi pertama yang gagal setelah terkirim menulis berkas `ABORT`: tidak ada skenario bertransaksi yang mulai lagi, untuk platform mana pun. Baca saldo dan riwayat, jangan jalankan ulang begitu saja.
+3. Kegagalan apa pun setelah transaksi terkirim (transaksi gagal, timeout, Lensa, selisih saldo, Dasbor) dan stress test yang gagal atau macet menulis `demo/out/ABORT` (mock: `ABORT-mock`). Tidak ada run bertransaksi yang mulai selama berkas itu ada, untuk platform mana pun dan juga di run berikutnya. Baca saldo dan riwayat, selidiki, lalu hapus berkas itu sendiri.
 4. Saldo "sebelum" dibaca di dalam tiap transaksi, tidak pernah dari nilai tetap atau run sebelumnya. Selisih tiap bank harus tepat.
 5. Sebelum tiap transaksi, tidak ada tx yang masih ditahan node (`x-history-pending` kosong, maksimal 45 detik). Pembacaan "tersegel" dan "tidak terlihat" baru dipercaya setelah itu. Pemanasan Zeto BI (HTTP 503 ±30 detik setelah restart layanan) ditunggu, bukan dianggap gagal.
 6. S0 menghitung kebutuhan saldo run ini (pembeli minimal 2.000.000 RD, penjual minimal 1 DFABI setelah S3) dan berhenti sebelum transaksi apa pun.
@@ -147,7 +147,8 @@ Restart node perlu persetujuan; setelah itu hapus `demo/out/tally.json`.
 | Gejala | Penyebab dan langkah |
 |---|---|
 | `Preflight gagal` | Baca butir GAGAL. Saldo kurang, model belum siap, atau stress berjalan. Tidak ada transaksi terkirim. |
-| `BLOCKED: tulis dihentikan...` | Ada transaksi gagal sebelumnya di run ini; lihat isi `demo/out/<run>/ABORT`. Selidiki dulu, jangan ulangi. |
+| `BLOCKED: tulis dihentikan...` | Ada transaksi gagal sebelumnya di run ini; lihat isi `demo/out/ABORT`. Selidiki dulu, hapus berkas itu sendiri, jangan ulangi begitu saja. |
+| `ada penanda henti` | CLI menolak mulai karena `demo/out/ABORT` ada. Alasannya tertulis di berkas itu. |
 | `BLOCKED: ... --allow-writes` | Run live bertransaksi butuh `--allow-writes` dan izin lead. |
 | `Riwayat ... HTTP 503` lama | Node sedang pemanasan pertama; demo menunggu sampai 3 menit. |
 | `masih menahan tx` | Node menahan transaksi baru ±10 detik (Noto, Fabric-X, Iroha 3); demo menunggu 45 detik lalu berhenti. Jalankan lagi bagian read-only (S7). |
