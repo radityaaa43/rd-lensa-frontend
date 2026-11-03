@@ -22,7 +22,7 @@ async function failsClean(thunk: () => Promise<unknown>): Promise<string> {
 afterEach(() => vi.restoreAllMocks());
 
 describe('adapter error text never carries a path, a command line or a kubeconfig', () => {
-  it('fabricx: kubectl with a missing kubeconfig, through the adapter calls; the original is logged', async () => {
+  it('fabricx: kubectl with a missing kubeconfig, through the adapter calls; the failure is logged without the path', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     const a = createFabricxAdapter(kubectl({ kubeconfig: `${SECRET}/alibaba.yaml`, namespace: 'fabricx' }));
     await failsClean(() => a.balanceOf('A', 'RD'));
@@ -30,7 +30,9 @@ describe('adapter error text never carries a path, a command line or a kubeconfi
     await failsClean(async () => { const h = await a.health(); if (!h.ready) throw new Error(h.detail); });
     const n = await a.network();
     expect(n.nodes.every((x) => x.status === 'unknown' && !LEAK.test(x.detail))).toBe(true);
-    expect(log.mock.calls.map((c) => c.map(String).join(' ')).join('\n')).toMatch(/secret/); // ...and it is where the path stays
+    const logged = log.mock.calls.map((c) => c.map(String).join(' ')).join('\n');
+    expect(logged).toMatch(/kubectl gagal/); // the failure reaches the server journal...
+    expect(logged).not.toMatch(/secret|alibaba\.yaml|--kubeconfig/); // ...but never the kubeconfig path or the command line
   });
 
   it('besu-network: the default kubectl with FABRICX_KUBECONFIG pointing nowhere', async () => {

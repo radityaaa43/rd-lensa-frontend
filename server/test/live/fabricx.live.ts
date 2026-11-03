@@ -130,6 +130,28 @@ describe('fabricx history live', () => {
     expect(await itemOf(a, 'C', res.txHash)).toMatchObject({ verdict: 'sealed', rdAmount: null });
   });
 
+  // The live award (BI -> bank2, 1 DFABI for 1,000,000 RD), re-read only: no new award is sent. Run alone with
+  //   npm run test:live -w server -- test/live/fabricx.live.ts -t 'award 93650e89'
+  it('award 93650e89 re-read: every party\'s item equals its own lens; BI issuer and buyer clear, bank3/bank4 sealed', async () => {
+    const a = (await load())!;
+    const tx = '93650e89c180e5126eb0b930d8bdc979561630b3a3940466dea37686b9a47b86';
+    const req: FlowRequest = { model: 'fabricx', flow: 'award', from: 'BI', to: 'A', amount: '1' };
+    const res = { txHash: tx, block: 0, steps: [], context: { report: 'recorded', onChain: [] } }; // lens() reads only the report and the nodes' records
+    for (const p of P) {
+      // An outsider holds a ledger-head tx back as pending for RECORDS_WAIT_MS (v1.3): re-read once after that window.
+      let h = await a.history(p, 100);
+      if (!h.some((i) => i.id === tx) && h.pending?.includes(tx)) { await new Promise((r) => setTimeout(r, 11_000)); h = await a.history(p, 100); }
+      const item = h.find((i) => i.id === tx);
+      expect(item, `${p} history has the award`).toBeDefined();
+      const lens = await a.lens(req, res, p);
+      expect(item).toMatchObject({ verdict: lens.verdict, amount: lens.amount, rdAmount: lens.rdAmount, counterparty: lens.counterparty, role: lens.role });
+      if (p === 'BI') expect(item).toMatchObject({ flow: 'award', role: 'issuer', verdict: 'clear', amount: '1', rdAmount: String(PRICE_PER_UNIT), counterparty: { from: 'BI', to: 'A' } });
+      if (p === 'A') expect(item).toMatchObject({ flow: 'award', role: 'receiver', verdict: 'clear', amount: '1', rdAmount: String(PRICE_PER_UNIT), counterparty: { from: 'BI', to: 'A' } });
+      if (p === 'B' || p === 'C') expect(item).toMatchObject({ verdict: 'sealed', flow: null, amount: null, rdAmount: null, counterparty: null });
+    }
+    expect(await a.balanceOf('BI', 'RD')).toBeGreaterThanOrEqual(PRICE_PER_UNIT); // BI's own node holds the RD it was paid
+  });
+
   it('an unreachable namespace makes history() reject', async () => {
     const st = readState<FabricxState>('fabricx')!;
     const bad = createFabricxAdapter(kubectl({ ...st, namespace: 'no-such-namespace' }));

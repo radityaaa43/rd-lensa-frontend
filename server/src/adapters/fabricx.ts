@@ -73,7 +73,8 @@ export const kubectl = (s: FabricxState): Exec => async (args) => {
     if (err.killed) throw new Error(`Perintah kubectl tidak selesai dalam ${CALL_MS / 1000} detik`);
     // the driver ends a failed call with a "FAIL ..." line on stderr; everything else there is log noise
     const fail = (err.stderr ?? '').split('\n').filter((l) => l.startsWith('FAIL ')).pop();
-    if (!fail) console.error('[fabricx] kubectl gagal:', e); // the original (command line, kubeconfig path) stays in the server log
+    // the server journal gets the exit code and kubectl's own stderr, never the command line, and the kubeconfig path redacted
+    if (!fail) console.error(`[fabricx] kubectl gagal (kode ${err.code ?? '?'}): ${(err.stderr ?? '').split(s.kubeconfig).join('(berkas server)').trim().slice(0, 500)}`);
     // Never the raw execFile message: it is the whole command line, kubeconfig path included, and this text reaches the browser.
     throw new Error(fail ? fail.slice(5) : `kubectl gagal (kode ${err.code ?? 'tidak diketahui'})`);
   }

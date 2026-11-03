@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createFabricxAdapter, exclusive, type Exec } from '../src/adapters/fabricx.ts';
+import { awardOf, createFabricxAdapter, exclusive, type Exec } from '../src/adapters/fabricx.ts';
 import { PRICE_PER_UNIT, type FlowRequest, type PartyId } from '../src/domain.ts';
 import { CANCELLED, type StepEvent } from '../src/adapter.ts';
 
@@ -63,6 +63,19 @@ describe('fabricx run', () => {
   it('rejects a tx id that is not 64 hex before it reaches SQL', async () => {
     const exec: Exec = async (args) => (args.includes('committer-db-0') ? '' : JSON.stringify({ report: 'recorded', steps: [], txId: "x'; drop table t;--" }));
     await expect(createFabricxAdapter(exec).run(req('rd-transfer', 'A', 'B', '1'), 1n, () => {})).rejects.toThrow('Id transaksi tidak valid');
+  });
+});
+
+describe('fabricx awardOf (by shape, never by label)', () => {
+  const r = (sender: string, recipient: string, token: string, amount: string) => ({ sender, recipient, token, amount });
+  it('an award: DFABI to a bank and that bank pays RD to the issuer in the same tx; RD change is not part of the leg', () => {
+    // the live award 93650e89...: panurus labels BI's DFABI issue as bank2 -> bank2
+    expect(awardOf([r('bank2', 'bank2', 'DFABI-2027A', '1'), r('bank2', 'bank2', 'RD', '1000'), r('bank2', 'issuer', 'RD', '1000000')]))
+      .toEqual({ bank: 'A', dfabi: 1n, rd: 1000000n });
+  });
+  it('never an award: a bank-to-bank dvp (RD goes to a bank), or RD to BI while the DFABI went to another bank', () => {
+    expect(awardOf([r('bank2', 'bank3', 'DFABI-2027A', '1'), r('bank2', 'bank2', 'DFABI-2027A', '19'), r('bank3', 'bank2', 'RD', '1000000'), r('bank3', 'bank3', 'RD', '77')])).toBeNull();
+    expect(awardOf([r('bank2', 'issuer', 'RD', '1000000'), r('bank4', 'bank3', 'DFABI-2027A', '1')])).toBeNull();
   });
 });
 
@@ -337,11 +350,12 @@ describe('fabricx history', () => {
       for (const p of ['BI', 'A', 'B', 'C'] as const) await a.history(p, 20);
       later();
       const [bi, buyer, other, outsider] = await Promise.all((['BI', 'A', 'B', 'C'] as const).map((p) => a.history(p, 20)));
-      expect(bi![1]).toMatchObject({ flow: 'award', asset: 'DFABI', role: 'issuer', verdict: 'clear', amount: '1', rdAmount: '1000000', counterparty: { from: 'BI', to: 'A' } });
-      expect(buyer![1]).toMatchObject({ flow: 'award', role: 'receiver', verdict: 'clear', amount: '1', rdAmount: '1000000', counterparty: { from: 'BI', to: 'A' } });
-      expect(bi![0]).toMatchObject({ flow: 'dvp', amount: '1', rdAmount: '1000000' }); // the swap, no RD to BI: not an award
-      expect(buyer![0]).toMatchObject({ flow: 'dvp', counterparty: { from: 'A', to: 'B' } });
-      expect(other!.map((i) => [i.flow, i.verdict])).toEqual([['dvp', 'clear'], [null, 'sealed']]);
+      // newest block first: T(5) the award (block 180), T(4) the swap (block 179)
+      expect(bi![0]).toMatchObject({ flow: 'award', asset: 'DFABI', role: 'issuer', verdict: 'clear', amount: '1', rdAmount: '1000000', counterparty: { from: 'BI', to: 'A' } });
+      expect(buyer![0]).toMatchObject({ flow: 'award', role: 'receiver', verdict: 'clear', amount: '1', rdAmount: '1000000', counterparty: { from: 'BI', to: 'A' } });
+      expect(bi![1]).toMatchObject({ flow: 'dvp', amount: '1', rdAmount: '1000000' }); // the swap, no RD to BI: not an award
+      expect(buyer![1]).toMatchObject({ flow: 'dvp', counterparty: { from: 'A', to: 'B' } });
+      expect(other!.map((i) => [i.flow, i.verdict])).toEqual([[null, 'sealed'], ['dvp', 'clear']]);
       expect(outsider!.every((i) => i.verdict === 'sealed')).toBe(true);
     });
   });
@@ -418,5 +432,16 @@ describe('kubectl() error text', () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).not.toMatch(/secret-kubeconfig|--kubeconfig|Command failed/);
     expect((err as Error).message).toMatch(/^kubectl gagal \(kode /);
+  });
+
+  it('logs the failure for the server journal without the kubeconfig path or the command line', async () => {
+    const { kubectl } = await import('../src/adapters/fabricx.ts');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await kubectl({ kubeconfig: '/definitely/not/here/alibaba.yaml', namespace: 'x' })(['get', 'pods']).catch(() => {});
+      expect(log).toHaveBeenCalled();
+      const text = log.mock.calls.flat().map((x) => (x instanceof Error ? `${x.message} ${x.stack}` : typeof x === 'string' ? x : JSON.stringify(x))).join('\n');
+      expect(text).not.toMatch(/kubeconfig|alibaba\.yaml|definitely\/not\/here/);
+    } finally { log.mockRestore(); }
   });
 });
