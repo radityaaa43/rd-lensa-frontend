@@ -80,15 +80,18 @@ export function zetoBankItem(party: BankId, g: ZetoGroup, mine: Held[], keys: { 
   const counterparty: Counterparty = sender ? { from: party, to: to.size === 1 ? [...to][0]! : null } : { from: null, to: party };
   const issue = g.io.every((i) => i.inputs.length === 0); // a mint spends nothing
   let rdAmount: string | null = null;
+  let award = false; // the seller leg is BI's: the RD leg ends up with BI's owner key
   if (dvp) {
     const rd = mine.filter((m) => m.token === 'RD');
     const sellers = new Set(rd.filter((m) => (sender ? m.owner === keys.self : m.owner !== keys.self)).map((m) => m.owner));
     const seller = sellers.size === 1 ? [...sellers][0]! : null;
     if (seller) rdAmount = sumOf(rd.filter((m) => m.owner === seller)).toString();
+    award = !sender && seller !== null && keys.partyOf.get(seller) === 'BI';
   }
+  if (award) counterparty.from = 'BI';
   return {
     id: g.hash, at: g.at, block: g.block,
-    flow: dvp ? 'dvp' : (`${main === 'RD' ? 'rd' : 'dfabi'}-${issue ? 'issue' : 'transfer'}` as FlowId), asset: main,
+    flow: award ? 'award' : dvp ? 'dvp' : (`${main === 'RD' ? 'rd' : 'dfabi'}-${issue ? 'issue' : 'transfer'}` as FlowId), asset: main,
     role: roleFromParties(party, counterparty, false), verdict: 'clear',
     amount: sumOf(sender ? foreign : mainMine.filter((m) => m.owner === keys.self)).toString(), rdAmount, counterparty,
   };
@@ -101,11 +104,12 @@ export function zetoBiItem(g: ZetoGroup, seen: Held[], cp: Counterparty | null, 
   const issue = g.io.every((i) => i.inputs.length === 0);
   const toKey = cp?.to ? lower(ownerKey[cp.to]) : null;
   const fromKey = cp?.from ? lower(ownerKey[cp.from]) : null;
+  const award = dvp && cp?.from === 'BI'; // BI sold the DFABI leg: its own sale, nothing for it to be "reported" about
   const part = (token: Token, key: string | null) => (key === null ? null : sumOf(seen.filter((s) => s.token === token && s.owner === key)).toString());
   return {
     id: g.hash, at: g.at, block: g.block,
-    flow: dvp ? 'dvp' : (`${main === 'RD' ? 'rd' : 'dfabi'}-${issue ? 'issue' : 'transfer'}` as FlowId), asset: main,
-    role: roleFromParties('BI', cp, issue), verdict: issue ? 'clear' : 'reported',
+    flow: award ? 'award' : dvp ? 'dvp' : (`${main === 'RD' ? 'rd' : 'dfabi'}-${issue ? 'issue' : 'transfer'}` as FlowId), asset: main,
+    role: roleFromParties('BI', cp, issue || award), verdict: issue || award ? 'clear' : 'reported',
     amount: part(main, toKey), rdAmount: dvp ? part('RD', fromKey) : null, counterparty: cp,
   };
 }
@@ -217,6 +221,8 @@ export async function zetoHistory(party: PartyId, want: number, c: ZetoScan): Pr
 const DEADLINE_MS = 120_000;
 const MAX_ZETO_TX = 2; // a Paladin node has crashed under concurrent ZK proving
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// BI's DFABI inventory (ARCHITECTURE.md 7.1): mint in batches, only when the stock cannot cover the award.
+export const topUpFor = (stock: bigint, amount: bigint): bigint => (stock >= amount ? 0n : amount - stock > 1000n ? amount - stock : 1000n);
 const hex32 = (v: string) => '0x' + BigInt(v).toString(16).padStart(64, '0');
 const lower = (s: string) => s.toLowerCase();
 
@@ -287,6 +293,8 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
     if (id === 'BI') throw new Error('BI tidak memegang saldo transfer');
     return BigInt((await zeto(t, P[id]).balanceOf(P[id].v, { account: LOOKUP[id] })).totalBalance);
   };
+  // BI's own DFABI UTXOs (balance() refuses BI on purpose: it is not a transfer account).
+  const biStock = async (): Promise<bigint> => BigInt((await zeto('DFABI', P.BI).balanceOf(P.BI.v, { account: LOOKUP.BI })).totalBalance);
   async function requireBalance(id: PartyId, t: Token, need: bigint) {
     if ((await balance(id, t)) < need) throw new Error(`Saldo ${PARTIES[id].name} tidak cukup`); // guards the N6 duplicate-input bug
   }
@@ -309,12 +317,17 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
     // Balance checks and the send happen under the sender lock, so the check sees the previous tx's result.
     const senders: PartyId[] = flow.dvp ? [req.from, req.to] : [req.from];
     const { tx, tokens, after, t0 } = await exclusive(senders, async () => {
+      const award = flow.dvp && req.from === 'BI'; // BI sells from its own inventory
       if (flow.dvp) {
-        await requireBalance(req.from, 'DFABI', amount);
+        if (!award) await requireBalance(req.from, 'DFABI', amount);
         await requireBalance(req.to, 'RD', amount * PRICE_PER_UNIT);
       } else if (!flow.issuer) await requireBalance(req.from, token, amount);
       const t0 = Date.now();
-      if (flow.issuer) {
+      if (award) { // top-up is BI's own mint on its own ledger: no bank report; counted in step 0
+        const topUp = topUpFor(await biStock(), amount);
+        if (topUp > 0n) await mintUtxos(P.BI, zeto('DFABI', P.BI), P.BI, 1, topUp);
+      }
+      if (flow.issuer && !flow.dvp) {
         const tx = (await mintUtxos(from, zeto(token, from), to, 1, amount))[0]!;
         return { tx, t0, tokens: [token], after: async () => { await report(req.to as BankId, token, tx); } };
       }
@@ -323,7 +336,11 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
         const [seller, buyer] = [req.from as BankId, req.to as BankId];
         return {
           tx: r.exec, t0, tokens: ['DFABI', 'RD'] as Token[],
-          after: async () => {
+          after: award ? async () => { // BI does not report to itself: it takes its DFABI outputs into its own ledger, the buyer reports the RD leg
+            await report(buyer, 'RD', { receipt: r.cash.lockRcpt });
+            await report(buyer, 'RD', r.exec, r.cash.states);
+            await ledger.ingest(await buildReport(P.BI.c, LOOKUP.BI, 'DFABI', address.DFABI, r.exec.receipt.transactionHash!, r.bond.states));
+          } : async () => {
             await report(seller, 'DFABI', { receipt: r.bond.lockRcpt });
             await report(buyer, 'RD', { receipt: r.cash.lockRcpt });
             await report(seller, 'RD', r.exec, r.cash.states);
@@ -419,7 +436,7 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
     const others = new Set(mine.filter((x) => x.token === asset && x.owner !== lower(state.owners[id])).map((x) => partyOf.get(x.owner) ?? null));
     const own: Counterparty = id === req.from
       ? { from: id, to: others.size === 1 ? [...others][0]! : null }
-      : { from: null, to: id };
+      : { from: FLOWS[req.flow].issuer && rdLeg(mine) !== null ? req.from : null, to: id }; // award: the RD leg sits with BI's key
     return view('clear', sum(mine), own,
       id === req.from ? 'Query state privat di node sendiri (`pstate.queryContractStates`).' : 'Node penerima menerima state terenkripsi dan membukanya.', rdLeg(mine));
   }
@@ -454,9 +471,10 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
         const outs = io.flatMap((i) => i.outputs.map((o) => ({ token: i.token, v: ledger.verified.get(o) })));
         if (!outs.every((o) => o.v)) return null;
         const main = io.length === 2 ? 'DFABI' : io[0]!.token;
+        const award = io.length === 2 && outs.some((o) => o.token === 'RD' && lower(o.v!.output.owner) === ownerKey.BI); // the RD leg went to BI's key
         return {
           seen: outs.map((o): Held => ({ token: o.token, amount: BigInt(o.v!.output.amount), owner: lower(o.v!.output.owner) })),
-          cp: ledgerParties(ledger, io.filter((i) => i.token === main).flatMap((i) => i.outputs), io.every((i) => i.inputs.length === 0)),
+          cp: ledgerParties(ledger, io.filter((i) => i.token === main).flatMap((i) => i.outputs), io.every((i) => i.inputs.length === 0) || award),
         };
       },
     });
@@ -471,7 +489,7 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
   const adapter: ModelAdapter & { fund: typeof fund } = {
     id: 'zeto',
     stepLabels: ['Bangun bukti ZK', 'Kirim ke node Paladin', 'Masuk block Besu', 'Laporan BI terverifikasi'],
-    capabilities: () => ({ ...Object.fromEntries((Object.keys(FLOWS) as FlowId[]).map((f): [FlowId, Capability] => [f, { enabled: true }])), award: { enabled: false, reason: 'Belum dibangun' } }) as Record<FlowId, Capability>,
+    capabilities: () => Object.fromEntries((Object.keys(FLOWS) as FlowId[]).map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
     async health() {
       const heights = await Promise.all(clients.map((c) => c.bidx.getConfirmedBlockHeight()));
       return { ready: true, detail: `4 node Paladin siap, block ${heights[0]}` };

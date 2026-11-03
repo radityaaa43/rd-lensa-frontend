@@ -99,6 +99,22 @@ describe('zeto history + network live', () => {
     expect((await a.lens(req, res, from)).rdAmount).toBe(String(PRICE_PER_UNIT));
   });
 
+  // BI is the seller, so node1 must run the fixed Paladin image. The tests cannot see the cluster: the operator sets
+  // ZETO_AWARD_DIGEST_OK=6f113f38 after checking that all 4 nodes run digest sha256:6f113f3829fefd7f954d3377935d7613ab78a90ba89c6af8e79159617b339f71.
+  it.skipIf(process.env.ZETO_AWARD_DIGEST_OK !== '6f113f38')('a fresh award BI -> A: one item per party, history == lens', async () => {
+    const a = (await load())!;
+    const req: FlowRequest = { model: 'zeto', flow: 'award', from: 'BI', to: 'A', amount: '1' };
+    const res = await a.run(req, 1n, () => {});
+    for (const p of P) {
+      const lens = await a.lens(req, res, p);
+      const item = await itemOf(a, p, res.txHash, lens.verdict !== 'sealed');
+      expect(item, `${p} history has the award`).toBeDefined();
+      expect(item).toMatchObject({ verdict: lens.verdict, amount: lens.amount, rdAmount: lens.rdAmount, counterparty: lens.counterparty, role: lens.role, flow: lens.verdict === 'sealed' ? null : 'award' });
+    }
+    expect(await a.lens(req, res, 'BI')).toMatchObject({ role: 'issuer', verdict: 'clear', rdAmount: String(PRICE_PER_UNIT) });
+    expect(await a.lens(req, res, 'A')).toMatchObject({ role: 'receiver', verdict: 'clear', rdAmount: String(PRICE_PER_UNIT) });
+  });
+
   it('network(): 4 validators + 4 Paladin nodes, all up', async () => {
     const n = await (await load())!.network();
     expect(n.nodes.map((x) => x.status)).toEqual(Array(8).fill('up'));

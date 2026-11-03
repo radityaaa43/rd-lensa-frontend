@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { newZetoCache, zetoBankItem, zetoBiItem, zetoHistory, type Held, type ZetoGroup, type ZetoScan } from '../src/adapters/zeto.ts';
+import { newZetoCache, topUpFor, zetoBankItem, zetoBiItem, zetoHistory, type Held, type ZetoGroup, type ZetoScan } from '../src/adapters/zeto.ts';
 import { ZETO_MOVEMENT_TOPICS } from '../../../besu/zeto/src/bi-report.ts';
 import type { EventLike } from '../src/adapters/noto.ts';
 import type { ReceiptLike } from '../src/adapters/besu-network.ts';
@@ -43,6 +43,15 @@ describe('zetoBankItem', () => {
     expect(zetoBankItem('B', dvp, withLeg, { self: K.B, partyOf })).toMatchObject({ flow: 'dvp', role: 'receiver', amount: '1', rdAmount: '6999999', counterparty: { from: null, to: 'B' } });
     expect(zetoBankItem('B', dvp, [held('DFABI', 1, 'B'), held('RD', 5, 'B')], { self: K.B, partyOf })).toMatchObject({ rdAmount: null });
   });
+
+  it('award, buyer: the same shape as a dvp whose RD leg goes to BI\'s key is an award from BI', () => {
+    const mine = [held('DFABI', 2, 'A'), held('RD', 5, 'A'), held('RD', 2_000_000, 'BI')];
+    expect(zetoBankItem('A', dvp, mine, { self: K.A, partyOf })).toEqual({
+      id: '0xh', at: '2026-11-02T10:00:00Z', block: 9, flow: 'award', asset: 'DFABI', role: 'receiver', verdict: 'clear',
+      amount: '2', rdAmount: '2000000', counterparty: { from: 'BI', to: 'A' },
+    });
+    expect(zetoBankItem('C', dvp, [], { self: K.C, partyOf })).toMatchObject({ flow: null, verdict: 'sealed' }); // an outsider stays sealed
+  });
 });
 
 describe('zetoBiItem', () => {
@@ -62,6 +71,21 @@ describe('zetoBiItem', () => {
 
   it('a ledger that cannot pin the parties down gives null amounts rather than a guess', () => {
     expect(zetoBiItem(transfer, [held('RD', 2, 'B')], null, K)).toMatchObject({ amount: null, counterparty: null });
+  });
+
+  it('award: BI is the seller (ledger says from BI) => award, issuer, clear; a bank seller stays dvp, reported', () => {
+    const seen = [held('DFABI', 998, 'BI'), held('DFABI', 2, 'A'), held('RD', 5, 'A'), held('RD', 2_000_000, 'BI')];
+    expect(zetoBiItem(dvp, seen, { from: 'BI', to: 'A' }, K)).toMatchObject({ flow: 'award', asset: 'DFABI', role: 'issuer', verdict: 'clear', amount: '2', rdAmount: '2000000', counterparty: { from: 'BI', to: 'A' } });
+    expect(zetoBiItem(dvp, [held('DFABI', 1, 'B'), held('RD', 6, 'A')], { from: 'A', to: 'B' }, K)).toMatchObject({ flow: 'dvp', role: 'regulator', verdict: 'reported' });
+  });
+});
+
+describe('topUpFor', () => {
+  it('mints nothing while the stock covers the award, else the shortfall in batches of at least 1000', () => {
+    expect(topUpFor(5n, 5n)).toBe(0n);
+    expect(topUpFor(9n, 5n)).toBe(0n);
+    expect(topUpFor(3n, 5n)).toBe(1000n);
+    expect(topUpFor(0n, 1500n)).toBe(1500n);
   });
 });
 
