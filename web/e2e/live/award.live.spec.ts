@@ -44,7 +44,10 @@ async function reads(page: Page, model: string, tx: string) {
   for (const q of PARTIES) {
     const get = () => page.request.get(`${BASE}/api/history?model=${model}&party=${q}&limit=100`);
     await expect.poll(async () => (await get()).status(), { timeout: 180_000, intervals: [5000] }).toBe(200); // 503 = BI's first sync
-    const h = (await (await get()).json()) as Item[];
+    let h = (await (await get()).json()) as Item[];
+    // an outsider's node can hold a fresh tx back for a moment (Noto, v1.3 pending): re-read before calling it absent.
+    // Not expect.poll: a party that never sees the tx is a valid outcome, not a timeout.
+    for (let i = 0; !h.some((x) => x.id === tx) && i < 3; i++) { await page.waitForTimeout(5000); h = (await (await get()).json()) as Item[]; }
     items[q] = h.find((i) => i.id === tx) ?? null;
   }
   return items;
