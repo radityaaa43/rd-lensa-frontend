@@ -198,7 +198,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     }
   });
 
-  // one asset failing (e.g. Fabric-X BI holds no transfer balance) never hides the other
+  // one asset failing (a node that cannot answer for that token) never hides the other
   app.get<{ Querystring: PartyQuery }>('/api/balance', { schema: { querystring: partyQuery } }, async (request, reply) => {
     const { model, party } = request.query;
     const a = adapters[model];

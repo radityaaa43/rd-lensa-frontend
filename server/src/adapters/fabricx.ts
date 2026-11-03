@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import { basename } from 'node:path';
 import { promisify } from 'node:util';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, StepEvent, Verdict } from '../adapter.ts';
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
@@ -73,8 +75,13 @@ export const kubectl = (s: FabricxState): Exec => async (args) => {
     if (err.killed) throw new Error(`Perintah kubectl tidak selesai dalam ${CALL_MS / 1000} detik`);
     // the driver ends a failed call with a "FAIL ..." line on stderr; everything else there is log noise
     const fail = (err.stderr ?? '').split('\n').filter((l) => l.startsWith('FAIL ')).pop();
-    // the server journal gets the exit code and kubectl's own stderr, never the command line, and the kubeconfig path redacted
-    if (!fail) console.error(`[fabricx] kubectl gagal (kode ${err.code ?? '?'}): ${(err.stderr ?? '').split(s.kubeconfig).join('(berkas server)').trim().slice(0, 500)}`);
+    // the server journal gets the exit code and kubectl's own stderr, never the command line; the kubeconfig as kubectl may
+    // name it (the given path, its real path, its file name; longest first) is redacted. An empty kubeconfig redacts nothing.
+    if (!fail) {
+      const names = s.kubeconfig ? [s.kubeconfig, ((): string => { try { return realpathSync(s.kubeconfig); } catch { return ''; } })(), basename(s.kubeconfig)] : [];
+      const text = names.filter(Boolean).sort((a, b) => b.length - a.length).reduce((t, n) => t.split(n).join('(berkas server)'), err.stderr ?? '');
+      console.error(`[fabricx] kubectl gagal (kode ${err.code ?? '?'}): ${text.trim().slice(0, 500)}`);
+    }
     // Never the raw execFile message: it is the whole command line, kubeconfig path included, and this text reaches the browser.
     throw new Error(fail ? fail.slice(5) : `kubectl gagal (kode ${err.code ?? 'tidak diketahui'})`);
   }
@@ -180,7 +187,8 @@ export function createFabricxAdapter(exec: Exec) {
       ({ party: id, role, verdict, amount: amount === null ? null : amount.toString(), rdAmount: rdAmount === null ? null : rdAmount.toString(), counterparty, onChain, method });
 
     // BI offline: the transaction is final but BI never got the report, so BI holds nothing about it.
-    if (id === 'BI' && report.startsWith('not delivered')) {
+    // Not for an award: BI is a party to it (§7.2) and holds its own records whatever the report did.
+    if (id === 'BI' && req.flow !== 'award' && report.startsWith('not delivered')) {
       return view('sealed', null, null, `Laporan belum sampai ke BI (${report}). Transaksi sudah final di ledger, laporan dikirim ulang nanti.`);
     }
     const award = req.flow === 'award';

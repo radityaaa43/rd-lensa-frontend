@@ -131,6 +131,13 @@ describe('fabricx lens', () => {
     for (const o of [b!, c!]) expect(o).toMatchObject({ verdict: 'sealed', amount: null, rdAmount: null, counterparty: null });
   });
 
+  it('award: BI is a party (§7.2), so a "not delivered" report does not seal BI; it reads its own records', async () => {
+    const a = createFabricxAdapter(fake({ report: 'not delivered: dial tcp: i/o timeout', records: { issuer: AWARD, bank2: AWARD } }).exec);
+    const r = req('award', 'BI', 'A', '1');
+    const bi = await a.lens(r, await a.run(r, 1n, () => {}), 'BI');
+    expect(bi).toMatchObject({ role: 'issuer', verdict: 'clear', amount: '1', rdAmount: '1000000', counterparty: { from: 'BI', to: 'A' } });
+  });
+
   it('BI offline: the report was not delivered, so BI holds nothing and is not asked', async () => {
     const f = fake({ report: 'not delivered: dial tcp: i/o timeout', records });
     const a = createFabricxAdapter(f.exec);
@@ -434,14 +441,31 @@ describe('kubectl() error text', () => {
     expect((err as Error).message).toMatch(/^kubectl gagal \(kode /);
   });
 
-  it('logs the failure for the server journal without the kubeconfig path or the command line', async () => {
-    const { kubectl } = await import('../src/adapters/fabricx.ts');
+  // Deterministic (no real kubectl): kubectl's stderr names the kubeconfig by the given path, its resolved real path and its file name.
+  it('the journal line redacts the kubeconfig path, its real path and its file name; an empty kubeconfig leaves stderr as is', async () => {
+    const { mkdtempSync, writeFileSync, symlinkSync, realpathSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const dir = mkdtempSync(join(tmpdir(), 'kc-'));
+    writeFileSync(join(dir, 'target-alibaba.yaml'), '');
+    const link = join(dir, 'alibaba.yaml');
+    symlinkSync(join(dir, 'target-alibaba.yaml'), link);
+    const real = realpathSync(link);
+    let stderr = '';
+    vi.resetModules();
+    vi.doMock('node:child_process', () => ({ execFile: (_f: string, _a: string[], _o: unknown, cb: (e: Error) => void) =>
+      cb(Object.assign(new Error(`Command failed: kubectl --kubeconfig ${link} get pods`), { code: 1, stderr })) }));
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      await kubectl({ kubeconfig: '/definitely/not/here/alibaba.yaml', namespace: 'x' })(['get', 'pods']).catch(() => {});
-      expect(log).toHaveBeenCalled();
-      const text = log.mock.calls.flat().map((x) => (x instanceof Error ? `${x.message} ${x.stack}` : typeof x === 'string' ? x : JSON.stringify(x))).join('\n');
-      expect(text).not.toMatch(/kubeconfig|alibaba\.yaml|definitely\/not\/here/);
-    } finally { log.mockRestore(); }
+      const { kubectl } = await import('../src/adapters/fabricx.ts');
+      stderr = `error: loading ${link} -> ${real}; see alibaba.yaml`;
+      await kubectl({ kubeconfig: link, namespace: 'x' })(['get', 'pods']).catch(() => {});
+      const line = String(log.mock.calls.at(-1)?.[0]);
+      expect(line).toMatch(/^\[fabricx\] kubectl gagal \(kode 1\): error: loading/);
+      expect(line).not.toMatch(/alibaba\.yaml|kubeconfig|kc-/);
+      stderr = 'error: boom';
+      await kubectl({ kubeconfig: '', namespace: 'x' })(['get', 'pods']).catch(() => {});
+      expect(String(log.mock.calls.at(-1)?.[0])).toBe('[fabricx] kubectl gagal (kode 1): error: boom');
+    } finally { log.mockRestore(); vi.doUnmock('node:child_process'); vi.resetModules(); }
   });
 });
