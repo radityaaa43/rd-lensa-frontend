@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { BANKS } from '../domain.ts';
 import { createFabricxAdapter, kubectl, type FabricxState } from '../adapters/fabricx.ts';
 import { writeState } from '../state.ts';
@@ -8,7 +9,7 @@ const DFABI_OPENING = 1000n;
 // The Fabric-X network already runs in the cluster (namespace fabricx, deployed by fabric-x/panurus-itest); nothing is deployed here.
 // Records how to reach it and tops each bank up to the opening balances by issuing from BI (a bank already above them is left alone).
 export async function bootstrap(): Promise<void> {
-  const state: FabricxState = { kubeconfig: process.env.FABRICX_KUBECONFIG ?? '/home/ecs-user/.kube/alibaba.yaml', namespace: 'fabricx', funded: false };
+  const state: FabricxState = { kubeconfig: process.env.FABRICX_KUBECONFIG ?? fileURLToPath(new URL('../../../../alibaba.yaml', import.meta.url)), namespace: 'fabricx', funded: false };
   writeState('fabricx', state);
   const adapter = createFabricxAdapter(kubectl(state));
   const health = await adapter.health();
