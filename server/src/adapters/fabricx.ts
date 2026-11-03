@@ -81,6 +81,18 @@ export const kubectl = (s: FabricxState): Exec => async (args) => {
 
 interface TxOut { txId: string; report: string; steps: { name: string; ms: number }[] }
 interface Move { sender: PartyId | null; recipient: PartyId | null; amount: bigint }
+
+// An award is found by shape, not by label (panurus records BI's DFABI issue as a bank-to-bank 'transfer'): the DFABI went to a
+// bank and that same bank paid RD to BI. Change rows (sender = recipient) are kept: the DFABI row itself looks like one.
+export function awardOf(rows: { sender: string; recipient: string; token: string; amount: string }[]): { bank: BankId; dfabi: bigint; rd: bigint } | null {
+  const sum = (rs: typeof rows) => rs.reduce((a, r) => a + BigInt(r.amount), 0n);
+  for (const bank of BANKS) {
+    const rd = rows.filter((r) => r.token === TOKEN.RD && r.sender === NODE[bank] && r.recipient === NODE.BI);
+    const dfabi = rows.filter((r) => r.token === TOKEN.DFABI && r.recipient === NODE[bank]);
+    if (rd.length && dfabi.length) return { bank, dfabi: sum(dfabi), rd: sum(rd) };
+  }
+  return null;
+}
 interface Ctx { report: string; onChain: { label: string; value: string }[] }
 
 export function createFabricxAdapter(exec: Exec) {
@@ -116,7 +128,6 @@ export function createFabricxAdapter(exec: Exec) {
   }
 
   async function balanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
-    if (party === 'BI') throw new Error('BI tidak memegang saldo transfer');
     return BigInt((await api<{ amount: string }>(['balance', NODE[party], TOKEN[asset]])).amount);
   }
 
@@ -129,7 +140,8 @@ export function createFabricxAdapter(exec: Exec) {
     const emit = (index: number, ms: number) => { const s = { index, label: adapter.stepLabels[index]!, ms }; steps.push(s); onStep(s); };
 
     // Same economics as zeto/noto: the seller (from) gives `amount` DFABI units, the buyer (to) pays amount * PRICE_PER_UNIT RD.
-    const [cmd, senders]: [string[], PartyId[]] = flow.issuer ? [['issue', NODE[req.to], TOKEN[flow.asset], amount.toString()], ['BI']]
+    const [cmd, senders]: [string[], PartyId[]] = req.flow === 'award' ? [['award', NODE[req.to], amount.toString(), (amount * PRICE_PER_UNIT).toString()], ['BI', req.to]]
+      : flow.issuer ? [['issue', NODE[req.to], TOKEN[flow.asset], amount.toString()], ['BI']]
       : flow.dvp ? [['swap', NODE[req.from], NODE[req.to], TOKEN.DFABI, amount.toString(), TOKEN.RD, (amount * PRICE_PER_UNIT).toString()], [req.from, req.to]]
         : [['transfer', NODE[req.from], NODE[req.to], TOKEN[flow.asset], amount.toString()], [req.from]];
     const out = await exclusive(senders, () => api<TxOut>(cmd));
@@ -146,11 +158,14 @@ export function createFabricxAdapter(exec: Exec) {
   }
 
   // What `node` holds about the tx for the flow's token: who paid whom how much, change (recipient == sender) left out.
-  async function moves(node: PartyId, txId: string, token: string, wait: boolean): Promise<Move[]> {
+  // An award has no plain movements to read: its DFABI leg is BI -> bank, its RD leg bank -> BI (awardOf).
+  async function moves(node: PartyId, txId: string, token: string, wait: boolean, award = false): Promise<Move[]> {
     for (const end = Date.now() + RECORDS_WAIT_MS; ; await sleep(500)) {
       const { records } = await api<{ records: { sender: string; recipient: string; type: string; amount: string }[] }>(['records', NODE[node], txId]);
-      const out = records.filter((r) => r.type === token && r.sender !== r.recipient)
-        .map((r) => ({ sender: PARTY_OF_NODE[r.sender] ?? null, recipient: PARTY_OF_NODE[r.recipient] ?? null, amount: BigInt(r.amount) }));
+      const aw = award ? awardOf(records.map((r) => ({ ...r, token: r.type }))) : null;
+      const out: Move[] = award ? (aw ? [token === TOKEN.RD ? { sender: aw.bank, recipient: 'BI', amount: aw.rd } : { sender: 'BI', recipient: aw.bank, amount: aw.dfabi }] : [])
+        : records.filter((r) => r.type === token && r.sender !== r.recipient)
+          .map((r) => ({ sender: PARTY_OF_NODE[r.sender] ?? null, recipient: PARTY_OF_NODE[r.recipient] ?? null, amount: BigInt(r.amount) }));
       if (out.length || !wait || Date.now() > end) return out;
     }
   }
@@ -167,14 +182,15 @@ export function createFabricxAdapter(exec: Exec) {
     if (id === 'BI' && report.startsWith('not delivered')) {
       return view('sealed', null, null, `Laporan belum sampai ke BI (${report}). Transaksi sudah final di ledger, laporan dikirim ulang nanti.`);
     }
-    const seen = await moves(id, result.txHash, token, role !== 'outsider');
+    const award = req.flow === 'award';
+    const seen = await moves(id, result.txHash, token, role !== 'outsider', award);
     if (!seen.length) {
       if (role !== 'outsider') throw new Error(`Node ${PARTIES[id].name} belum memiliki catatan transaksi ini`);
       return view('sealed', null, null, 'Node bank ini tidak menyimpan catatan transaksi ini (0 catatan). Ledger publik hanya berisi commitment dan bukti ZK.');
     }
     const amount = seen.reduce((a, m) => a + m.amount, 0n);
     if (FLOWS[req.flow].dvp) {
-      const rd = await moves(id, result.txHash, TOKEN.RD, role !== 'outsider');
+      const rd = await moves(id, result.txHash, TOKEN.RD, role !== 'outsider', award);
       if (rd.length) rdAmount = rd.reduce((a, m) => a + m.amount, 0n);
     }
     const one = <K extends 'sender' | 'recipient'>(k: K) => { const s = new Set(seen.map((m) => m[k])); return s.size === 1 ? [...s][0]! : null; };
@@ -210,8 +226,18 @@ export function createFabricxAdapter(exec: Exec) {
 
   // One tx from the party's own records. Change rows (sender = recipient) are not movements. Not listed: redeems, other tokens.
   function ownItem(party: PartyId, rows: HRec[], block: number): HistoryItem | null {
-    const moves = rows.filter((r) => r.status === 'confirmed' && r.sender !== r.recipient && (r.token === TOKEN.RD || r.token === TOKEN.DFABI) && r.type !== 'redeem');
+    const live = rows.filter((r) => r.status === 'confirmed' && (r.token === TOKEN.RD || r.token === TOKEN.DFABI) && r.type !== 'redeem');
+    const moves = live.filter((r) => r.sender !== r.recipient);
     if (!moves.length) return null;
+    const aw = awardOf(live);
+    if (aw) { // BI sold DFABI to a bank for RD: BI is the issuer, the buyer the receiver, both clear
+      const counterparty: Counterparty = { from: 'BI', to: aw.bank };
+      const role = roleFromParties(party, counterparty, true);
+      return {
+        id: moves[0]!.txId, at: new Date(moves[0]!.timestamp).toISOString(), block, flow: 'award', asset: 'DFABI', role,
+        verdict: role === 'outsider' ? 'partial' : 'clear', amount: aw.dfabi.toString(), rdAmount: aw.rd.toString(), counterparty,
+      };
+    }
     const sum = (token: string) => moves.filter((m) => m.token === token).reduce((a, m) => a + BigInt(m.amount), 0n);
     const one = (token: string, k: 'sender' | 'recipient') => { const s = new Set(moves.filter((m) => m.token === token).map((m) => PARTY_OF_NODE[m[k]] ?? null)); return s.size === 1 ? [...s][0]! : null; };
     const issue = moves.every((m) => m.type === 'issue');
@@ -281,7 +307,7 @@ export function createFabricxAdapter(exec: Exec) {
   const adapter: ModelAdapter & { fund: typeof issue } = {
     id: 'fabricx',
     stepLabels: ['Bukti ZK & endorsement 3-of-4', 'Final di ledger', 'Laporan ke BI', 'Cek ledger publik'],
-    capabilities: () => ({ ...Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])), award: { enabled: false, reason: 'Belum dibangun' } }) as Record<FlowId, Capability>,
+    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
     async health() {
       try {
         await balanceOf('A', 'RD');

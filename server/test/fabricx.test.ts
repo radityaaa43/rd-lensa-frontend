@@ -33,12 +33,14 @@ describe('fabricx run', () => {
     await a.run(req('rd-transfer', 'A', 'B', '12'), 12n, () => {});
     await a.run(req('dfabi-transfer', 'B', 'C', '13'), 13n, () => {});
     await a.run(req('dvp', 'A', 'B', '7'), 7n, () => {});
+    await a.run(req('award', 'BI', 'A', '1'), 1n, () => {});
     expect(f.calls.filter((c) => c[0] !== 'records')).toEqual([
       ['issue', 'bank2', 'RD', '10'],
       ['issue', 'bank3', 'DFABI-2027A', '11'],
       ['transfer', 'bank2', 'bank3', 'RD', '12'],
       ['transfer', 'bank3', 'bank4', 'DFABI-2027A', '13'],
       ['swap', 'bank2', 'bank3', 'DFABI-2027A', '7', 'RD', (7n * PRICE_PER_UNIT).toString()], // seller gives DFABI, buyer pays units * price
+      ['award', 'bank2', '1', '1000000'], // BI is the initiator, so no sender node: the buyer, DFABI units, RD leg = units * price
     ]);
   });
 
@@ -104,6 +106,18 @@ describe('fabricx lens', () => {
     expect((await createFabricxAdapter(fake({ records }).exec).lens(t, await a.run(t, 100n, () => {}), 'B')).rdAmount).toBeNull();
   });
 
+  // The real records of a live award (tx 93650e89..., BI -> bank2, 1 DFABI for 1,000,000 RD): panurus labels the DFABI issue a 'transfer' from the bank.
+  const AWARD = [rec('bank2', 'bank2', 'DFABI-2027A', '1'), rec('bank2', 'bank2', 'RD', '1000'), rec('bank2', 'issuer', 'RD', '1000000')];
+  it('award: BI issuer and buyer receiver clear with the RD leg as they read it, change excluded; other banks sealed', async () => {
+    const a = createFabricxAdapter(fake({ records: { issuer: AWARD, bank2: AWARD } }).exec);
+    const r = req('award', 'BI', 'A', '1');
+    const res = await a.run(r, 1n, () => {});
+    const [bi, buyer, b, c] = await Promise.all((['BI', 'A', 'B', 'C'] as const).map((p) => a.lens(r, res, p)));
+    expect(bi).toMatchObject({ role: 'issuer', verdict: 'clear', amount: '1', rdAmount: '1000000', counterparty: { from: 'BI', to: 'A' } });
+    expect(buyer).toMatchObject({ role: 'receiver', verdict: 'clear', amount: '1', rdAmount: '1000000', counterparty: { from: 'BI', to: 'A' } });
+    for (const o of [b!, c!]) expect(o).toMatchObject({ verdict: 'sealed', amount: null, rdAmount: null, counterparty: null });
+  });
+
   it('BI offline: the report was not delivered, so BI holds nothing and is not asked', async () => {
     const f = fake({ report: 'not delivered: dial tcp: i/o timeout', records });
     const a = createFabricxAdapter(f.exec);
@@ -122,11 +136,24 @@ describe('fabricx lens', () => {
 });
 
 describe('fabricx capacity, balances, health, load', () => {
-  it('capacity is 3 x the poorest bank in LOAD_AMOUNT coins; BI has no balance', async () => {
+  it('capacity is 3 x the poorest bank in LOAD_AMOUNT coins', async () => {
     const a = createFabricxAdapter(fake({ balances: { 'bank2/RD': '9000', 'bank3/RD': '4500', 'bank4/RD': '7000' } }).exec);
     expect(await a.loadCapacity()).toBe(12);
     expect(await a.balanceOf('B', 'DFABI')).toBe(5000n);
-    await expect(a.balanceOf('BI', 'RD')).rejects.toThrow();
+  });
+
+  it('BI balance is the issuer node\'s own', async () => {
+    const f = fake({ balances: { 'issuer/RD': '4000000', 'issuer/DFABI-2027A': '12' } });
+    const a = createFabricxAdapter(f.exec);
+    expect(await a.balanceOf('BI', 'RD')).toBe(4000000n);
+    expect(await a.balanceOf('BI', 'DFABI')).toBe(12n);
+    expect(f.calls).toEqual([['balance', 'issuer', 'RD'], ['balance', 'issuer', 'DFABI-2027A']]);
+  });
+
+  it('capabilities: every flow, award included, is enabled', () => {
+    const caps = createFabricxAdapter(fake().exec).capabilities();
+    expect(caps.award).toEqual({ enabled: true });
+    expect(Object.values(caps).every((c) => c.enabled)).toBe(true);
   });
 
   it('prepareLoad tops a short bank up to ceil(n/3)+1 coins and leaves the others alone', async () => {
@@ -298,6 +325,24 @@ describe('fabricx history', () => {
       expect(items[1]).toEqual({ id: T(4), at: null, block: 179, flow: null, asset: null, role: 'outsider', verdict: 'sealed', amount: null, rdAmount: null, counterparty: null });
       expect(items[2]).toMatchObject({ role: 'receiver', asset: 'DFABI', amount: '1000', counterparty: { from: 'BI', to: 'A' } });
       expect(items[3]).toMatchObject({ flow: 'dvp', asset: 'DFABI', amount: '1', rdAmount: '999999', role: 'sender', counterparty: { from: 'A', to: 'B' } }); // the RD leg is its own number, not amount x price
+    });
+  });
+
+  it('award is told by shape: BI and the buyer see an award (never dvp), other banks sealed; a bank-to-bank dvp stays dvp', async () => {
+    await atTimes(async (later) => {
+      const hAward = [hrec(T(5), 'transfer', 'bank2', 'bank2', 'DFABI-2027A', '1'), hrec(T(5), 'transfer', 'bank2', 'bank2', 'RD', '1000'), hrec(T(5), 'transfer', 'bank2', 'issuer', 'RD', '1000000')];
+      const swap = [hrec(T(4), 'transfer', 'bank2', 'bank3', 'DFABI-2027A', '1'), hrec(T(4), 'transfer', 'bank2', 'bank2', 'DFABI-2027A', '19'), hrec(T(4), 'transfer', 'bank3', 'bank2', 'RD', '1000000')];
+      const ledger = [[T(5), hex(180)], [T(4), hex(179)]] as [string, string][];
+      const a = createFabricxAdapter(histFake({ records: { issuer: [...hAward, ...swap], bank2: [...hAward, ...swap], bank3: swap, bank4: [] }, ledger: { issuer: ledger, bank2: ledger, bank3: ledger, bank4: ledger } }).exec);
+      for (const p of ['BI', 'A', 'B', 'C'] as const) await a.history(p, 20);
+      later();
+      const [bi, buyer, other, outsider] = await Promise.all((['BI', 'A', 'B', 'C'] as const).map((p) => a.history(p, 20)));
+      expect(bi![1]).toMatchObject({ flow: 'award', asset: 'DFABI', role: 'issuer', verdict: 'clear', amount: '1', rdAmount: '1000000', counterparty: { from: 'BI', to: 'A' } });
+      expect(buyer![1]).toMatchObject({ flow: 'award', role: 'receiver', verdict: 'clear', amount: '1', rdAmount: '1000000', counterparty: { from: 'BI', to: 'A' } });
+      expect(bi![0]).toMatchObject({ flow: 'dvp', amount: '1', rdAmount: '1000000' }); // the swap, no RD to BI: not an award
+      expect(buyer![0]).toMatchObject({ flow: 'dvp', counterparty: { from: 'A', to: 'B' } });
+      expect(other!.map((i) => [i.flow, i.verdict])).toEqual([['dvp', 'clear'], [null, 'sealed']]);
+      expect(outsider!.every((i) => i.verdict === 'sealed')).toBe(true);
     });
   });
 
