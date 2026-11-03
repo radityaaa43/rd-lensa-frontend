@@ -78,6 +78,13 @@ test('stress run on Ringan shows results and a CSV with the right header', async
   await page.getByRole('link', { name: /Unduh hasil/ }).click();
   const body = await readFile(await (await download).path(), 'utf8');
   expect(body.split('\n')[0].trim()).toBe('model,tps_avg,tps_peak,p50_s,p95_s,ok,failed,duration_s');
+
+  // the dialog names what WILL run (the form), not the models of the finished run that the snapshot still holds
+  for (const m of ['Zeto', 'Stealth', 'Fabric-X', 'Iroha 3']) await page.locator('.mchk button', { hasText: m }).click();
+  await page.getByRole('button', { name: 'Mulai stress test' }).click();
+  await expect(dialog).toContainText('Noto · 50 transaksi per model · batas 300 detik.');
+  await expect(dialog).not.toContainText('Zeto');
+  await page.keyboard.press('Escape');
 });
 
 // ARCHITECTURE.md §6: a party switch keeps the screen, seals what C cannot read, and leaves none of A's amounts on screen

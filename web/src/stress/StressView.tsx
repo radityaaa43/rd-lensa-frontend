@@ -106,7 +106,7 @@ export function StressView({ meta, hidden, onRun }: { meta: Meta; hidden: boolea
         countText={countText} error={error} onChange={change} onCountText={setText} onToggle={toggle} onGo={go} />
       <dialog ref={confirm} className="confirm" aria-labelledby="stress-confirm">
         <h2 id="stress-confirm">Mulai stress test?</h2>
-        <p>{shown.models.map((m) => meta.models[m].name).join(', ')} · {count.toLocaleString('id-ID')} transaksi per model · batas {form.limitS} detik.</p>
+        <p>{form.models.map((m) => meta.models[m].name).join(', ')} · {count.toLocaleString('id-ID')} transaksi per model · batas {form.limitS} detik.</p>
         <p>Transaksi dikirim ke jaringan nyata. Transfer dan DvP diblokir selama tes.</p>
         <div className="actions">
           <button className="btn" type="button" onClick={() => void start()}>Mulai</button>
