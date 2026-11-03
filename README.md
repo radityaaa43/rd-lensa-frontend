@@ -71,6 +71,30 @@ npm run build && npm start
 
 Buka `http://localhost:8790`. Dari laptop: `ssh -L 8790:localhost:8790 <host>`, lalu buka `http://localhost:8790`.
 
+### Sebagai layanan systemd (user)
+
+Server dan port-forward dijalankan systemd user, jadi tetap hidup tanpa sesi login (linger aktif) dan naik lagi sendiri
+kalau mati. Semuanya hanya di `127.0.0.1`.
+
+- `lensa.service`: server di port `PORT` (default 8790). Dianggap jalan setelah `/api/health` menjawab 200.
+- `lensa-pf@<nama>.service`: satu port-forward per baris `deploy/forwards.conf` (Paladin, Besu, Iroha 3). Fabric-X tidak
+  butuh forward (memakai `kubectl exec`). Kalau port lokal sedang dipakai proses lain, unit menunggu dan baru mengambil
+  alih setelah port itu bebas.
+- Konfigurasi di `~/.config/lensa/lensa.env` (mode 600, tidak masuk git; contoh: `deploy/lensa.env.example`).
+
+```bash
+deploy/install.sh                       # sekali: pasang unit, buat lensa.env bila belum ada, enable; tidak menjalankan apa pun
+systemctl --user start lensa            # jalankan (forward ikut naik)
+systemctl --user stop lensa             # hentikan server; forward tetap jalan
+systemctl --user stop 'lensa-pf@*'      # hentikan semua forward
+deploy/update.sh                        # build web lalu restart server
+journalctl --user -u lensa -f           # log server; forward: -u 'lensa-pf@*'
+systemctl --user status lensa 'lensa-pf@*'
+```
+
+Rollback ke cara manual: `systemctl --user disable --now lensa 'lensa-pf@*'`, lalu jalankan seperti di atas
+(`npm start`) dengan port-forward sendiri.
+
 ## Tes
 
 ```bash

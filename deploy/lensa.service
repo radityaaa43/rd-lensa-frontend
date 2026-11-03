@@ -1,0 +1,18 @@
+[Unit]
+Description=Lensa Privasi server (127.0.0.1)
+Wants=lensa-pf@paladin-node1.service lensa-pf@paladin-node2.service lensa-pf@paladin-node3.service lensa-pf@paladin-node4.service lensa-pf@besu.service lensa-pf@iroha-bi.service lensa-pf@iroha-bank-a.service lensa-pf@iroha-bank-b.service lensa-pf@iroha-bank-c.service 
+After=lensa-pf@paladin-node1.service lensa-pf@paladin-node2.service lensa-pf@paladin-node3.service lensa-pf@paladin-node4.service lensa-pf@besu.service lensa-pf@iroha-bi.service lensa-pf@iroha-bank-a.service lensa-pf@iroha-bank-b.service lensa-pf@iroha-bank-c.service 
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/lensa/lensa.env
+ExecStart=/bin/bash -c 'cd "$LENSA_ROOT/frontend" && exec npm start -w server'
+ExecStartPost=/bin/bash -c 'exec "$LENSA_ROOT/frontend/deploy/healthwait.sh"'
+TimeoutStartSec=120
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

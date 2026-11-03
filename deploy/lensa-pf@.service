@@ -1,0 +1,10 @@
+[Unit]
+Description=Lensa port-forward %i (127.0.0.1)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/lensa/lensa.env
+ExecStart=/bin/bash -c 'exec "$LENSA_ROOT/frontend/deploy/pf.sh" %i'
+Restart=always
+RestartSec=3
