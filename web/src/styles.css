@@ -46,7 +46,7 @@ h1,h2{font-family:var(--display);text-wrap:balance}
 .skip:focus{top:12px}
 .app{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:calc(100vh - 48px);margin:24px;background:var(--sheet);border-radius:var(--r-sheet);overflow:clip}
 .side{display:flex;flex-direction:column;gap:24px;padding:28px 16px 20px;border-right:1px solid var(--line)}
-.logo{display:flex;gap:10px;align-items:center;font:600 17px var(--display);color:var(--ink);text-decoration:none;padding:0 8px}
+.logo{display:flex;gap:10px;align-items:center;font:600 17px/22px var(--display);color:var(--ink);text-decoration:none;padding:0 8px}
 .logo i{width:40px;height:40px;border-radius:var(--r-tile);background:var(--aqua-tint);display:grid;place-items:center;color:var(--aqua-ink);font-style:normal}
 .side nav{display:flex;flex-direction:column;gap:2px}
 .nav{display:flex;gap:12px;align-items:center;padding:10px 12px;border-radius:var(--r-control);color:var(--muted);text-decoration:none;font-weight:500;min-height:44px}

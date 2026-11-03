@@ -1,4 +1,4 @@
-# UX review: Lensa Privasi revamp
+# UX review: Eksplorasi Rupiah Digital revamp
 
 Owner: `lead`. Pass 1 (design stage), 2026-11-02.
 Inputs: DESIGN.md (fe), ARCHITECTURE.md v2 §3, fe's needs-and-risks report, and the two images in `reference/`.

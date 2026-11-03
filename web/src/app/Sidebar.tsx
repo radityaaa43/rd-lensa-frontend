@@ -40,7 +40,7 @@ export function Sidebar({ meta, route }: { meta: Meta; route: ModelRoute }) {
   const screens = (Object.keys(LABEL) as Screen[]).filter((s) => !(s === 'laporan' && platform === 'iroha3'));
   return (
     <aside className="side">
-      <a className="logo" {...linkTo({ page: 'landing' })}><i aria-hidden="true">L</i><span>Lensa Privasi</span></a>
+      <a className="logo" aria-label="Eksplorasi Rupiah Digital" {...linkTo({ page: 'landing' })}><i aria-hidden="true">E</i><span>Eksplorasi<br />Rupiah Digital</span></a>
       <nav aria-label="Navigasi utama">
         {screens.map((s) => {
           const icon = <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICON[s]} /></svg>;

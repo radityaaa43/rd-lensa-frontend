@@ -1,4 +1,4 @@
-# Lensa Privasi — Design Spec (revamp)
+# Eksplorasi Rupiah Digital — Design Spec (revamp)
 
 Status: draft for T1 (FE-REVAMP). Source of truth for the restyle of `frontend/web/`.
 Doc language: English. Every string shown to users is Indonesian and is quoted here verbatim.
@@ -139,6 +139,7 @@ Rules: sentence case everywhere, no letter-spaced caps. Headings `text-wrap: bal
 ```
 
 - **Sidebar** 232px, labelled items with outline icons (Ref B). Bottom slot holds the dark platform card (Ref B "History available" card): current platform + model + "Ganti platform".
+- **Logo**: `--aqua-tint` tile with "E", then the app name. Sidebar: "Eksplorasi" / "Rupiah Digital" on two lines (Poppins 600 17/22), sidebar width unchanged; the link's `aria-label` is the full name. Landing: the full name on one line; it wraps at narrow widths, the font never shrinks.
 - **Header** 72px, bottom `--line` divider (Ref A). Left: breadcrumb `Besu › Zeto` with the Besu model selector beside it. Right: party switcher, network status chip. Ref A/B put icon buttons there; we put the two controls that change what is visible.
 - **Content** 12-column grid, 24px gap. Left-aligned text; numbers right-aligned in tables.
 - **768–1279px**: sidebar collapses to a 72px icon rail (Ref A), each icon with `aria-label` and a tooltip. Dashboard cards go 2-up.

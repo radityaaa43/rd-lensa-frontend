@@ -1,4 +1,4 @@
-# Lensa Privasi revamp: code architecture
+# Eksplorasi Rupiah Digital revamp: code architecture
 
 Owner: `lead`. Engineers implement within this document. A change to anything here (files,
 interfaces, data shapes, dependencies, patterns) goes to `lead` first.

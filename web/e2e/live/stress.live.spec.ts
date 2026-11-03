@@ -126,7 +126,7 @@ test('a. page shell: header, selectors, health, no console errors, layout at 128
   page.on('response', (r) => { if (r.status() === 404 && noRun(r.url())) known404++; else if (r.status() >= 400) errors.push(`http ${r.status()} ${r.url()}`); });
 
   await page.goto('/');
-  await expect(page.getByText('Lensa Privasi').first()).toBeVisible();
+  await expect(page.getByText('Eksplorasi Rupiah Digital').first()).toBeVisible();
   await expect(page.getByRole('button', { name: 'Demo transaksi' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Stress test TPS' })).toBeVisible();
 

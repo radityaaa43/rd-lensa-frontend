@@ -25,4 +25,4 @@ const app = buildApp(
 );
 const port = Number(process.env.PORT ?? 8791);
 await app.listen({ host: '127.0.0.1', port });
-console.log(`Lensa Privasi (mock): http://127.0.0.1:${port}`);
+console.log(`Eksplorasi Rupiah Digital (mock): http://127.0.0.1:${port}`);

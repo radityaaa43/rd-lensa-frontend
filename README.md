@@ -1,4 +1,4 @@
-# Lensa Privasi
+# Eksplorasi Rupiah Digital
 
 Demo satu transaksi yang sama dilihat dari tiap pihak (BI, bank pengirim, bank penerima, bank lain) di lima model: Zeto, Noto, Stealth, Fabric-X, Iroha 3. Ada juga stress test TPS yang membandingkan semuanya.
 

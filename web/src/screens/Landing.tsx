@@ -15,7 +15,7 @@ export function Landing({ health }: { health: Health | undefined }) {
   };
   return (
     <div className="sheet">
-    <a className="logo" {...linkTo({ page: 'landing' })}><i aria-hidden="true">L</i><span>Lensa Privasi</span></a>
+    <a className="logo" {...linkTo({ page: 'landing' })}><i aria-hidden="true">E</i><span>Eksplorasi Rupiah Digital</span></a>
     <main className="landing" id="konten">
       <h1>Satu transaksi, empat sudut pandang</h1>
       <p>Pilih platform, lalu lihat transaksi yang sama dari sisi BI dan tiga bank.</p>
