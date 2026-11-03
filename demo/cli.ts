@@ -1,5 +1,5 @@
 // npm run demo -- --list | --all | --scenario <id> [--platform <model>] [--headed] [--include-stress] [--allow-writes] [--speed slow|normal|fast]
-// npm run demo:mock -- ...   (same, against the demo mock on :8791; no chain, no gate)
+// npm run demo:mock -- ...   (same, against the demo mock on :8791; no chain, no gate; --inject-fail <flow> makes that flow fail, to self-test the abort rule)
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -17,7 +17,7 @@ const { values: a } = parseArgs({
   options: {
     list: { type: 'boolean' }, all: { type: 'boolean' }, scenario: { type: 'string', multiple: true }, platform: { type: 'string', multiple: true },
     headed: { type: 'boolean' }, mock: { type: 'boolean' }, 'include-stress': { type: 'boolean' }, 'allow-writes': { type: 'boolean' },
-    speed: { type: 'string' },
+    speed: { type: 'string' }, 'inject-fail': { type: 'string' },
   },
 });
 
@@ -48,6 +48,8 @@ if (a.all && a['include-stress']) wanted.push(scenarioById('S10')!);
 const run = wanted.filter((s) => s.id !== 'S0' && (!s.mockOnly || mock));
 const skipped = wanted.filter((s) => s.mockOnly && !mock);
 
+if (a['inject-fail'] && !mock) die('--inject-fail hanya untuk --mock');
+
 // ---- the live write gate ----
 const planned = run.reduce((n, s) => n + s.writes, 0) * models.length;
 if (!mock && planned > 0 && !a['allow-writes']) {
@@ -69,7 +71,7 @@ console.log(`demo: ${mock ? 'mock' : 'LIVE'} | ${ids.join(' ')} | ${models.join(
 
 const env = {
   ...process.env, DEMO_OUT: out, DEMO_MOCK: mock ? '1' : '0', DEMO_SCENARIOS: ids.join(','), DEMO_PLATFORMS: models.join(','), DEMO_SPEED: speed,
-  DEMO_ALLOW_WRITES: a['allow-writes'] ? '1' : '0',
+  DEMO_ALLOW_WRITES: a['allow-writes'] ? '1' : '0', DEMO_INJECT_FAIL: a['inject-fail'] ?? '',
 };
 const pw = spawnSync('npx', ['playwright', 'test', '-c', join(here, 'playwright.demo.config.ts'), ...(a.headed ? ['--headed'] : []), ...(run.length ? [] : ['--pass-with-no-tests'])], {
   cwd: join(here, '..'), env, stdio: 'inherit',

@@ -44,10 +44,10 @@ export function api(req: APIRequestContext) {
     },
     async history(model: ModelId, party: PartyId, limit: number): Promise<HistoryItem[]> { return (await this.settled(model, party, limit)).items; },
     capacity: () => must<Record<string, number>>('/api/preflight-capacity'),
-    // GET /api/stress: 204 = never run, else a snapshot. Idle means not 'running'.
-    async stressState(): Promise<string> {
+    // GET /api/stress: 204 = never run, else the last snapshot ('done' and 'stopped' stay after the run). Only 'running' holds the lock.
+    async stressState(): Promise<'idle' | 'running'> {
       const r = await req.get('/api/stress');
-      return r.status() === 204 ? 'idle' : ((await r.json()) as { state: string }).state;
+      return r.status() !== 204 && ((await r.json()) as { state: string }).state === 'running' ? 'running' : 'idle';
     },
   };
 }

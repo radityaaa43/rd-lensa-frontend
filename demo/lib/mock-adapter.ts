@@ -50,6 +50,7 @@ export function mockAdapter(id: ModelId) {
     capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, off.has(f) ? { enabled: false, reason: off.get(f)! } : { enabled: true }])) as Record<FlowId, Capability>,
     balanceOf: async (p, asset) => book[p][asset],
     async run(req, amount, onStep): Promise<FlowResult> {
+      if (process.env.DEMO_INJECT_FAIL === req.flow) throw new Error('Kegagalan buatan (--inject-fail)'); // self-test of the abort rule
       const steps = [];
       for (const [index, label] of LABELS.entries()) {
         await new Promise((ok) => setTimeout(ok, 250));
