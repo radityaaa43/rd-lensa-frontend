@@ -444,3 +444,75 @@ function usePoll<T>(key: string, fetch: () => Promise<Reply<T>>, everyMs?: numbe
 - **Playwright** (`web/e2e/`, mock server): landing → Besu → Zeto → switch party A to C. The
   history changes, a sealed chip shows for C, and no element shows A's amounts after the switch.
   Live specs in `web/e2e/live/` cover the 20 views.
+
+## 7. Award flow (v3 DRAFT, 2026-11-03, pending orchetrator confirm)
+
+Primary-market award: BI sells DFABI to one bank, the bank pays RD, atomically. Every model gets
+the flow. A model that cannot do it honestly keeps it disabled with a precise reason; a fake path
+is not allowed. Sources: blockhain's per-model feasibility report (2026-11-03), fe's UI needs report.
+
+### 7.1 Contract (`domain.ts`, `adapter.ts`)
+
+```ts
+export type FlowId = 'rd-issue' | 'rd-transfer' | 'dfabi-issue' | 'dfabi-transfer' | 'dvp' | 'award';
+// FLOWS gains:
+award: { asset: 'DFABI', issuer: true, dvp: true },
+```
+- **Request.** `{ flow: 'award', from: 'BI', to: <bank>, amount: <DFABI units> }`. The existing
+  `validateRequest` rules already hold: an issuer flow must come from BI, and the receiver must be
+  a bank. No new rule.
+- **Price.** The RD leg is `amount × PRICE_PER_UNIT` (domain.ts). Only the server computes it, at
+  submit time. Each party's `rdAmount` comes from its own read of the chain, never from the
+  client. The Compose preview may show the terms, labelled "ketentuan transaksi" (§1).
+- **Roles.** `roleOf` / `roleFromParties` need no change: BI is `issuer` (from + issuer flag),
+  the bank is `receiver`, the other banks are `outsider`. In an award, BI is NOT `regulator`.
+- **HistoryItem / LensView.** `flow: 'award'`, `asset: 'DFABI'`, `amount` = DFABI units,
+  `rdAmount` = the RD leg as this party reads it, counterparty `{ from: 'BI', to: <bank> }` when
+  readable. "dvp only" in the `rdAmount` comments becomes "dvp and award" (any flow with
+  `FLOWS[f].dvp`).
+- **Adapters.** `capabilities()` must return an `award` key (tsc enforces it through
+  `Record<FlowId, Capability>`). `run()` handles `award`, and `history()` labels award txs
+  `'award'`, never `'dvp'`. Detection is per model: the seller leg is owned by BI.
+- **R1 is unchanged.** Each party reads only its own node/keys. Outsiders are `sealed` in private
+  models, Iroha 3 is transparent as today, Stealth is `partial` as today.
+
+### 7.2 Server (`app.ts`)
+
+- **Balance pre-check.** For `award`, needs = `[[to, 'RD', amount × PRICE_PER_UNIT]]`. The BI side
+  is the adapter's job (mint-to-self or custodian supply). The current `flow.issuer ? []` branch
+  must check `flow.dvp` first.
+- **No new route.** The award runs through `POST /api/tx` and the same SSE steps.
+
+- **Laporan.** An award has BI as a party, so it creates no report row. BI's verdict on its own
+  award is `clear`, not `reported`.
+
+### 7.3 Web (from fe's needs report, 2026-11-03)
+
+- **One helper.** `isDvpFlow(f: FlowId | null): boolean` in domain.ts (`f !== null &&
+  FLOWS[f].dvp`). All 6 `flow === 'dvp'` sites switch to it: HistoryTable :35 / :50 / :96,
+  Lenses :39, Transfer :44, Sidebar :28. A missed site would render award rows wrong without any
+  error, so a unit test feeds an award item through HistoryTable.
+- **No new screen.** The `dvp` screen serves both. For `?pihak=BI` it is the award form (nav label
+  "Penjualan perdana"); for a bank it stays the secondary-market DvP ("DvP"). Routes are unchanged.
+  `flowOf` (demoState.ts:34) maps `dvp` to `party === 'BI' ? 'award' : 'dvp'`. Sidebar for BI
+  returns `allOff(['award'])` instead of the fixed text.
+- **Price.** It stays the protocol constant `PRICE_PER_UNIT` (shared domain import). It is not in
+  /api/meta. One price for DvP and award.
+- **Copy.** FLOW_NAME award = "Penjualan perdana DFABI ↔ RD", in the DvP FLOW_GROUP. Buyer role
+  label "Pembeli DFABI". BI keeps "Penerbit & pengawas".
+- **BI stock.** No pre-check and no UI hint in the MVP. Adapters mint-to-self or use custodian
+  stock (§7.4), and if stock is missing they throw a clear error.
+
+### 7.4 Per model (blockhain, 2026-11-03)
+
+| Model | Atomic award | Mechanism | Blocker | Est. |
+|---|---|---|---|---|
+| Noto+Pente | yes | `executeOutright` with seller = bondCustodian@node1 (bond/src/index.ts:248-405), all auto mode | none | 4-6 h |
+| Iroha 3 | yes | native DvpIsi, delivery-from BI, bank grants CanExecuteSettlement; BI mints DFABI to itself first | none (transparent lane, as today) | 4-6 h |
+| Stealth | yes (A) | existing DvPEscrow, BI as seller; BI issues DFABI to itself | BI needs a stealth receive keypair in state | 6-10 h |
+| Fabric-X | not today | needs an `award` view pair (Issue + Transfer in one TokenRequest) + a driver command | interface change + rdbi-node rollout: orchetrator approval | 8-10 h + rollout |
+| Zeto | yes | BI mints DFABI to itself, then `swap(seller = BI)`; BI's prepareSpendLock runs on node1 | node1 on the fixed Paladin image (in progress) | 5-8 h |
+
+Disabled reasons until built: Fabric-X "Driver belum punya perintah award (terbit + bayar)";
+Stealth "BI belum punya kunci penerima stealth"; Zeto "Menunggu node1 pada image Paladin yang
+sudah diperbaiki" (dropped once node1 passes).
