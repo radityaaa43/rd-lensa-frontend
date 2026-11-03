@@ -1,6 +1,6 @@
 // Imported by the web bundle at runtime: keep this file free of imports.
 export type ModelId = 'zeto' | 'noto' | 'stealth' | 'fabricx' | 'iroha3';
-export type FlowId = 'rd-issue' | 'rd-transfer' | 'dfabi-issue' | 'dfabi-transfer' | 'dvp';
+export type FlowId = 'rd-issue' | 'rd-transfer' | 'dfabi-issue' | 'dfabi-transfer' | 'dvp' | 'award';
 export type PartyId = 'BI' | 'A' | 'B' | 'C';
 export type BankId = Exclude<PartyId, 'BI'>;
 
@@ -20,7 +20,10 @@ export const FLOWS: Record<FlowId, { asset: 'RD' | 'DFABI'; issuer: boolean; dvp
   'dfabi-issue': { asset: 'DFABI', issuer: true, dvp: false },
   'dfabi-transfer': { asset: 'DFABI', issuer: false, dvp: false },
   dvp: { asset: 'DFABI', issuer: false, dvp: true },
+  award: { asset: 'DFABI', issuer: true, dvp: true }, // primary market: BI sells DFABI to a bank for RD (ARCHITECTURE.md §7)
 };
+// DvP and award both carry an RD leg; null = a sealed flow.
+export function isDvpFlow(f: FlowId | null): boolean { return f !== null && FLOWS[f].dvp; }
 
 export interface FlowRequest { model: ModelId; flow: FlowId; from: PartyId; to: PartyId; amount: string }
 export type Role = 'sender' | 'receiver' | 'issuer' | 'regulator' | 'outsider';

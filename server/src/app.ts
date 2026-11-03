@@ -260,11 +260,11 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
         return reply.code(503).send({ reason: `${MODEL_NAMES[body.model]} belum siap: ${msg(e)}` });
       }
 
-      // [who pays, asset, needed]; issuing needs no balance, dvp checks both legs
+      // [who pays, asset, needed]; dvp checks both legs, an award only the buyer's RD (BI's DFABI is the adapter's job), issuing none
       const flow = FLOWS[body.flow];
-      const needs: [PartyId, 'RD' | 'DFABI', bigint][] = flow.issuer ? []
-        : flow.dvp ? [[body.from, 'DFABI', v.amount], [body.to, 'RD', v.amount * PRICE_PER_UNIT]]
-          : [[body.from, flow.asset, v.amount]];
+      const buyerRd: [PartyId, 'RD', bigint] = [body.to, 'RD', v.amount * PRICE_PER_UNIT];
+      const needs: [PartyId, 'RD' | 'DFABI', bigint][] = flow.dvp ? (flow.issuer ? [buyerRd] : [[body.from, 'DFABI', v.amount], buyerRd])
+        : flow.issuer ? [] : [[body.from, flow.asset, v.amount]];
       try {
         for (const [party, asset, need] of needs) {
           if (await withDeadline(adapter.balanceOf(party, asset), HEALTH_MS, 'Cek saldo') < need) {

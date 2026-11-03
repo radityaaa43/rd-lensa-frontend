@@ -60,7 +60,7 @@ test('meta lists 4 models with step labels', async () => {
   expect(body.models.zeto).toMatchObject({ name: 'Zeto', available: true, stepLabels: ['Siapkan', 'Kirim', 'Konfirmasi', 'Selesai'] });
   expect(body.models.zeto.capabilities['dvp']).toEqual({ enabled: true });
   expect(body.parties.A.name).toBe('Bank Mandala');
-  expect(Object.keys(body.flows)).toHaveLength(5);
+  expect(Object.keys(body.flows)).toHaveLength(6);
 });
 
 test('meta marks a missing adapter as unavailable', async () => {
@@ -140,6 +140,20 @@ test('dvp checks buyer RD at amount x price and seller DFABI', async () => {
   expect(res.json()).toEqual({ reason: 'Saldo Bank Nusantara tidak cukup' });
   z.balanceOf = async (_p, asset) => (asset === 'RD' ? 10n ** 18n : 0n);
   expect((await post(a, '/api/tx', { ...req, flow: 'dvp', amount: '1' })).json()).toEqual({ reason: 'Saldo Bank Mandala tidak cukup' });
+});
+
+test('award checks only the buyer RD at amount x price, never BI', async () => {
+  const z = fakeAdapter('zeto');
+  const asked: string[] = [];
+  z.balanceOf = async (p, asset) => { asked.push(`${p}:${asset}`); return asset === 'RD' ? 1_999_999n : 0n; };
+  const a = make({ zeto: z });
+  const award: FlowRequest = { ...req, flow: 'award', from: 'BI', to: 'B', amount: '2' };
+  const res = await post(a, '/api/tx', award);
+  expect(res.statusCode).toBe(400);
+  expect(res.json()).toEqual({ reason: 'Saldo Bank Nusantara tidak cukup' });
+  expect(asked).toEqual(['B:RD']);
+  z.balanceOf = async (_p, asset) => (asset === 'RD' ? 2_000_000n : 0n); // BI holds no DFABI: not checked
+  expect((await post(a, '/api/tx', award)).statusCode).toBe(202);
 });
 
 test('issue flows skip the balance check', async () => {

@@ -4,7 +4,7 @@ import type { FlowId, ModelId, PartyId, PlatformId } from '../../../server/src/d
 export const GROUPS: [string, string, FlowId[]][] = [
   ['rd', 'Rupiah Digital (RD)', ['rd-issue', 'rd-transfer']],
   ['dfabi', 'Obligasi DFABI', ['dfabi-issue', 'dfabi-transfer']],
-  ['dvp', 'Penyelesaian DvP', ['dvp']],
+  ['dvp', 'Penyelesaian DvP', ['dvp', 'award']],
 ];
 export const FLOW_NAME: Record<FlowId, string> = {
   'rd-issue': 'Penerbitan RD',
@@ -12,6 +12,7 @@ export const FLOW_NAME: Record<FlowId, string> = {
   'dfabi-issue': 'Penerbitan seri DFABI',
   'dfabi-transfer': 'Transfer DFABI',
   dvp: 'DvP DFABI ↔ RD',
+  award: 'Penjualan perdana DFABI ↔ RD',
 };
 export const groupName = (flow: FlowId) => GROUPS.find((g) => g[2].includes(flow))![1];
 export const flowName = (_model: ModelId, flow: FlowId) => FLOW_NAME[flow];

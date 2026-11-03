@@ -471,7 +471,7 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
   const adapter: ModelAdapter & { fund: typeof fund } = {
     id: 'zeto',
     stepLabels: ['Bangun bukti ZK', 'Kirim ke node Paladin', 'Masuk block Besu', 'Laporan BI terverifikasi'],
-    capabilities: () => Object.fromEntries((Object.keys(FLOWS) as FlowId[]).map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
+    capabilities: () => ({ ...Object.fromEntries((Object.keys(FLOWS) as FlowId[]).map((f): [FlowId, Capability] => [f, { enabled: true }])), award: { enabled: false, reason: 'Belum dibangun' } }) as Record<FlowId, Capability>,
     async health() {
       const heights = await Promise.all(clients.map((c) => c.bidx.getConfirmedBlockHeight()));
       return { ready: true, detail: `4 node Paladin siap, block ${heights[0]}` };

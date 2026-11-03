@@ -1,7 +1,7 @@
 import { CANCELLED, type Capability, type HistoryItem, type LensView, type ModelAdapter, type Network } from '../src/adapter.ts';
-import { FLOWS, PRICE_PER_UNIT, roleOf, type FlowId, type FlowRequest, type ModelId } from '../src/domain.ts';
+import { FLOWS, PRICE_PER_UNIT, isDvpFlow, roleOf, type FlowId, type FlowRequest, type ModelId } from '../src/domain.ts';
 
-const FLOW_IDS: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp'];
+const FLOW_IDS: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp', 'award'];
 
 // Deterministic adapter for tests: no chain access, fixed results.
 export function fakeAdapter(
@@ -31,7 +31,7 @@ export function fakeAdapter(
       return {
         party, role, verdict: sealed ? 'sealed' : role === 'regulator' && opts.biVerdict ? opts.biVerdict : 'clear',
         amount: sealed ? null : req.amount,
-        rdAmount: sealed || req.flow !== 'dvp' ? null : (BigInt(req.amount) * PRICE_PER_UNIT).toString(),
+        rdAmount: sealed || !isDvpFlow(req.flow) ? null : (BigInt(req.amount) * PRICE_PER_UNIT).toString(),
         counterparty: sealed ? null : { from: req.from, to: req.to },
         onChain: [{ label: 'tx', value: '0x' + 'ab'.repeat(32) }],
         method: `fake:${id}`,
@@ -47,7 +47,7 @@ export function fakeAdapter(
       return txs.slice(0, limit).map((req, i) => {
         const role = roleOf(req, party);
         const sealed = role === 'outsider' && !opts.transparent;
-        const dvp = req.flow === 'dvp';
+        const dvp = isDvpFlow(req.flow);
         return {
           id: `0x${String(i + 1).repeat(64)}`, at: new Date(Date.UTC(2026, 10, 2, 10, 0, 0) - i * 60_000).toISOString(), block: 100 - i,
           flow: sealed ? null : req.flow, asset: sealed ? null : FLOWS[req.flow].asset,

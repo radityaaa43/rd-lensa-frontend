@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { roleFromParties, roleOf, validateRequest, type FlowRequest } from '../src/domain.ts';
+import { isDvpFlow, roleFromParties, roleOf, validateRequest, type FlowRequest } from '../src/domain.ts';
 
 const t = (o: Partial<FlowRequest>): FlowRequest => ({ model: 'zeto', flow: 'rd-transfer', from: 'A', to: 'B', amount: '1000', ...o });
 
@@ -12,6 +12,19 @@ test('issue roles', () => {
   expect(roleOf(r, 'BI')).toBe('issuer'); expect(roleOf(r, 'C')).toBe('receiver');
   expect(roleOf(r, 'A')).toBe('outsider'); expect(roleOf(r, 'B')).toBe('outsider');
 });
+test('award roles: BI is the issuer (never regulator), the buyer receives, the other banks are outsiders', () => {
+  const r = t({ flow: 'award', from: 'BI', to: 'B' });
+  expect(roleOf(r, 'BI')).toBe('issuer'); expect(roleOf(r, 'B')).toBe('receiver');
+  expect(roleOf(r, 'A')).toBe('outsider'); expect(roleOf(r, 'C')).toBe('outsider');
+});
+test('award: BI sells to a bank; a bank as seller or BI as buyer is rejected', () => {
+  expect(validateRequest(t({ flow: 'award', from: 'BI', to: 'C', amount: '2' }))).toEqual({ ok: true, amount: 2n });
+  expect(validateRequest(t({ flow: 'award', from: 'A', to: 'B' }))).toEqual({ ok: false, reason: 'Penerbitan hanya dijalankan BI' });
+  expect(validateRequest(t({ flow: 'award', from: 'BI', to: 'BI' }))).toMatchObject({ ok: false });
+});
+test.each([
+  ['dvp', true], ['award', true], ['rd-issue', false], ['rd-transfer', false], ['dfabi-issue', false], ['dfabi-transfer', false], [null, false],
+] as const)('isDvpFlow(%s) = %s', (f, v) => expect(isDvpFlow(f)).toBe(v));
 test.each([
   [{ amount: '' }, 'Nominal wajib diisi'],
   [{ amount: '0' }, 'Nominal harus lebih dari 0'],

@@ -18,6 +18,17 @@ test('a dvp lens carries the RD leg, a transfer lens does not', async () => {
   expect((await a.lens(tr, await a.run(tr, 2n, () => {}), 'A')).rdAmount).toBeNull();
 });
 
+test('an award lens is like dvp: RD leg for BI and the buyer, the outsider sealed; disabled works for award', async () => {
+  const a = fakeAdapter('zeto');
+  const award = { model: 'zeto', flow: 'award', from: 'BI', to: 'B', amount: '2' } as const;
+  const res = await a.run(award, 2n, () => {});
+  expect(await a.lens(award, res, 'BI')).toMatchObject({ role: 'issuer', verdict: 'clear', amount: '2', rdAmount: '2000000', counterparty: { from: 'BI', to: 'B' } });
+  expect(await a.lens(award, res, 'B')).toMatchObject({ role: 'receiver', verdict: 'clear', rdAmount: '2000000' });
+  expect(await a.lens(award, res, 'C')).toMatchObject({ role: 'outsider', verdict: 'sealed', amount: null, rdAmount: null, counterparty: null });
+  expect(a.capabilities().award).toEqual({ enabled: true });
+  expect(fakeAdapter('zeto', { disabled: { award: 'Belum dibangun' } }).capabilities().award).toEqual({ enabled: false, reason: 'Belum dibangun' });
+});
+
 test('transparent: an outsider reads lens and history in full, otherwise it is sealed', async () => {
   const req = { model: 'iroha3', flow: 'rd-transfer', from: 'A', to: 'B', amount: '1' } as const;
   const sealed = fakeAdapter('zeto');

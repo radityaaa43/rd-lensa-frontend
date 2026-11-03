@@ -419,7 +419,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
   return {
     id: 'stealth',
     stepLabels: LABELS,
-    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
+    capabilities: () => ({ ...Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])), award: { enabled: false, reason: 'Belum dibangun' } }) as Record<FlowId, Capability>,
     async health() {
       try {
         return await withDeadline((async () => {

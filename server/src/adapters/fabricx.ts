@@ -281,7 +281,7 @@ export function createFabricxAdapter(exec: Exec) {
   const adapter: ModelAdapter & { fund: typeof issue } = {
     id: 'fabricx',
     stepLabels: ['Bukti ZK & endorsement 3-of-4', 'Final di ledger', 'Laporan ke BI', 'Cek ledger publik'],
-    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
+    capabilities: () => ({ ...Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])), award: { enabled: false, reason: 'Belum dibangun' } }) as Record<FlowId, Capability>,
     async health() {
       try {
         await balanceOf('A', 'RD');

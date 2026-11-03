@@ -387,7 +387,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
   const adapter: ModelAdapter & { fund: typeof mint } = {
     id: 'iroha3',
     stepLabels: ['Tanda tangan & kirim ke Torii', 'Diterima pipeline', 'Commit di blok (3 dari 4 validator)', 'Tersalin ke 4 validator'],
-    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
+    capabilities: () => ({ ...Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])), award: { enabled: false, reason: 'Belum dibangun' } }) as Record<FlowId, Capability>,
     async health() {
       const down: string[] = [];
       let blocks = 0;

@@ -317,7 +317,7 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     id: 'noto',
     stepLabels: ['Notary BI memeriksa', 'Kirim ke node Paladin', 'Masuk block Besu', 'State dibagikan ke pihak terkait'],
 
-    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
+    capabilities: () => ({ ...Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])), award: { enabled: false, reason: 'Belum dibangun' } }) as Record<FlowId, Capability>,
 
     async health() {
       try {

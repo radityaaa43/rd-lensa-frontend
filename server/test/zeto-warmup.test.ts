@@ -30,10 +30,11 @@ describe('Zeto BI history, cold start', () => {
     await expect(a.history('BI', 5)).rejects.toBeInstanceOf(WarmingUpError); // a failed sync does not count as the first sync: still warming, tried again
   });
 
-  it('capabilities: every flow is on, dvp included (Paladin flush fix)', () => {
+  it('capabilities: every flow is on, dvp included (Paladin flush fix); award is not built yet', () => {
     const caps = createZetoAdapter(state, dead as never).capabilities();
     expect(caps.dvp).toEqual({ enabled: true });
-    for (const c of Object.values(caps)) expect(c).toEqual({ enabled: true });
+    expect(caps.award).toEqual({ enabled: false, reason: 'Belum dibangun' });
+    for (const [flow, c] of Object.entries(caps)) if (flow !== 'award') expect(c).toEqual({ enabled: true });
   });
 
   it('a bank is not affected: its error is the node error, not WarmingUpError', async () => {
