@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Network } from '../../../server/src/adapter.ts';
 import type { PartyId } from '../../../server/src/domain.ts';
 import { getBalance, getHistory, type Balance, type Meta } from '../api.ts';
@@ -29,7 +30,7 @@ function figure(b: Poll<Balance>, asset: 'RD' | 'DFABI') {
   if (!v) return 'Memuat…';
   if ('error' in v) return <span className="figerr">{v.error}</span>;
   const s = asset === 'RD' ? formatRupiah(BigInt(v.amount)) : formatUnits(BigInt(v.amount));
-  return <span className={fit(s)}>{s}</span>;
+  return <span key={s} className={fit(s)}>{s}</span>; // key: a new value fades in (DESIGN.md §8)
 }
 
 // DESIGN.md §7.4–7.7, ARCHITECTURE.md §3.3 Dasbor
@@ -37,6 +38,7 @@ export function Dashboard({ meta, route, network }: { meta: Meta; route: ModelRo
   const { model, party } = route;
   const balance = usePoll(`${model}|${party}|saldo`, () => getBalance(model, party));
   const recent = usePoll(`${model}|${party}|riwayat5`, () => getHistory(model, party, 5));
+  const [paused, setPaused] = useState(false);
   const own = network.data?.nodes.filter((n) => n.owner === party) ?? [];
   const ownState = !network.data ? 'Memuat…' : own.length === 0 ? 'Tidak ada node' : own.every((n) => n.status === 'up') ? 'Aktif' : own.some((n) => n.status === 'down') ? 'Mati' : 'Tidak diketahui';
 
@@ -49,14 +51,23 @@ export function Dashboard({ meta, route, network }: { meta: Meta; route: ModelRo
           <StatCard tone="blue" icon={NODE} label="Node Anda" figure={ownState} sub={own[0]?.detail} />
         </div>
 
-        <section className="panel" id="jaringan" aria-labelledby="h-net">
+        <section className={`panel netpanel${paused ? ' paused' : ''}`} id="jaringan" aria-labelledby="h-net">
           <div className="panelhead">
             <h2 id="h-net">Jaringan</h2>
-            <ul className="netlegend" aria-label="Keterangan status">
-              <li><i className="dot" aria-hidden="true" />Aktif</li>
-              <li><i className="dot down" aria-hidden="true" />Mati</li>
-              <li><i className="dot unknown" aria-hidden="true" />Tidak diketahui</li>
-            </ul>
+            <div className="netctl">
+              <ul className="netlegend" aria-label="Keterangan status">
+                <li><i className="dot" aria-hidden="true" />Aktif</li>
+                <li><i className="dot down" aria-hidden="true" />Mati</li>
+                <li><i className="dot unknown" aria-hidden="true" />Tidak diketahui</li>
+              </ul>
+              {/* WCAG 2.2.2: the packet loop runs longer than 5 s next to other content, so it can be paused */}
+              <button className="iconbtn sm" type="button" aria-pressed={paused} aria-label={paused ? 'Putar animasi jaringan' : 'Jeda animasi jaringan'}
+                title={paused ? 'Putar animasi' : 'Jeda animasi'} onClick={() => setPaused((v) => !v)}>
+                <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d={paused ? 'M8 5v14l11-7z' : 'M9 5v14M15 5v14'} />
+                </svg>
+              </button>
+            </div>
           </div>
           <Polled p={network} rows={2}>
             {(net) => net.nodes.length === 0 ? <Empty title="Belum ada node terdaftar untuk platform ini." /> : <NetworkGraph net={net} meta={meta} party={party} />}

@@ -1,6 +1,6 @@
 # Eksplorasi Rupiah Digital — Design Spec v2 (Xenith restyle)
 
-Status: v2, 2026-11-04. Replaces the Ref A/B design (periwinkle canvas, dark balance card). Source of truth for the look of `frontend/web/`.
+Status: v2.1, 2026-11-04 (v2.1: Geist type, radial network graph, motion layer). Replaces the Ref A/B design (periwinkle canvas, dark balance card). Source of truth for the look of `frontend/web/`.
 Doc language: English. Every string shown to users is Indonesian and is quoted here verbatim.
 Scope: the visual layer only. The contract in [ARCHITECTURE.md](ARCHITECTURE.md), every data flow, every Indonesian string, the sealed-vs-empty rule (§6.1) and the accessibility rules (§9) are unchanged.
 
@@ -86,17 +86,17 @@ One family plus a monospace for identifiers that are literally code.
 
 | Role | Family | Why | Source |
 |---|---|---|---|
-| Everything: headings, figures, body, tables, forms | **Figtree** 400 / 500 / 600 | Round, geometric grotesque. The closest open face on Google Fonts to the one in X1 (the reference font is not on Google Fonts). One family keeps the page calm; weight and size carry the hierarchy. Has tabular figures: `font-variant-numeric: tabular-nums` on `body` | X1 |
-| Tx ids, hashes, block numbers | **IBM Plex Mono** 400 | Hashes are code; never used for labels | existing |
+| Everything: headings, figures, body, tables, forms | **Geist** 400 / 500 / 600 | Neutral, technical grotesque with tight default spacing; reads as infrastructure, not retail. One family keeps the page calm; weight, size and negative tracking carry the hierarchy. `font-variant-numeric: tabular-nums` on `body` | v2.1 (2026-11-04, user: "lebih minimalist modern … termasuk typography"; replaced Figtree) |
+| Tx ids, hashes, block numbers | **Geist Mono** 400 | Same skeleton as Geist, so mono runs sit on the same baseline rhythm; never used for labels | v2.1 (replaced IBM Plex Mono) |
 
-Load through the Google Fonts `<link>` in `web/index.html`: `Figtree:wght@400;500;600` and `IBM+Plex+Mono:wght@400;500`, `display=swap`. Poppins and IBM Plex Sans are removed.
+Load through the Google Fonts `<link>` in `web/index.html`: `Geist:wght@400;500;600` and `Geist+Mono:wght@400;500`, `display=swap`.
 
 | Token | Size / line | Weight | Use | Source |
 |---|---|---|---|---|
-| `--t-display` | 40 / 48, tracking −0.02em | 500 | Landing title | X1 |
-| `--t-h1` | 24 / 32, tracking −0.01em | 500 | Page title in the header ("Dasbor · Bank Nusantara") | X1 "Welcome Back, Zac!" |
-| `--t-h2` | 17 / 24 | 600 | Panel and rail titles ("Aktivitas terbaru", "Jaringan") | X1 "Top selling products" |
-| `--t-figure` | up to 32 / 1.15, tracking −0.02em | 500 | Stat card figure. Steps down with the digit count (§7.4) | X1 "307.48K" |
+| `--t-display` | 44 / 50, tracking −0.035em | 600 | Landing title | X1 |
+| `--t-h1` | 26 / 34, tracking −0.025em | 600 | Page title in the header ("Dasbor · Bank Nusantara") | X1 "Welcome Back, Zac!" |
+| `--t-h2` | 16–17 / 24, tracking −0.01em | 600 | Panel and rail titles ("Aktivitas terbaru", "Jaringan") | X1 "Top selling products" |
+| `--t-figure` | up to 32 / 1.2, tracking −0.03em | 500 | Stat card figure. Steps down with the digit count (§7.4) | X1 "307.48K" |
 | `--t-body` | 14.5 / 22 | 400 | Default | X1 |
 | `--t-small` | 13 / 20 | 400 / 500 | Subtitle, table headers, hints | X1 |
 | `--t-micro` | 12 / 16 | 500 | Badges, tooltip, delta line | X1 |
@@ -226,9 +226,19 @@ Desktop: semantic `<table>` with caption "Riwayat transaksi sebagai {pihak}". No
 
 Mobile: each row becomes a `--line`-outlined tile, `--r-tile`: icon, flow, large amount, counterparty, time.
 
-### 7.7 Network graph  · X1 chart slot · Flow · inline SVG
+### 7.7 Network graph  · X1 chart slot · Flow · inline SVG (v2.1)
 
-The "Jaringan" panel holds the large visual, where X1 has "Earnings". A lane diagram, one column per owner plus "Bersama". A legend row at the panel top right (X1 "First half / Top Gross"): dot + "Aktif", ring + "Mati", dashed ring + "Tidak diketahui". Node = `--r-tile` box with a `--line` stroke on `--sheet`, kind label, status dot; links 1.5px `--line`, dashed `--down` when a node is down. The selected party's lane is `--blue-tint` with "Node Anda". Hover/focus on a node shows `detail` in a **dark tooltip pill** (`--ink-panel`, white text, `--lift`), exactly X1's "$307.48K / June 2024" pill. Every node is focusable with `role="img"` and a full `aria-label`; a visually hidden `<table>` repeats the nodes. Poll 10s. Mobile: list form, links hidden.
+The "Jaringan" panel holds the large visual, where X1 has "Earnings". It is the one card on Dasbor with an outline (`1px --line`, `--r-card`) and a faint 20px dot grid behind it, so the network reads as a field of connected nodes.
+
+- **Layout: a radial constellation, not lanes.** Deterministic, no layout library. Each party owns a direction (BI top, Bank Mandala right, Bank Nusantara bottom, Bank Sejahtera left). Two dashed elliptical rails:
+  - inner rail: consensus and ordering nodes (`besu-validator`, `iroha-peer`, `fabricx-orderer`, `fabricx-committer`), drawn as **hexagons**;
+  - outer rail: each party's access node (`paladin`, `fsc-node`), drawn as **circles**.
+  - With no access nodes (Iroha 3) the consensus nodes take the outer rail. Shared nodes (`owner: null`) spread evenly between the party directions, with "Bersama" in the centre.
+- **Links are only what the adapter reports** (ARCHITECTURE.md §1). The real topology is already a mesh: Besu validators full mesh + Paladin N → validator N, Iroha 3 full mesh, Fabric-X FSC nodes → every orderer + BI → committer. Nothing is drawn that the adapter did not return. Links 1.25px `--control` at 35%; links that touch the viewing party's nodes `--ink` at 50%; a link with a down end is dashed `--down`.
+- **Node**: kind glyph inside, status dot on the upper right (filled `--up`, ring `--down`, dashed ring `--faint`). The viewing party's nodes are filled `--ink` with a `--sheet` glyph, and the party name is set in `--ink` 600 with "Node Anda" under it. Other party names in `--muted`. Names sit outward from the centre (above the top node, below the others) with a `--sheet` text halo, so they never sit on a link.
+- **Tooltip**: hover/focus shows `{label} · {detail}` in a dark pill (`--ink-panel`), X1's chart tooltip.
+- A11y: every node is focusable, `role="img"`, full `aria-label`; a visually hidden `<table>` repeats the nodes. Mobile (< 768px): the table is shown instead of the drawing.
+- Legend top right: "Aktif", "Mati", "Tidak diketahui", then a 32px round pause button ("Jeda animasi jaringan" / "Putar animasi jaringan", `aria-pressed`) for the looping motion (WCAG 2.2.2).
 
 ### 7.8 Charts  · X1 line chart · inline SVG
 
@@ -271,12 +281,16 @@ Native `<dialog>` "Mulai stress test?" (`--r-card`, `--lift`), buttons "Mulai" (
 | Moment | Motion | Duration / easing |
 |---|---|---|
 | **Party switch (the one signature moment)** | Newly unreadable fields: text fades out while the hatch slides in from the left inside the chip. Newly readable: hatch slides out, value fades in. `transform` and `opacity` only | 220ms, `cubic-bezier(.2,.7,.2,1)`, 20ms stagger per column, max 4 |
-| Route change | Content cross-fade | 120ms |
-| Popover, tooltip | Fade + 4px rise | 120ms |
-| Node up dot | Soft pulse ring | 2s loop |
+| **Dasbor entrance** (the one load sequence, v2.1) | Stat cards, then Jaringan and Aktivitas, then the rail rise 10px and fade in | 600ms `cubic-bezier(.16,1,.3,1)`, 60ms stagger |
+| Network build-in | Nodes scale from .6 and fade, staggered 45ms; links draw in (stroke-dashoffset), staggered 25ms | 500ms / 900ms |
+| **Packets** | A short dash travels along every link whose two ends are up (`--blue`; `--ink` on the viewing party's links). Says "these nodes are talking", and stops on a link with a down end | 2.8s linear loop, desynchronised per link; pausable (§7.7) |
+| Node Anda halo | One ring around the viewing party's live nodes expands and fades | 2.4s loop; pausable |
+| Figure change (party switch) | The new figure rises 4px and fades in | 350ms |
+| Press | Buttons, nav items and rail rows scale to .98 on `:active` | 150ms |
+| Tooltip | Fade | 120ms |
 | Skeleton | Gradient slide | 1.2s loop |
 
-No entrance animations, no hover lift. `transition` names its properties. Under `prefers-reduced-motion: reduce` everything is an instant swap and the pulse and shimmer stop.
+No hover lift on cards that are not interactive. `transition` names its properties; only `transform`, `opacity`, colour and stroke move. Under `prefers-reduced-motion: reduce` everything is an instant swap: no entrance, no packets (hidden), no halo, no shimmer, and the pause button is hidden because nothing loops.
 
 ---
 

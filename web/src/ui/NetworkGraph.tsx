@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import type { Network, NetworkNode, NodeKind } from '../../../server/src/adapter.ts';
 import type { PartyId } from '../../../server/src/domain.ts';
 import type { Meta } from '../api.ts';
@@ -8,56 +8,117 @@ export const KIND: Record<NodeKind, string> = {
   'fabricx-committer': 'Committer Fabric-X', 'fabricx-orderer': 'Orderer Fabric-X', 'iroha-peer': 'Peer Iroha',
 };
 export const STATUS: Record<NetworkNode['status'], string> = { up: 'Aktif', down: 'Mati', unknown: 'Tidak diketahui' };
-const OWNERS: (PartyId | null)[] = ['BI', 'A', 'B', 'C', null];
-const COL = 200, BOX_W = 176, BOX_H = 56, ROW = 72, TOP = 40;
 
-// DESIGN.md §7.7: deterministic lane diagram, one column per owner (+ "Bersama" for owner null). Inline SVG, no layout library.
+// consensus/ordering nodes sit on the inner ring (hexagon); a party's own access node on the outer ring (circle)
+const CORE = new Set<NodeKind>(['besu-validator', 'iroha-peer', 'fabricx-orderer', 'fabricx-committer']);
+const ICON: Record<NodeKind, string> = {
+  'besu-validator': 'M12 3 20 6v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6zM9 12l2 2 4-4',
+  'iroha-peer': 'M12 3 20 7.5v9L12 21 4 16.5v-9zM4 7.5 12 12l8-4.5M12 12v9',
+  'fabricx-orderer': 'M12 3 21 8l-9 5-9-5zM3 13l9 5 9-5',
+  'fabricx-committer': 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
+  paladin: 'M4 5h16v6H4zM4 13h16v6H4zM8 8h.01M8 16h.01',
+  'fsc-node': 'M15 4a5 5 0 1 1-4.6 7L4 17.5V20h3l1-1h2v-2h2l1.4-1.4A5 5 0 0 1 15 4zM16 8h.01',
+};
+const ANGLE: Record<PartyId, number> = { BI: -90, A: 0, B: 90, C: 180 };
+const W = 760, H = 450, CX = W / 2, CY = 226;
+const RING = { inner: { rx: 150, ry: 78 }, outer: { rx: 290, ry: 152 } };
+const hex = (r: number) => Array.from({ length: 6 }, (_, i) => { const a = (Math.PI / 3) * i - Math.PI / 2; return `${(r * Math.cos(a)).toFixed(1)},${(r * Math.sin(a)).toFixed(1)}`; }).join(' ');
+
+// Deterministic radial layout (no layout library): each party owns one direction, shared nodes spread between them.
+function layout(nodes: NetworkNode[]) {
+  const hasOuter = nodes.some((n) => !CORE.has(n.kind));
+  const pos = new Map<string, { x: number; y: number; ring: 'inner' | 'outer' }>();
+  for (const ring of ['inner', 'outer'] as const) {
+    // with no access nodes (Iroha 3) the consensus nodes take the outer ring, so the graph keeps its size
+    const here = nodes.filter((n) => (CORE.has(n.kind) && hasOuter ? 'inner' : 'outer') === ring);
+    const shared = here.filter((n) => n.owner === null);
+    const { rx, ry } = RING[ring];
+    const put = (n: NetworkNode, deg: number) => {
+      const a = (deg * Math.PI) / 180;
+      pos.set(n.id, { x: CX + rx * Math.cos(a), y: CY + ry * Math.sin(a), ring });
+    };
+    shared.forEach((n, i) => put(n, -90 + 180 / shared.length + (360 / shared.length) * i));
+    for (const p of Object.keys(ANGLE) as PartyId[]) {
+      const own = here.filter((n) => n.owner === p);
+      own.forEach((n, j) => put(n, ANGLE[p] + (j - (own.length - 1) / 2) * 18));
+    }
+  }
+  return pos;
+}
+
+// DESIGN.md §7.7: the network as the chain reports it. Links are only the ones the adapter returns (ARCHITECTURE.md §1).
 export function NetworkGraph({ net, meta, party }: { net: Network; meta: Meta; party: PartyId }) {
   const [active, setActive] = useState<string | null>(null);
-  const owners = OWNERS.filter((o) => o !== null || net.nodes.some((n) => n.owner === null));
-  const ownerName = (o: PartyId | null) => (o === null ? 'Bersama' : meta.parties[o].name);
-  const pos = new Map<string, { x: number; y: number }>();
-  owners.forEach((o, i) => net.nodes.filter((n) => n.owner === o).forEach((n, j) => pos.set(n.id, { x: i * COL + 12, y: TOP + j * ROW })));
-  const rows = Math.max(1, ...owners.map((o) => net.nodes.filter((n) => n.owner === o).length));
-  const W = owners.length * COL, H = TOP + rows * ROW;
+  const pos = layout(net.nodes);
   const status = new Map(net.nodes.map((n) => [n.id, n.status]));
-  const hot = active ? net.nodes.find((n) => n.id === active) : undefined;
+  const ownerName = (o: PartyId | null) => (o === null ? 'Bersama' : meta.parties[o].name);
   const label = (n: NetworkNode) => `${n.label}, ${KIND[n.kind]}, ${STATUS[n.status]}, milik ${ownerName(n.owner)}`;
+  // one name per party, under its outermost node
+  const names = (Object.keys(ANGLE) as PartyId[]).flatMap((p) => {
+    const own = net.nodes.filter((n) => n.owner === p).flatMap((n) => pos.get(n.id) ?? []);
+    if (own.length === 0) return [];
+    const far = own.reduce((a, b) => (Math.hypot(b.x - CX, b.y - CY) > Math.hypot(a.x - CX, a.y - CY) ? b : a));
+    // outward from the centre: above a node at the top, below every other one, so a name never sits on a link
+    const top = far.y < CY - 40;
+    return [{ p, x: far.x, y: top ? far.y - 52 : far.y + 42 }];
+  });
+  const sharedInner = net.nodes.some((n) => n.owner === null && pos.get(n.id)?.ring === 'inner');
+  const hot = active ? net.nodes.find((n) => n.id === active) : undefined;
 
   return (
     <div className="netgraph">
-      <svg viewBox={`0 0 ${W} ${H + 40}`} role="group" aria-label="Diagram jaringan">
-        {owners.map((o, i) => (
-          <g key={String(o)}>
-            {o === party && <rect className="lane" x={i * COL + 2} y={2} width={COL - 4} height={H + 4} rx={12} />}
-            <text className="lanehead" x={i * COL + 12} y={24}>{ownerName(o)}{o === party ? ' · Node Anda' : ''}</text>
-          </g>
-        ))}
-        {net.links.map((l) => {
+      <svg viewBox={`0 0 ${W} ${H}`} role="group" aria-label="Diagram jaringan">
+        <ellipse className="rail" cx={CX} cy={CY} rx={RING.outer.rx} ry={RING.outer.ry} />
+        {sharedInner && <ellipse className="rail" cx={CX} cy={CY} rx={RING.inner.rx} ry={RING.inner.ry} />}
+        {sharedInner && <text className="center" x={CX} y={CY + 4} textAnchor="middle">Bersama</text>}
+
+        {net.links.map((l, i) => {
           const a = pos.get(l.from), b = pos.get(l.to);
           if (!a || !b) return null;
-          const broken = status.get(l.from) === 'down' || status.get(l.to) === 'down';
-          return <line key={`${l.from}-${l.to}`} className={broken ? 'link down' : 'link'} x1={a.x + BOX_W / 2} y1={a.y + BOX_H / 2} x2={b.x + BOX_W / 2} y2={b.y + BOX_H / 2} />;
-        })}
-        {net.nodes.map((n) => {
-          const p = pos.get(n.id);
-          if (!p) return null;
+          const sa = status.get(l.from), sb = status.get(l.to);
+          const mine = net.nodes.some((n) => (n.id === l.from || n.id === l.to) && n.owner === party);
           return (
-            <g key={n.id} className={`node ${n.status}`} transform={`translate(${p.x} ${p.y})`} tabIndex={0} role="img" aria-label={label(n)}
-              onMouseEnter={() => setActive(n.id)} onMouseLeave={() => setActive(null)} onFocus={() => setActive(n.id)} onBlur={() => setActive(null)}>
-              <rect width={BOX_W} height={BOX_H} rx={12} />
-              <circle className="st" cx={18} cy={BOX_H / 2} r={5} />
-              <text x={32} y={23} className="nl">{n.label}</text>
-              <text x={32} y={41} className="nk">{KIND[n.kind]} · {STATUS[n.status]}</text>
+            <g key={`${l.from}-${l.to}`} className={`link${sa === 'down' || sb === 'down' ? ' down' : ''}${mine ? ' mine' : ''}`} style={{ '--i': i } as CSSProperties}>
+              <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} pathLength={100} />
+              {sa === 'up' && sb === 'up' && <line className="pkt" x1={a.x} y1={a.y} x2={b.x} y2={b.y} pathLength={100} />}
             </g>
           );
         })}
+
+        {net.nodes.map((n, i) => {
+          const p = pos.get(n.id);
+          if (!p) return null;
+          const core = CORE.has(n.kind);
+          const r = core ? 24 : 21;
+          return (
+            <g key={n.id} className={`node ${n.status}${n.owner === party ? ' mine' : ''}`} transform={`translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})`}
+              tabIndex={0} role="img" aria-label={label(n)} style={{ '--i': i } as CSSProperties}
+              onMouseEnter={() => setActive(n.id)} onMouseLeave={() => setActive(null)} onFocus={() => setActive(n.id)} onBlur={() => setActive(null)}>
+              <g className="body">
+                {n.owner === party && n.status === 'up' && <circle className="halo" r={r + 7} />}
+                {core ? <polygon className="shape" points={hex(r)} /> : <circle className="shape" r={r} />}
+                <path className="glyph" d={ICON[n.kind]} transform="translate(-9 -9) scale(.75)" />
+                <circle className="st" cx={r * 0.72} cy={-r * 0.72} r={4.5} />
+              </g>
+            </g>
+          );
+        })}
+
+        {names.map(({ p, x, y }) => (
+          <g key={p} className={`owner${p === party ? ' mine' : ''}`} aria-hidden="true">
+            <text x={x} y={y} textAnchor="middle">{meta.parties[p].name}</text>
+            {p === party && <text className="you" x={x} y={y + 16} textAnchor="middle">Node Anda</text>}
+          </g>
+        ))}
+
         {hot && pos.get(hot.id) && (() => {
           const p = pos.get(hot.id)!;
-          const t = hot.detail.length > 44 ? `${hot.detail.slice(0, 43)}…` : hot.detail;
+          const t = `${hot.label} · ${hot.detail.length > 40 ? `${hot.detail.slice(0, 39)}…` : hot.detail}`;
+          const w = Math.min(340, 28 + t.length * 6.4);
+          const x = Math.max(4, Math.min(p.x - w / 2, W - w - 4));
           return (
-            <g className="tip" transform={`translate(${Math.min(p.x, W - 260)} ${p.y + BOX_H + 6})`} aria-hidden="true">
-              <rect width={256} height={28} rx={14} /><text x={14} y={18}>{t}</text>
+            <g className="tip" transform={`translate(${x.toFixed(1)} ${(p.y < CY ? p.y + 34 : p.y - 66).toFixed(1)})`} aria-hidden="true">
+              <rect width={w} height={32} rx={16} /><text x={14} y={20}>{t}</text>
             </g>
           );
         })()}
