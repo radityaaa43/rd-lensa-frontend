@@ -4,7 +4,7 @@ import {
   type BankId, type FlowId, type FlowRequest, type PartyId,
 } from '../domain.ts';
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, WarmingUpError } from '../adapter.ts';
-import { besuNetwork, holdBack, joinInFlight, receiptPage, type ReceiptLike } from './besu-network.ts';
+import { besuNetwork, besuReceipt, holdBack, joinInFlight, paladinNodeReceipt, receiptPage, type ReceiptLike } from './besu-network.ts';
 import type { EventLike } from './noto.ts';
 import { afterLock } from '../deadline.ts';
 import { readState } from '../state.ts';
@@ -501,6 +501,10 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
     lens,
     history,
     network: () => besuNetwork({ paladin: true }),
+    receipt: async (tx, party) => {
+      const [chain, node] = await Promise.all([besuReceipt(tx), paladinNodeReceipt(party, tx)]); // public receipt + the party's own Paladin node
+      return { ...chain, node };
+    },
     async loadCapacity() {
       return 3 * Math.min(...(await Promise.all(BANKS.map(loadUtxos))));
     },

@@ -113,3 +113,34 @@ describe('joinInFlight', () => {
     await expect(bad()).rejects.toThrow('boom'); // retried, not cached
   });
 });
+
+// ---- receipts (live shapes from 2026-11-04: ptx_getTransactionReceiptFull on the four nodes) ----
+import { paladinNodeReceipt, paladinPart, type JsonRpc, type PtxReceipt } from '../src/adapters/besu-network.ts';
+
+const H = '0x' + '4e'.repeat(32);
+const party: PtxReceipt = {
+  id: 'd282e00f-0000-4000-8000-000000000000', success: true, domain: 'zeto', source: '0xdef2', blockNumber: 1995067,
+  states: { spent: [{}], confirmed: [{ data: { amount: '1', owner: 'x', salt: 'SECRET-SALT' } }, {}], info: [{}] },
+  domainReceipt: { transfers: [{ from: 'bank2@node2', to: 'bank3@node3', amount: '0x0a' }] },
+};
+const outsider: PtxReceipt = { id: party.id, success: true, domain: 'zeto', source: '0xdef2', blockNumber: 1995067, states: {}, domainReceiptError: 'PD011658: A domain receipt is not yet available for transaction' };
+const rpcOf = (byId: PtxReceipt[]): JsonRpc => (async (_url: string, method: string) =>
+  method === 'ptx_queryTransactionReceipts' ? byId.map((r) => ({ id: r.id })) : byId[0]) as JsonRpc;
+
+describe('Paladin node receipt', () => {
+  it('a party node shows counts and transfers, never a state body', () => {
+    const p = paladinPart(party);
+    expect(p.rows).toContainEqual({ label: 'State privat', value: 'spent 1, confirmed 2, info 1' });
+    expect(p.rows).toContainEqual({ label: 'Transfer', value: 'bank2@node2 -> bank3@node3 · 10' });
+    expect(JSON.stringify(p)).not.toContain('SECRET-SALT');
+  });
+  it('an outsider node says it holds no private data, and PD011658 is not shown as an error', async () => {
+    const n = await paladinNodeReceipt('C', H, rpcOf([outsider]), 'http://x');
+    expect(n.note).toBe('Tidak ada data privat di node Bank Sejahtera: node ini hanya memegang receipt publik');
+    expect(JSON.stringify(n)).not.toContain('PD011658');
+  });
+  it('a node without any receipt for the hash says so', async () => {
+    const n = await paladinNodeReceipt('A', H, rpcOf([]), 'http://x');
+    expect(n).toEqual({ source: 'Node Paladin 2 (Bank Mandala)', parts: [], note: 'Node Bank Mandala tidak menyimpan receipt Paladin untuk transaksi ini' });
+  });
+});

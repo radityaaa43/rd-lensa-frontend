@@ -13,7 +13,7 @@ who finds a fact in here wrong reports it rather than building on it.
 1. **No new dependency.**
    - Server: Fastify, node built-ins, and the besu/* libraries already imported.
    - Web: React 18 only. Charts and the network graph are inline SVG. Routing uses the History API.
-   - Poppins is added to the existing Google Fonts `<link>` in `web/index.html`; it is not an npm dependency.
+   - Fonts (Geist, Geist Mono since DESIGN.md v2.1) come from the existing Google Fonts `<link>` in `web/index.html`; not an npm dependency.
 2. **Live only.** Every adapter path runs against what is already deployed on the ACK cluster:
    - `KUBECONFIG` is `alibaba.yaml` at the repo root. Never print or commit it.
    - Besu/Paladin, ns `fabricx` (rdbi-*, ns `rd_dfabi_v2`), and ns `iroha3`.
@@ -82,6 +82,21 @@ What `network()` returns:
 - A failed probe gives `status: 'down'`, with the error text in `detail`. It never fails the whole call.
 - `links` lists only connections the code knows from configuration. Otherwise it is `[]`.
 
+**v1.5 (2026-11-04, user-approved): `receipt(tx, party)`.** Types in `adapter.ts`: `ReceiptPart { title; rows: {label, value}[] }`
+and `Receipt { source; chain: ReceiptPart[]; node: { source; parts; note } | null }`. Rows are display-ready Indonesian text.
+- `tx` is a `HistoryItem.id`. A tx the chain does not hold throws (route 502). No wait loop: a listed tx is already final.
+- **`chain`** = the public receipt, the same answer on every node: Zeto/Noto/Stealth `eth_getTransactionReceipt` +
+  `eth_getBlockByNumber` on the Besu RPC tunnel (validator 1), event logs (first 12, topic0 raw); Fabric-X `tx_status` and the
+  ledger keys in `committer-db-0` (`readLedger(tx, 0)`); Iroha 3 `ledger transaction get` + `transaction status` on the party's own
+  Torii as `op-<party>`.
+- **`node`** = what the party's OWN node holds beyond that (R1). Only Zeto and Noto (Paladin): `ptx_queryTransactionReceipts`
+  (eq `transactionHash`) then `ptx_getTransactionReceiptFull` per id, on the party's port only. Shown: id, status, domain, contract,
+  block, state counts, the domain's own `transfers`/`sender` summary, the public submission (from, nonce). **Never** a state body
+  (owner, amount, salt). A node that was never party to the tx answers `PD011658` and has no states: `note` says "Tidak ada data
+  privat di node {pihak}". Stealth, Fabric-X and Iroha 3 return `node: null`.
+- Live check 2026-11-04 (6 txs, 4 nodes): base receipt on all four nodes; private part only on the parties (Zeto: sender and
+  receiver; Noto: + BI as notary); a DvP maps to 2-3 Paladin receipts.
+
 ## 2. Server
 
 ### 2.1 Files
@@ -117,6 +132,7 @@ export function roleFromParties(party: PartyId, cp: Counterparty | null, issuer:
 | `GET /api/history?model=&party=&limit=` | `HistoryItem[]` | 400 bad param · 503 model not loaded · 501 `NotAvailableError` · 502 adapter threw |
 | `GET /api/network?model=` | `Network` | 400 · 503 · 501 · 502 |
 | `GET /api/balance?model=&party=` | `Record<'RD'\|'DFABI', { amount: string } \| { error: string }>` | 400 · 503 |
+| `GET /api/receipt?model=&party=&tx=` (v1.5) | `Receipt` | 400 bad param (`tx` must match `^(0x)?[0-9a-fA-F]{64}$`: it reaches a CLI and SQL) · 503 · 501 · 502 `Receipt {model} di node {pihak} tidak dapat dibaca: …`; deadline 20 s |
 
 - **Querystring schema.** `model` and `party` are enums. `limit` is
   `{ type: 'string', pattern: '^[0-9]{1,3}$' }`, because `coerceTypes` is off.

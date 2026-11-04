@@ -541,3 +541,28 @@ table.hist td[data-label=Transaksi] b,table.hist td[data-label=Waktu]{white-spac
 .iconbtn.sm{width:32px;height:32px}.iconbtn.sm .ico{width:16px;height:16px}
 .netpanel.paused .pkt,.netpanel.paused .halo{animation-play-state:paused}
 @media (prefers-reduced-motion:reduce){.netctl .iconbtn{display:none}}
+
+/* receipt from the network (DESIGN.md §7.10a) */
+.receipt{display:flex;flex-direction:column;gap:12px;border-top:1px solid var(--line);padding-top:24px;margin-top:8px}
+.receipt h2{margin:0;font:600 17px/24px var(--sans);letter-spacing:-.01em}
+.receipt .rhead{margin:12px 0 0;font:600 15px/22px var(--sans)}
+.rchain{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.rpart{border:1px solid var(--line);border-radius:var(--r-tile);padding:14px 16px;min-width:0}
+.rpart h4{margin:0 0 8px;font:600 13px/20px var(--sans)}
+.rpart dl{margin:0;display:grid;grid-template-columns:minmax(110px,auto) minmax(0,1fr);gap:4px 12px;font-size:13px}
+.rpart dl>div{display:contents}
+.rpart dt{color:var(--muted)}
+.rpart dd{margin:0;overflow-wrap:anywhere;min-width:0}
+.rpart dd.mono{font:12.5px/1.5 var(--mono)}
+.rcols{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.rcol{display:flex;flex-direction:column;gap:8px;min-width:0;border:1px solid var(--line);border-radius:var(--r-card);padding:14px}
+.rcol.mine{border:2px solid var(--ink)}
+.rcol h3{margin:0;font:600 14px/20px var(--sans);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.rcol .you{font:600 11.5px var(--sans);background:var(--ink);color:var(--sheet);border-radius:var(--r-pill);padding:2px 8px}
+.rcol .rpart{padding:10px 12px}
+.rcol .rpart dl{grid-template-columns:minmax(0,1fr)}
+.rcol .rpart dt{font-size:12px}
+.rnote{margin:0;padding:10px 12px;border:1px dashed var(--control);border-radius:var(--r-tile);color:var(--muted);font-size:13px}
+.small{font-size:12.5px;margin:0}
+@media (max-width:1279px){.rcols{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:767px){.rcols,.rchain{grid-template-columns:1fr}.rpart dl{grid-template-columns:minmax(0,1fr)}}

@@ -254,6 +254,13 @@ Inputs 40px, `--r-control`, `--control` border, label above (`--t-small` 600), h
 
 Four columns (2×2 on tablet, stacked on mobile), one per party in `PARTY_ORDER`, each `--r-card` with a `--line` outline. The viewing party's column is outlined 2px `--ink` and tagged "Pihak Anda" (a `--ink` pill). Content per column: name, role label, verdict badge, amount, counterparty, flow, "Di chain" key/value list in mono, the `method` line in `--muted`. Award and DvP rules, role chips and outsider behaviour are unchanged from v1: BI "Penerbit & pengawas", buyer "Pembeli DFABI", others "Tidak terlibat"; outsiders follow the model, never the flow.
 
+### 7.10a Receipt from the network  · Flow (v2.1)
+
+Under the four lens columns, after a hairline: **"Receipt dari jaringan"**.
+- **Chain part**: one tile per `ReceiptPart` (`--line` outline, `--r-tile`), a label/value grid, hashes, addresses and ids in Geist Mono, wrapping anywhere. A line above says "Dibaca dari {source}. Isinya sama di setiap node." Read through the viewing party.
+- **Node part** (Zeto, Noto): "Receipt di node tiap pihak", four columns in `PARTY_ORDER` style (BI, A, B, C), the viewing party's column outlined 2px `--ink` with "Pihak Anda". Each column is that party's own node read. A node without private data shows the dashed note "Tidak ada data privat di node {pihak}: node ini hanya memegang receipt publik": the same visual language as Empty (§6.1), because nothing private exists on that node. 2 columns below 1280px, 1 below 768px.
+- Loading, 501 and 502 use `Polled` (§7.12). The panel adds no motion.
+
 ### 7.11 BI report  · X1 table, light
 
 v1's dark panel is dropped: X1 has no dark panels. "Laporan ke BI" is a white panel, `--r-card`, `--line` outline, a plain table like §7.6 with columns "Pengirim", "Transaksi", "Nominal", "Cocok dengan chain" (badge). Row hover `--canvas`. Only for party BI; a bank gets the neutral state "Hanya BI yang menerima laporan" with "Lihat sebagai BI". Hidden on Iroha 3 ("Tidak berlaku di Iroha 3").

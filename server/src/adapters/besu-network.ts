@@ -1,5 +1,5 @@
 import { rpcUp } from '../health.ts';
-import type { Network, NetworkNode } from '../adapter.ts';
+import type { Network, NetworkNode, Receipt, ReceiptPart } from '../adapter.ts';
 import { PARTIES, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
 import { kubectl, type Exec, type FabricxState } from './fabricx.ts';
@@ -89,4 +89,99 @@ export async function receiptPage<R extends ReceiptLike>(
   const oldest = rows[rows.length - 1]!.transactionHash;
   const rest = await client.ptx.queryTransactionReceipts({ limit: 10, eq: [{ field: 'transactionHash', value: oldest }], in: [{ field: 'source', values: sources }] });
   return [...rows, ...rest.filter((r) => !rows.some((x) => x.id === r.id))];
+}
+
+// ---- receipts (ARCHITECTURE.md §2.3 "Receipts", v1.5) ----
+// Besu: the public receipt from the one Besu RPC this server has (the tunnel to validator 1). Every validator holds the same receipt, so
+// this is not a party-scoped read. Paladin: the party's OWN node only (port per PARTIES[p].node, as health.ts), never another party's.
+export const BESU_RPC = 'http://127.0.0.1:8545';
+const paladinUrl = (p: PartyId) => `http://127.0.0.1:${31548 + 100 * (PARTIES[p].node - 1)}`;
+
+export type JsonRpc = <T>(url: string, method: string, params: unknown[]) => Promise<T>;
+export const jsonRpc: JsonRpc = async <T>(url: string, method: string, params: unknown[]) => {
+  const res = await fetch(url, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`${method}: HTTP ${res.status}`);
+  const body = (await res.json()) as { result?: T; error?: { message: string } };
+  if (body.error) throw new Error(`${method}: ${body.error.message}`);
+  return body.result as T;
+};
+
+interface EthReceipt {
+  status: string; blockNumber: string; blockHash: string; transactionIndex: string; from: string; to: string | null;
+  contractAddress: string | null; gasUsed: string; effectiveGasPrice?: string; logs: { address: string; topics: string[] }[];
+}
+const dec = (hex: string) => BigInt(hex).toString();
+const short = (a: string) => (a.length > 14 ? `${a.slice(0, 8)}…${a.slice(-4)}` : a);
+// Zeto reports amounts in hex ("0x01"), Noto in decimal; both shown in decimal units
+const units = (v: string) => { try { return BigInt(v).toString(); } catch { return v; } };
+const LOG_ROWS_MAX = 12; // ponytail: first logs only; a DvP emits under ten
+
+export async function besuReceipt(hash: string, call: JsonRpc = jsonRpc, url = BESU_RPC): Promise<Pick<Receipt, 'source' | 'chain'>> {
+  if (!/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error(`Hash transaksi tidak valid: ${hash.slice(0, 80)}`);
+  const r = await call<EthReceipt | null>(url, 'eth_getTransactionReceipt', [hash]);
+  if (!r) throw new Error('Transaksi tidak ditemukan di chain Besu');
+  const block = await call<{ timestamp: string } | null>(url, 'eth_getBlockByNumber', [r.blockNumber, false]);
+  const rows = [
+    { label: 'Status', value: r.status === '0x1' ? 'Berhasil (0x1)' : `Gagal (${r.status})` },
+    { label: 'Tx hash', value: hash },
+    { label: 'Blok', value: dec(r.blockNumber) },
+    { label: 'Hash blok', value: r.blockHash },
+    ...(block ? [{ label: 'Waktu blok (UTC)', value: new Date(Number(BigInt(block.timestamp)) * 1000).toISOString() }] : []),
+    { label: 'Indeks dalam blok', value: dec(r.transactionIndex) },
+    { label: 'Dari', value: r.from },
+    { label: 'Ke (kontrak)', value: r.to ?? r.contractAddress ?? '-' },
+    { label: 'Gas terpakai', value: dec(r.gasUsed) },
+    ...(r.effectiveGasPrice ? [{ label: 'Harga gas efektif', value: `${dec(r.effectiveGasPrice)} wei` }] : []),
+  ];
+  const logs: ReceiptPart[] = r.logs.length === 0 ? [] : [{
+    title: `Event log (${r.logs.length})`,
+    rows: r.logs.slice(0, LOG_ROWS_MAX).map((l, i) => ({ label: `Log ${i} · ${short(l.address)}`, value: l.topics[0] ?? '(tanpa topic)' })),
+  }];
+  return { source: 'Besu RPC (validator 1)', chain: [{ title: 'Receipt Besu', rows }, ...logs] };
+}
+
+export interface PtxReceipt {
+  id: string; success: boolean; domain?: string; source?: string; blockNumber: number; failureMessage?: string; domainReceiptError?: string;
+  states?: Record<string, unknown>;
+  domainReceipt?: { transfers?: { from?: string; to?: string; amount: string }[]; sender?: string };
+  public?: { from: string; nonce: string; gas?: string }[];
+}
+const NO_DOMAIN_RECEIPT = /^PD011658/; // "not yet available": what a node that was never party to the tx answers
+const stateCounts = (st: PtxReceipt['states']) =>
+  Object.entries(st ?? {}).filter(([, v]) => Array.isArray(v) && v.length > 0).map(([k, v]) => `${k} ${(v as unknown[]).length}`);
+
+// One Paladin receipt as rows. State contents (owner, amount, salt) are never copied out: the transfers line is the domain's own summary.
+export function paladinPart(f: PtxReceipt): ReceiptPart {
+  const counts = stateCounts(f.states);
+  return {
+    title: `Receipt ${f.domain ?? 'publik'} · ${f.id.slice(0, 8)}`,
+    rows: [
+      { label: 'Id transaksi Paladin', value: f.id },
+      { label: 'Status', value: f.success ? 'Berhasil' : `Gagal${f.failureMessage ? `: ${f.failureMessage}` : ''}` },
+      { label: 'Domain', value: f.domain ?? 'tanpa domain (transaksi publik)' },
+      ...(f.source ? [{ label: 'Kontrak', value: f.source }] : []),
+      { label: 'Blok', value: String(f.blockNumber) },
+      ...(counts.length ? [{ label: 'State privat', value: counts.join(', ') }] : []),
+      ...(f.domainReceipt?.sender ? [{ label: 'Pengirim', value: f.domainReceipt.sender }] : []),
+      ...(f.domainReceipt?.transfers ?? []).map((t) => ({ label: 'Transfer', value: `${t.from ?? '(tidak tercatat)'} -> ${t.to ?? '(tidak tercatat)'} · ${units(t.amount)}` })),
+      ...(f.public ?? []).flatMap((p) => [{ label: 'Dikirim dari', value: p.from }, { label: 'Nonce', value: p.nonce }]),
+      ...(f.domainReceiptError && !NO_DOMAIN_RECEIPT.test(f.domainReceiptError) ? [{ label: 'Receipt domain', value: f.domainReceiptError }] : []),
+    ],
+  };
+}
+
+export async function paladinNodeReceipt(party: PartyId, hash: string, call: JsonRpc = jsonRpc, url = paladinUrl(party)): Promise<NonNullable<Receipt['node']>> {
+  const name = PARTIES[party].name;
+  const source = `Node Paladin ${PARTIES[party].node} (${name})`;
+  const ids = await call<{ id: string }[]>(url, 'ptx_queryTransactionReceipts', [{ limit: 10, eq: [{ field: 'transactionHash', value: hash }] }]);
+  if (ids.length === 0) return { source, parts: [], note: `Node ${name} tidak menyimpan receipt Paladin untuk transaksi ini` };
+  const full = await Promise.all(ids.map((r) => call<PtxReceipt>(url, 'ptx_getTransactionReceiptFull', [r.id])));
+  const anyPrivate = full.some((f) => f.domainReceipt !== undefined || stateCounts(f.states).length > 0);
+  return {
+    source, parts: full.map(paladinPart),
+    note: anyPrivate ? null : `Tidak ada data privat di node ${name}: node ini hanya memegang receipt publik`,
+  };
 }

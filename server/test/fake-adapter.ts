@@ -1,4 +1,4 @@
-import { CANCELLED, type Capability, type HistoryItem, type LensView, type ModelAdapter, type Network } from '../src/adapter.ts';
+import { CANCELLED, type Capability, type HistoryItem, type LensView, type ModelAdapter, type Network, type Receipt } from '../src/adapter.ts';
 import { FLOWS, PRICE_PER_UNIT, isDvpFlow, roleOf, type FlowId, type FlowRequest, type ModelId } from '../src/domain.ts';
 
 const FLOW_IDS: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp', 'award'];
@@ -60,6 +60,16 @@ export function fakeAdapter(
     network: async (): Promise<Network> => ({
       nodes: (['BI', 'A', 'B', 'C'] as const).map((owner, i) => ({ id: `node${i + 1}`, label: `Node ${i + 1}`, kind: 'paladin', owner, status: 'up', detail: 'ok' })),
       links: [{ from: 'node1', to: 'node2' }, { from: 'node1', to: 'node3' }, { from: 'node1', to: 'node4' }],
+    }),
+    // zeto/noto carry a per-node (Paladin) part; C plays the bank outside the tx, whose node holds only the public receipt
+    receipt: async (tx, party): Promise<Receipt> => ({
+      source: 'Fake RPC',
+      chain: [{ title: 'Receipt Besu', rows: [{ label: 'Status', value: 'Berhasil (0x1)' }, { label: 'Tx hash', value: tx }, { label: 'Blok', value: '42' }] }],
+      node: id === 'zeto' || id === 'noto'
+        ? party === 'C' && !opts.transparent
+          ? { source: 'Node Paladin 4 (Bank Sejahtera)', parts: [], note: 'Tidak ada data privat di node Bank Sejahtera: node ini hanya memegang receipt publik' }
+          : { source: `Node Paladin (${party})`, parts: [{ title: `Receipt ${id} · 0000aaaa`, rows: [{ label: 'Status', value: 'Berhasil' }, { label: 'State privat', value: 'confirmed 1' }] }], note: null }
+        : null,
     }),
     loadCapacity: async () => opts.capacity ?? 1000,
     prepareLoad: async () => {},

@@ -426,6 +426,41 @@ test('network 400, 503 and 502', async () => {
   expect(res.json()).toEqual({ reason: 'Status jaringan Zeto tidak dapat dibaca: kubectl gagal' });
 });
 
+// ---- receipt (ARCHITECTURE.md §2.2, v1.5) ----
+const TX = '0x' + 'ab'.repeat(32);
+
+test('receipt returns the chain part and the party node part', async () => {
+  const res = await make().inject(`/api/receipt?model=zeto&party=A&tx=${TX}`);
+  expect(res.statusCode).toBe(200);
+  const r = res.json();
+  expect(r.chain[0].rows).toContainEqual({ label: 'Tx hash', value: TX });
+  expect(r.node.note).toBeNull();
+});
+
+test.each([
+  ['model=zeto&party=A', 'tx'],
+  [`model=zeto&party=A&tx=0x123`, 'tx'],
+  [`model=zeto&party=A&tx=${TX}';drop`, 'tx'],
+  [`model=zeto&party=Z&tx=${TX}`, 'party'],
+])('receipt 400 on %s', async (qs, field) => {
+  const res = await make().inject(`/api/receipt?${qs}`);
+  expect(res.statusCode).toBe(400);
+  expect(res.json()).toEqual({ reason: `Permintaan tidak valid: ${field}` });
+});
+
+test('receipt 503 without adapter, 501 when not built, 502 scrubbed when the node fails', async () => {
+  const a = fakeAdapter('zeto');
+  const app = make({ zeto: a });
+  expect((await app.inject(`/api/receipt?model=noto&party=A&tx=${TX}`)).statusCode).toBe(503);
+  a.receipt = async () => { throw new NotAvailableError('Belum tersedia di platform ini'); };
+  expect((await app.inject(`/api/receipt?model=zeto&party=A&tx=${TX}`)).statusCode).toBe(501);
+  a.receipt = async () => { throw new Error('Command failed: kubectl --kubeconfig /home/x/alibaba.yaml exec'); };
+  const res = await app.inject(`/api/receipt?model=zeto&party=B&tx=${TX}`);
+  expect(res.statusCode).toBe(502);
+  expect(res.body).not.toContain('alibaba.yaml');
+  expect(res.json().reason).toMatch(/^Receipt Zeto di node Bank Nusantara tidak dapat dibaca/);
+});
+
 test('balance returns both assets as strings', async () => {
   const res = await make().inject('/api/balance?model=zeto&party=A');
   expect(res.statusCode).toBe(200);

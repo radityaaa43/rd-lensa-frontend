@@ -29,6 +29,15 @@ export interface NetworkNode { id: string; label: string; kind: NodeKind; owner:
 export interface Network { nodes: NetworkNode[]; links: { from: string; to: string }[] }
 export const HISTORY_MAX = 100;
 
+// A tx's receipt as the network stores it (ARCHITECTURE.md §1, v1.5). Rows are display-ready text; the UI renders them as they come.
+export interface ReceiptPart { title: string; rows: { label: string; value: string }[] }
+export interface Receipt {
+  source: string; // where `chain` was read, e.g. "Besu RPC (validator 1)"
+  chain: ReceiptPart[]; // the public receipt: the same answer on every node
+  // what this party's OWN node holds beyond the public receipt (Paladin private states); null = the platform keeps no such per-node receipt
+  node: { source: string; parts: ReceiptPart[]; note: string | null } | null;
+}
+
 export interface ModelAdapter {
   id: ModelId;
   stepLabels: [string, string, string, string]; // spec §5.3, verbatim
@@ -43,6 +52,8 @@ export interface ModelAdapter {
   history(party: PartyId, limit: number): Promise<HistoryItem[] & { truncated?: true; pending?: string[] }>;
   // Probes every node in parallel (3 s each); a failed probe is status 'down', never a rejection.
   network(): Promise<Network>;
+  // tx = a HistoryItem.id (the chain tx id). Read on the party's own node where the platform has one; throws when the chain has no such tx.
+  receipt(tx: string, party: PartyId): Promise<Receipt>;
   loadCapacity(): Promise<number>;
   prepareLoad(n: number): Promise<void>;
   // signal.aborted is checked after the adapter's own lock/slot is acquired and before anything is submitted: then it throws CANCELLED.

@@ -19,6 +19,7 @@ const PARTY_IDS = Object.keys(PARTIES) as PartyId[];
 const TX_DEADLINE_MS = 120_000;
 const HISTORY_MS = 20_000;
 const NETWORK_MS = 5_000;
+const RECEIPT_MS = 20_000;
 const HISTORY_LIMIT = 20;
 const HEALTH_POLL_MS = 3_000; // /api/health is polled by the UI; stress and tx keep the longer HEALTH_MS
 const KEEP_RUN_MS = 5 * 60_000;
@@ -51,6 +52,11 @@ const modelQuery = { type: 'object', required: ['model'], properties: { model: {
 const partyQuery = {
   type: 'object', required: ['model', 'party'],
   properties: { model: { enum: MODELS }, party: { enum: PARTY_IDS }, limit: { type: 'string', pattern: '^[0-9]{1,3}$' } },
+} as const;
+// tx: a Besu hash (0x + 64 hex) or a Fabric-X / Iroha 3 id (64 hex). Strict, because adapters pass it on to a CLI or SQL.
+const receiptQuery = {
+  type: 'object', required: ['model', 'party', 'tx'],
+  properties: { model: { enum: MODELS }, party: { enum: PARTY_IDS }, tx: { type: 'string', pattern: '^(0x)?[0-9a-fA-F]{64}$' } },
 } as const;
 
 const json =(v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x));
@@ -195,6 +201,20 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       if (e instanceof WarmingUpError) return reply.code(503).header('retry-after', String(e.retryAfterS)).send({ reason: e.message }); // v1.4: loading, not an error
       request.log.error({ err: e }, `network ${model}`); // the original stays in the server log; the client gets the scrubbed reason
       return reply.code(502).send({ reason: `Status jaringan ${MODEL_NAMES[model]} tidak dapat dibaca: ${msg(e)}` });
+    }
+  });
+
+  // v1.5: a tx's receipt as the network stores it; the node part comes from the party's own node (ARCHITECTURE.md §2.2)
+  app.get<{ Querystring: { model: ModelId; party: PartyId; tx: string } }>('/api/receipt', { schema: { querystring: receiptQuery } }, async (request, reply) => {
+    const { model, party, tx } = request.query;
+    const a = adapters[model];
+    if (!a) return reply.code(503).send(modelUnavailable(model));
+    try {
+      return await withDeadline(a.receipt(tx, party), RECEIPT_MS, 'Receipt');
+    } catch (e) {
+      if (e instanceof NotAvailableError) return reply.code(501).send({ reason: e.message });
+      request.log.error({ err: e }, `receipt ${model} ${party}`); // the original stays in the server log; the client gets the scrubbed reason
+      return reply.code(502).send({ reason: `Receipt ${MODEL_NAMES[model]} di node ${PARTIES[party].name} tidak dapat dibaca: ${msg(e)}` });
     }
   });
 

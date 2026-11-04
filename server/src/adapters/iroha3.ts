@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, StepEvent } from '../adapter.ts';
+import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, Receipt, StepEvent } from '../adapter.ts';
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
@@ -90,7 +90,8 @@ interface Status { status: { kind: string; block_height: number | null } }
 interface TxGet {
   block_hash: string;
   result?: { Err?: string };
-  entrypoint: { External: { payload: { authority: string; instructions: { Instructions: string[] } } } };
+  result_hash?: string;
+  entrypoint: { External: { payload: { authority: string; creation_time_ms?: number; time_to_live_ms?: number; instructions: { Instructions: string[] } } } };
 }
 interface Movement { source: string; destination: string; quantity: string }
 interface Ctx { sid?: string }
@@ -372,6 +373,32 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     });
   }
 
+  // The tx as the party's own validator stores it (transparent lane: every validator holds the same record). No wait: a listed tx is applied.
+  async function receipt(tx: string, party: PartyId): Promise<Receipt> {
+    if (!/^[0-9a-f]{64}$/.test(tx)) throw new Error(`Hash transaksi tidak valid: ${tx.slice(0, 80)}`); // it goes to the CLI as an argument
+    return inLane(party, async () => {
+      const [got, st] = await Promise.all([
+        json<TxGet>(op(party), ['--machine', 'ledger', 'transaction', 'get', '--hash', tx]),
+        json<Status>(op(party), ['--machine', 'ledger', 'transaction', 'status', '--hash', tx]),
+      ]);
+      const d = await decodeTx(party, tx).catch(() => null);
+      const p = got.entrypoint.External.payload;
+      const kind = d === null ? 'bukan perpindahan RD/DFABI' : d.kind === 'dvp' ? 'DvP (settlement)' : d.kind === 'mint' ? `Mint ${d.asset}` : `Transfer ${d.asset}`;
+      const rows = [
+        { label: 'Status', value: `${st.status.kind}${st.status.block_height !== null ? `, blok ${st.status.block_height}` : ''}` },
+        { label: 'Hash', value: tx },
+        { label: 'Hash blok', value: got.block_hash },
+        { label: 'Authority', value: p.authority },
+        ...(p.creation_time_ms ? [{ label: 'Dibuat (UTC)', value: new Date(p.creation_time_ms).toISOString() }] : []),
+        ...(p.time_to_live_ms ? [{ label: 'TTL', value: `${p.time_to_live_ms} ms` }] : []),
+        { label: 'Hasil', value: got.result?.Err ? `Ditolak: ${got.result.Err}` : 'Ok' },
+        ...(got.result_hash ? [{ label: 'Hash hasil', value: got.result_hash }] : []),
+        { label: 'Instruksi', value: `${p.instructions.Instructions.length} (${kind})` },
+      ];
+      return { source: `Torii ${PARTIES[party].name} (akun operator node)`, chain: [{ title: 'Transaksi di ledger', rows }], node: null };
+    });
+  }
+
   async function network(): Promise<Network> {
     const parties = Object.keys(s.torii) as PartyId[];
     const nodes = await Promise.all(parties.map(async (p): Promise<NetworkNode> => {
@@ -412,6 +439,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     lens,
     history,
     network,
+    receipt,
     async loadCapacity() {
       const balances = await Promise.all(BANKS.map((b) => balanceOf(b, 'RD')));
       return 3 * Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT);

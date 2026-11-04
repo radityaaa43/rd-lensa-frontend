@@ -108,11 +108,12 @@ export function createFabricxAdapter(exec: Exec) {
     JSON.parse(await exec(['exec', 'deploy/rdbi-driver', '-c', 'driver', '--', 'rdbi-driver', 'api', ...cmd])) as T;
 
   // The public ledger as BI's committer DB holds it: the token request, the output commitments, the block.
-  async function readLedger(txId: string): Promise<{ block: number; onChain: Ctx['onChain'] }> {
+  // wait: how long a fresh tx may take to reach the committer DB (a receipt read of a listed tx does not wait)
+  async function readLedger(txId: string, wait = LEDGER_WAIT_MS): Promise<{ block: number; onChain: Ctx['onChain'] }> {
     if (!/^[0-9a-f]{64}$/.test(txId)) throw new Error(`Id transaksi tidak valid: ${txId}`);
     const sql = `select 'k', encode(key,'escape'), length(value)::text, encode(substring(value from 1 for 32),'hex') from ns_rd_dfabi_v2 where position(convert_to('${txId}','UTF8') in key) > 0 `
       + `union all select 's', status::text, encode(height,'hex'), '' from tx_status where tx_id = convert_to('${txId}','UTF8')`;
-    for (const end = Date.now() + LEDGER_WAIT_MS; ; await sleep(500)) {
+    for (const end = Date.now() + wait; ; await sleep(500)) {
       const out = await exec(['exec', 'committer-db-0', '--', 'sh', '-c',
         `PGPASSWORD=$POSTGRES_PASSWORD psql -U $POSTGRES_USER -d sc_db -p 5150 -h 127.0.0.1 -At -F'|' -c "${sql}"`]);
       const rows = out.split('\n').filter(Boolean).map((l) => l.split('|'));
@@ -330,6 +331,15 @@ export function createFabricxAdapter(exec: Exec) {
     lens,
     history,
     network,
+    // the shared committer DB is the public ledger; a party's FSC node keeps no per-tx receipt beyond its wallet, so node is null
+    receipt: async (tx) => {
+      const { block, onChain } = await readLedger(tx, 0); // throws for a tx the ledger rejected or does not hold
+      return {
+        source: 'DB committer Fabric-X (committer-db-0)',
+        chain: [{ title: 'Status di ledger', rows: [{ label: 'Status validasi', value: 'Valid (kode 1)' }, { label: 'Blok', value: String(block) }, ...onChain] }],
+        node: null,
+      };
+    },
     async loadCapacity() {
       const balances = await Promise.all(BANKS.map((b) => balanceOf(b, 'RD')));
       return 3 * Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT);
