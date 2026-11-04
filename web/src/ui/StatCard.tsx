@@ -1,15 +1,18 @@
 import type { ReactNode } from 'react';
-import type { PlatformId } from '../../../server/src/domain.ts';
 
-// DESIGN.md §7.4 (Ref B pastel stat card): platform tint, black icon tile, figure, label + one secondary line.
-export function StatCard({ platform, icon, label, figure, sub }: { platform: PlatformId; icon: string; label: string; figure: ReactNode; sub?: ReactNode }) {
+export const Disc = ({ d }: { d: string }) => (
+  <span className="disc" aria-hidden="true">
+    <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
+  </span>
+);
+
+// DESIGN.md §7.4 (Ref X1 pastel stat card): tint, icon disc, label, figure, one secondary line. No sparkline or delta: no value here has a time series.
+export function StatCard({ tone, icon, label, figure, sub }: { tone: 'blue' | 'green'; icon: string; label: string; figure: ReactNode; sub?: ReactNode }) {
   return (
-    <section className={`stat ${platform}`} aria-label={label}>
-      <span className="mark sm" aria-hidden="true">
-        <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={icon} /></svg>
-      </span>
+    <section className={`stat ${tone}`} aria-label={label}>
+      <div className="stathead"><Disc d={icon} /><span>{label}</span></div>
       <div className="fig">{figure}</div>
-      <p>{label}{sub && <><br /><span className="muted">{sub}</span></>}</p>
+      {sub && <p className="statsub">{sub}</p>}
     </section>
   );
 }

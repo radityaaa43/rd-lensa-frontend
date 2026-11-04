@@ -1,22 +1,15 @@
 import type { ReactNode } from 'react';
+import { Disc } from './StatCard.tsx';
 
-// DESIGN.md §7.5 (Ref A dark card): the one dark hero surface on Dasbor. The pattern is decorative.
+const WALLET = 'M3 7h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 7l2-3h12M16 13.5h.01';
+
+// DESIGN.md §7.4: the RD balance is the first of three pastel cards. Class names `hero` and `big` are kept: the e2e and demo harness select on them.
 export function BalanceCard({ owner, figure, node, asset }: { owner: string; figure: ReactNode; node: string; asset: string }) {
   return (
-    <section className="hero" aria-label={`Saldo ${asset} ${owner}`}>
-      <svg className="pattern" aria-hidden="true" viewBox="0 0 300 200" preserveAspectRatio="xMaxYMid slice">
-        <path d="M100 0v100H0M200 0v200M200 100h100" stroke="currentColor" fill="none" />
-        <path d="M150 50 165 85 200 100 165 115 150 150 135 115 100 100 135 85z M250 30a20 20 0 1 0 .1 0 M50 150a30 30 0 0 1 30 30" fill="currentColor" />
-        <circle cx="260" cy="170" r="40" stroke="currentColor" fill="none" /><circle cx="260" cy="170" r="25" stroke="currentColor" fill="none" />
-      </svg>
-      <div className="top">
-        <h2>{owner}</h2>
-        <div className="big">{figure}</div>
-      </div>
-      <dl className="strip">
-        <div><dt>Node</dt><dd>{node}</dd></div>
-        <div><dt>Aset</dt><dd>{asset}</dd></div>
-      </dl>
+    <section className="stat blue hero" aria-label={`Saldo ${asset} ${owner}`}>
+      <div className="stathead"><Disc d={WALLET} /><span>Saldo RD</span></div>
+      <div className="big fig">{figure}</div>
+      <p className="statsub">{node}</p>
     </section>
   );
 }

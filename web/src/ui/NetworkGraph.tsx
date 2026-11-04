@@ -3,11 +3,11 @@ import type { Network, NetworkNode, NodeKind } from '../../../server/src/adapter
 import type { PartyId } from '../../../server/src/domain.ts';
 import type { Meta } from '../api.ts';
 
-const KIND: Record<NodeKind, string> = {
+export const KIND: Record<NodeKind, string> = {
   'besu-validator': 'Validator Besu', paladin: 'Node Paladin', 'fsc-node': 'Node token FSC',
   'fabricx-committer': 'Committer Fabric-X', 'fabricx-orderer': 'Orderer Fabric-X', 'iroha-peer': 'Peer Iroha',
 };
-const STATUS: Record<NetworkNode['status'], string> = { up: 'Aktif', down: 'Mati', unknown: 'Tidak diketahui' };
+export const STATUS: Record<NetworkNode['status'], string> = { up: 'Aktif', down: 'Mati', unknown: 'Tidak diketahui' };
 const OWNERS: (PartyId | null)[] = ['BI', 'A', 'B', 'C', null];
 const COL = 200, BOX_W = 176, BOX_H = 56, ROW = 72, TOP = 40;
 

@@ -23,7 +23,7 @@ const SCREEN_TITLE: Record<ModelRoute['screen'], string> = {
   dasbor: 'Dasbor', riwayat: 'Riwayat transaksi', transfer: 'Transfer', dvp: 'DvP', lensa: 'Lensa', laporan: 'Laporan ke BI', tps: 'Stress test TPS',
 };
 
-// muted one-line subtitle under every page heading (Ref A "You can find all the information…"); {pihak} = viewing party
+// muted one-line subtitle under every page heading (Ref X1 welcome block); {pihak} = viewing party
 const SCREEN_SUB: Record<ModelRoute['screen'], string> = {
   dasbor: 'Saldo, aktivitas, dan node sebagaimana terbaca oleh {pihak}.',
   riwayat: 'Transaksi yang teramati oleh node {pihak}. Yang tidak terbaca ditandai tersegel.',
@@ -60,7 +60,8 @@ function Shell({ meta, route, stress, reloadStress, tx }: { meta: Meta; route: M
     <div className="app">
       <Sidebar meta={meta} route={route} />
       <div>
-        <Header meta={meta} route={route} network={network.data} />
+        <Header meta={meta} route={route} network={network.data} title={title} h1={h1}
+          sub={(award ? AWARD_SCREEN.sub : SCREEN_SUB[route.screen]).replace('{pihak}', party)} />
         {stress?.state === 'running' && (
           <div className="banner stress" role="status">
             <span>Stress test berjalan · {stressProgress(stress)} transaksi</span>
@@ -76,7 +77,6 @@ function Shell({ meta, route, stress, reloadStress, tx }: { meta: Meta; route: M
         )}
         <p className="vh" aria-live="polite">Menampilkan data sebagai {party}</p>
         <main className="main" id="konten">
-          <div className="title"><h1 ref={h1} tabIndex={-1}>{title}</h1><p>{(award ? AWARD_SCREEN.sub : SCREEN_SUB[route.screen]).replace('{pihak}', party)}</p></div>
           {route.screen === 'dasbor' ? <Dashboard meta={meta} route={route} network={network} />
             : route.screen === 'riwayat' ? <History key={`${route.model}|${route.party}`} meta={meta} route={route} />
             : route.screen === 'transfer' || route.screen === 'dvp'

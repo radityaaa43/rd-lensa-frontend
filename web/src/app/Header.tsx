@@ -1,3 +1,4 @@
+import type { Ref } from 'react';
 import type { Network } from '../../../server/src/adapter.ts';
 import { PLATFORMS, PLATFORM_OF } from '../../../server/src/domain.ts';
 import type { Meta } from '../api.ts';
@@ -15,8 +16,10 @@ export function toggleTheme() {
   root.dataset.theme = dark ? 'light' : 'dark';
 }
 
-// DESIGN.md §5 header + §7.13: breadcrumb and model selector left; party pills, network chip, theme toggle right.
-export function Header({ meta, route, network }: { meta: Meta; route: ModelRoute; network: Network | undefined }) {
+// DESIGN.md §5 header (Ref X1 welcome block): breadcrumb, model selector, page title and subtitle left; party pills, network chip, theme toggle right.
+export function Header({ meta, route, network, title, sub, h1 }: {
+  meta: Meta; route: ModelRoute; network: Network | undefined; title: string; sub: string; h1: Ref<HTMLHeadingElement>;
+}) {
   const platform = PLATFORM_OF[route.model];
   const nodes = network?.nodes ?? [];
   const up = nodes.filter((n) => n.status === 'up').length;
@@ -29,6 +32,7 @@ export function Header({ meta, route, network }: { meta: Meta; route: ModelRoute
         <span>{PLATFORMS[platform].name}</span>
         {platform === 'besu' && <ModelSelector meta={meta} model={route.model} onChange={(model) => navigate({ ...route, model, tx: undefined })} />}
       </nav>
+      <div className="title"><h1 ref={h1} tabIndex={-1}>{title}</h1><p>{sub}</p></div>
       <div className="headr">
         <PartySwitcher
           meta={meta} party={route.party} onChange={(party) => navigate({ ...route, party })}

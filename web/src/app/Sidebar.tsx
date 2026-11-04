@@ -35,34 +35,41 @@ function reasonOf(meta: Meta, r: ModelRoute, s: Screen): string | undefined {
   return undefined;
 }
 
+const MAIN: Screen[] = ['dasbor', 'riwayat', 'transfer', 'dvp'];
+const TOOLS: Screen[] = ['lensa', 'laporan', 'tps'];
+const SWAP = 'M4 8h13l-3-3M20 16H7l3 3';
+const svg = (d: string) => <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
+
+// DESIGN.md §7.1 (Ref X2): logo, main group, muted "Alat" group, "Ganti platform" at the bottom.
 export function Sidebar({ meta, route }: { meta: Meta; route: ModelRoute }) {
   const platform = PLATFORM_OF[route.model];
-  const screens = (Object.keys(LABEL) as Screen[]).filter((s) => !(s === 'laporan' && platform === 'iroha3'));
+  const item = (s: Screen) => {
+    const reason = reasonOf(meta, route, s);
+    const label = s === 'dvp' && route.party === 'BI' ? AWARD_SCREEN.name : LABEL[s];
+    return reason ? (
+      <span key={s} className="nav" aria-disabled="true" title={`${label}: ${reason}`}>
+        {svg(ICON[s])}<span>{label}</span><small>{reason}</small>
+      </span>
+    ) : (
+      <a key={s} className="nav" aria-current={route.screen === s ? 'page' : undefined} aria-label={label} title={label}
+        {...linkTo({ ...route, screen: s, tx: undefined })}>
+        {svg(ICON[s])}<span>{label}</span>
+      </a>
+    );
+  };
   return (
     <aside className="side">
       <a className="logo" aria-label="Eksplorasi Rupiah Digital" {...linkTo({ page: 'landing' })}><i aria-hidden="true">E</i><span>Eksplorasi<br />Rupiah Digital</span></a>
       <nav aria-label="Navigasi utama">
-        {screens.map((s) => {
-          const icon = <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICON[s]} /></svg>;
-          const reason = reasonOf(meta, route, s);
-          const label = s === 'dvp' && route.party === 'BI' ? AWARD_SCREEN.name : LABEL[s];
-          return reason ? (
-            <span key={s} className="nav" aria-disabled="true" title={`${label}: ${reason}`}>
-              {icon}<span>{label}</span><small>{reason}</small>
-            </span>
-          ) : (
-            <a key={s} className="nav" aria-current={route.screen === s ? 'page' : undefined} aria-label={label} title={label}
-              {...linkTo({ ...route, screen: s, tx: undefined })}>
-              {icon}<span>{label}</span>
-            </a>
-          );
-        })}
+        <div className="navgroup">{MAIN.map(item)}</div>
+        <div className="navgroup">
+          <p className="grouplabel">Alat</p>
+          {TOOLS.filter((s) => !(s === 'laporan' && platform === 'iroha3')).map(item)}
+        </div>
       </nav>
-      <div className="platcard">
-        <b>{PLATFORMS[platform].name}</b>
-        <span>{platform === 'besu' ? `Model ${meta.models[route.model].name}` : 'Satu model'}</span>
-        <br />
-        <a {...linkTo({ page: 'landing' })}>Ganti platform</a>
+      <div className="sidefoot">
+        <p className="platline"><b>{PLATFORMS[platform].name}</b><span>{platform === 'besu' ? `Model ${meta.models[route.model].name}` : 'Satu model'}</span></p>
+        <a className="nav" title="Ganti platform" {...linkTo({ page: 'landing' })}>{svg(SWAP)}<span>Ganti platform</span></a>
       </div>
     </aside>
   );

@@ -1,390 +1,268 @@
-# Eksplorasi Rupiah Digital — Design Spec (revamp)
+# Eksplorasi Rupiah Digital — Design Spec v2 (Xenith restyle)
 
-Status: draft for T1 (FE-REVAMP). Source of truth for the restyle of `frontend/web/`.
+Status: v2, 2026-11-04. Replaces the Ref A/B design (periwinkle canvas, dark balance card). Source of truth for the look of `frontend/web/`.
 Doc language: English. Every string shown to users is Indonesian and is quoted here verbatim.
+Scope: the visual layer only. The contract in [ARCHITECTURE.md](ARCHITECTURE.md), every data flow, every Indonesian string, the sealed-vs-empty rule (§6.1) and the accessibility rules (§9) are unchanged.
+
+Why the change: the user judged v1 "kurang modern". The new direction is the Xenith dashboard.
 
 References (both in `frontend/reference/`):
 
-- **Ref A** `1c5959122102547.60d2f81ac8d5d.png`: "Credit Card / My Spending". Periwinkle canvas, white sheet, icon rail, ink-and-aqua bar chart, dark card with a geometric pattern and an aqua footer strip, outlined invoice tiles.
-- **Ref B** `original-6a40369548ff031981f8153cb49b9b55.jpg`: "Wallet / Dashboard". Labelled sidebar, rounded sheet, three pastel stat cards with a black icon tile and sparkline, line chart with dot markers and a dark tooltip pill, "Recent Activities" rows with round direction icons, dark "Sell Order" panel with a highlighted row pill.
+- **Ref X1** `original-35cc9f8c49e1c9691e02ee508a813a6a.jpg`: "Xenith" store dashboard. Pure white page, no outer frame. Welcome heading with a muted one-line subtitle on the left, search / bell / user chip on the right. Three pastel stat cards (blue, green, blue) with a large light-weight figure, a delta line and a sparkline. A line chart with dashed guides and a dark tooltip pill. A plain table with a thumbnail column. A right rail of short lists ("Top Countries", "Top Customers", "Recent Orders") with round avatars, values right-aligned, "See all" links.
+- **Ref X2** `original-fa29c6126573ad22a5810cb663a2818d.jpg`: the sidebar. Logo, hairline divider, labelled outline-icon items, the active item a **solid black rounded pill with white text**, a muted group label ("Tools") with its own items, a hairline divider, "Log out" at the bottom.
 
-Every token and component below names its source: `Ref A`, `Ref B`, or `Flow` (the lead's T1 brief / contract v1.1).
+Every token and component names its source: `X1`, `X2`, or `Flow` (contract v1.1 and the lead's briefs).
 
 ---
 
 ## 1. Design principles
 
-1. **The view is the proof.** Each screen shows exactly what the selected party's node or key returned. The UI never fills a gap: no derived amounts, no guessed counterparties, no client-side math across lenses (Flow, contract v1.1 rule). A null field is rendered as sealed, never computed.
-2. **Sealed is not empty.** "On chain, but you cannot read it" and "nothing exists" are two visual languages that never share a style (§6.1). This is the one bold element of the design; everything around it stays quiet.
-3. **Honest about transparency.** Iroha 3 has no confidentiality. When it is selected the UI says so up front and the seal never appears (§6.2).
-4. **Ink on paper, one accent.** Calm white sheet on a cool canvas, ink-navy for weight, pale aqua as the single accent (Ref A). Pastel tints identify platforms only (Ref B), never states.
-5. **Quiet chrome, loud numbers.** Headings and figures carry the hierarchy (Ref A's large headings, Ref B's big card figures). No ALL-CAPS eyebrows, no decorative labels, no numbered markers except on true sequences (the four-step progress timeline).
-6. **Native first.** Native `<select>`, `<button>`, `<table>`, `<dialog>`, History API, inline SVG. No new npm dependency (Flow rule).
+1. **The view is the proof.** Each screen shows exactly what the selected party's node or key returned. No derived amounts, no guessed counterparties, no client-side math across lenses. A null field renders as sealed, never computed. This is why the Xenith sparklines and "+30%" deltas are not copied: no value in this app has a time series, and an invented trend would be a derived number.
+2. **Sealed is not empty.** "On chain, but you cannot read it" and "nothing exists" never share a style (§6.1). The hatch chip is the one bold element; everything around it stays quiet.
+3. **Honest about transparency.** Iroha 3 has no confidentiality; the UI says so up front and the seal never appears (§6.2).
+4. **White, black, one soft blue.** The page is white. Weight comes from one near-black (the active nav pill, the primary button, the tooltip). Pastel tints separate the stat cards (X1). Pale blue marks selection. Nothing else is coloured except verdicts and node status.
+5. **Quiet chrome, light numbers.** Figures are large and light (weight 500, tight tracking), as in X1. No ALL-CAPS labels, no decorative eyebrows, no numbered markers except the four-step progress timeline.
+6. **Flat.** Cards have no border and no shadow; a tint or a hairline separates them (X1). The only shadow is under popovers and the tooltip.
+7. **Native first.** Native `<select>`, `<button>`, `<table>`, `<dialog>`, History API, inline SVG. No new npm dependency (Flow rule).
 
 ---
 
 ## 2. Color tokens
 
-All pairs checked for WCAG 2.2 contrast (ratios in the right column; text ≥ 4.5:1, UI/graphics ≥ 3:1). Defined as CSS custom properties on `:root`; dark values under `@media (prefers-color-scheme: dark)` and on `:root[data-theme="dark"]`. `color-scheme: light dark` on `<html>`; `<meta name="theme-color">` follows `--canvas`.
+Defined on `:root`; dark values under `@media (prefers-color-scheme: dark)` guarded by `:root:not([data-theme=light])` and again on `:root[data-theme=dark]`. `color-scheme: light dark`. Text ≥ 4.5:1, graphics and UI ≥ 3:1; the ratios below were computed, not estimated.
 
 ### 2.1 Base
 
-| Token | Light | Dark | Use | Source | Contrast |
+| Token | Light | Dark | Use | Source | Contrast (text on sheet unless noted) |
 |---|---|---|---|---|---|
-| `--canvas` | `#E9EDF7` | `#0E1220` | Page background behind the sheet | Ref A outer bg | — |
-| `--sheet` | `#FFFFFF` | `#171C2B` | Main surface, cards | Ref A/B sheet | — |
-| `--ink` | `#141B2D` | `#E8ECF5` | Primary text, ink bars, primary buttons | Ref A dark card, bars | 17.15 / 14.34 on sheet |
-| `--ink-panel` | `#141B2D` | `#262D42` | Dark emphasis panels (balance card, BI report panel) | Ref A card, Ref B Sell Order | text on it: `#FFFFFF` 17.15 / `#E8ECF5` 11.55 |
-| `--muted` | `#5F6880` | `#9BA5BA` | Secondary text, axis labels | Ref A subtitles | 5.56 sheet, 4.74 canvas / 6.86, 7.53 |
-| `--faint` | `#9AA3B5` | `#5A6784` | Disabled text, decorative glyphs only (never meaningful text) | Ref A rail icons | 2.54 (decorative/disabled, exempt) |
-| `--line` | `#DDE2EC` | `#2C3348` | Dividers, card outlines (decorative) | Ref A dividers, invoice tiles | 1.30 (decorative) |
-| `--control` | `#8A93A7` | `#5A6784` | Input/select borders, outlined button borders | Ref A "Monthly" select | 3.08 / 3.00 |
-| `--focus` | `#1E5FD8` | `#7AA7FF` | Focus ring | Flow (a11y) | 5.70 sheet, 4.87 canvas / 7.11 |
-| `--focus-on-ink` | `#9CCFDD` | `#141B2D` | Focus ring on `--ink-panel` | Ref A aqua | 10.11 |
+| `--sheet` | `#FFFFFF` | `#121316` | Page and every surface | X1 white page | — |
+| `--canvas` | `#F5F6F8` | `#1A1C21` | Hover fill, skeleton, inset blocks, the track of a bar | X1 table-row and input fill | — |
+| `--ink` | `#0E0F11` | `#F2F3F5` | Text, primary button, active nav pill, selected pill | X2 black pill | 19.18 / 16.73 |
+| `--ink-panel` | `#0E0F11` | `#2A2D35` | Tooltip, stress banner. White text on it (`--on-ink`) | X1 tooltip | 19.18 white / dark `#F2F3F5` |
+| `--muted` | `#5B6270` | `#A0A7B4` | Secondary text, axis labels, subtitle | X1 subtitle | 6.13 sheet, 5.67 canvas, 5.27–5.43 on tints / 7.68, 7.05, ≥ 6.49 |
+| `--faint` | `#A4AAB6` | `#5C6370` | Disabled text and decorative glyphs only, never meaningful text | X2 idle icons | decorative, exempt |
+| `--line` | `#EBEDF1` | `#24272E` | Hairlines: sidebar edge, header edge, table rows | X2 dividers | decorative |
+| `--control` | `#858C9A` | `#6A7280` | Input and select borders, outlined button borders | Flow | 3.38 / 3.83 |
+| `--focus` | `#1E5FD8` | `#7AA7FF` | Focus ring, 2px, offset 2px | Flow (a11y) | 5.70 / 7.78 |
+| `--focus-on-ink` | `#9CC3FF` | `#9CC3FF` | Focus ring on `--ink-panel` | Flow | ≥ 9 |
 
-### 2.2 Accent (single)
+### 2.2 Soft blue (selection and graphics)
 
-| Token | Light | Dark | Use | Source | Contrast |
-|---|---|---|---|---|---|
-| `--aqua` | `#9CCFDD` | `#7FC4D6` | Secondary chart series, balance-card footer strip, selected-row pill | Ref A bars + card strip | graphic: needs `--aqua-edge` on light |
-| `--aqua-edge` | `#4E9BB0` | — | 1.5px outline on aqua bars/areas in light mode | derived for 1.4.11 | 3.16 on sheet |
-| `--aqua-tint` | `#D6EDF3` | `#1D3540` | Selected nav item, selected party lane in the graph | Ref A logo tile | — |
-| `--aqua-ink` | `#14576A` | `#9CCFDD` | Text on `--aqua-tint` | derived | 6.64 |
-
-### 2.3 Platform tints (identity only, never state)
-
-| Token | Light | Dark | Platform | Source |
+| Token | Light | Dark | Use | Source |
 |---|---|---|---|---|
-| `--tint-besu` | `#E6F6EA` | `#17291F` | Besu (Zeto, Noto, Stealth) | Ref B mint card |
-| `--tint-fabricx` | `#E4ECFB` | `#1A2338` | Fabric-X | Ref B periwinkle card |
-| `--tint-iroha` | `#FCE9DE` | `#2E2019` | Iroha 3 | Ref B peach card |
+| `--blue` | `#3B7DD8` | `#6FA3F0` | Chart series, node links in focus (graphic ≥ 3:1: 4.11 / 7.23) | X1 chart |
+| `--blue-tint` | `#EDF3FC` | `#182338` | Selected history row, selected party lane in the graph, the "Pihak Anda" lens column wash | X1 |
+| `--blue-ink` | `#1B4E94` | `#A8C8F7` | Text on `--blue-tint` (7.34 / 9.18) | derived |
+| `--green-line` | `#34B36A` | `#4CC98A` | Second chart series only (graphic) | X1 green line |
 
-Text on tints is `--ink` (≥ 14.4:1 light).
+### 2.3 Card tints (stat cards and platform tiles; identity only, never state)
 
-### 2.4 Semantic (verdict + status)
+| Token | Light | Dark | Used by | Source |
+|---|---|---|---|---|
+| `--tint-blue` | `#E5EFFB` | `#172236` | Stat card "Saldo RD", Fabric-X tile | X1 blue cards |
+| `--tint-green` | `#E6F5E9` | `#15271B` | Stat card "Saldo DFABI", Besu tile | X1 green card |
+| `--tint-peach` | `#FCEBDD` | `#2B2018` | Iroha 3 tile, the Iroha notice | v1 (kept: a third platform needs a third tint) |
 
-| Token | Light fg / bg | Dark fg | Meaning | Source | Contrast |
-|---|---|---|---|---|---|
-| `--clear` / `--clear-bg` | `#0F6E55` / `#E3F5EC` | `#5FD3A6` | Verdict readable (`clear`, `reported`, `notarised`, `viewkey`) | existing `styles.css` `--clear` | 5.48 / 9.18 |
-| `--partial` / `--partial-bg` | `#8A5200` / `#FCEFD9` | `#F0B455` | Verdict `partial` | existing `--partial` | 5.62 / 9.18 |
-| `--seal` / `--seal-bg` | `#141B2D` / `#E4E8F1` | `#E8ECF5` / `#262D42` | Sealed field (§6.1) | Ref A ink + pattern | 13.98 / 11.55 |
-| `--danger` / `--danger-bg` | `#A3202F` / `#FBE7E9` | `#FF8A93` | Errors only | existing `--sealed` hue, repurposed | 6.31 / 7.52 |
-| `--up` | `#1A7F50` | `#4CC98A` | Node status up | existing pulse green, darkened | 5.01 / 8.10 |
-| `--down` | `#C0303F` | `#FF6B76` | Node status down | existing `DOWN` | 5.62 / 6.16 |
+Text on tints is `--ink`; secondary text `--muted` (≥ 5.27). Aliases for the platform tiles: `--tint-besu` = green, `--tint-fabricx` = blue, `--tint-iroha` = peach.
 
-Change from today: `sealed` no longer uses red. Red now means error only, so "you cannot read this" never looks like "something broke".
+### 2.4 Semantic (verdict and status)
+
+| Token | Light fg / bg | Dark fg / bg | Meaning | Contrast |
+|---|---|---|---|---|
+| `--clear` / `--clear-bg` | `#0C7440` / `#E2F4E8` | `#5FD3A6` / `#143024` | Readable verdict (`clear`, `reported`, `notarised`, `viewkey`) | 5.11 / 7.68 |
+| `--partial` / `--partial-bg` | `#8A5200` / `#FCEFD9` | `#F0B455` / `#33270F` | Verdict `partial`, notices | 5.62 / 7.90 |
+| `--seal` / `--seal-bg` | `#0E0F11` / `#E8EBF0` | `#E8ECF5` / `#262B36` | Sealed field (§6.1) | 16.05 / 11.98 |
+| `--danger` / `--danger-bg` | `#A3202F` / `#FBE7E9` | `#FF8A93` / `#3A1A20` | Errors only | 6.31 / 6.90 |
+| `--up` | `#17803F` | `#4CC98A` | Node up | 5.00 / 8.87 |
+| `--down` | `#C0303F` | `#FF6B76` | Node down | 5.62 / 6.74 |
+
+X1 shows status as coloured text ("In Stock" green, "Out of stock" red). We keep that look for node status text, and keep the icon beside it so colour is never the only signal (§9).
 
 ---
 
 ## 3. Typography
 
-Two families plus a monospace for identifiers that are literally code.
+One family plus a monospace for identifiers that are literally code.
 
 | Role | Family | Why | Source |
 |---|---|---|---|
-| Display, headings, big figures | **Poppins** 500/600 | Geometric sans of both references | Ref A "Credit Card", Ref B "Dashboard" |
-| Body, tables, forms | **IBM Plex Sans** 400/500/600, `font-variant-numeric: tabular-nums` | Already loaded; tabular figures for amount columns | existing `index.html` |
+| Everything: headings, figures, body, tables, forms | **Figtree** 400 / 500 / 600 | Round, geometric grotesque. The closest open face on Google Fonts to the one in X1 (the reference font is not on Google Fonts). One family keeps the page calm; weight and size carry the hierarchy. Has tabular figures: `font-variant-numeric: tabular-nums` on `body` | X1 |
 | Tx ids, hashes, block numbers | **IBM Plex Mono** 400 | Hashes are code; never used for labels | existing |
 
-Load via the existing Google Fonts `<link>` (add `Poppins:wght@500;600`), `display=swap`.
+Load through the Google Fonts `<link>` in `web/index.html`: `Figtree:wght@400;500;600` and `IBM+Plex+Mono:wght@400;500`, `display=swap`. Poppins and IBM Plex Sans are removed.
 
-### Scale (base 15px, ≈1.25 ratio)
+| Token | Size / line | Weight | Use | Source |
+|---|---|---|---|---|
+| `--t-display` | 40 / 48, tracking −0.02em | 500 | Landing title | X1 |
+| `--t-h1` | 24 / 32, tracking −0.01em | 500 | Page title in the header ("Dasbor · Bank Nusantara") | X1 "Welcome Back, Zac!" |
+| `--t-h2` | 17 / 24 | 600 | Panel and rail titles ("Aktivitas terbaru", "Jaringan") | X1 "Top selling products" |
+| `--t-figure` | up to 32 / 1.15, tracking −0.02em | 500 | Stat card figure. Steps down with the digit count (§7.4) | X1 "307.48K" |
+| `--t-body` | 14.5 / 22 | 400 | Default | X1 |
+| `--t-small` | 13 / 20 | 400 / 500 | Subtitle, table headers, hints | X1 |
+| `--t-micro` | 12 / 16 | 500 | Badges, tooltip, delta line | X1 |
 
-| Token | Size / line-height | Weight | Family | Use | Source |
-|---|---|---|---|---|---|
-| `--t-display` | 40 / 48 | 600 | Poppins | Balance figure, landing title | Ref A "$42,870,00", Ref B "$1200" |
-| `--t-h1` | 28 / 36 | 600 | Poppins | Page title ("Dasbor", "Riwayat transaksi") | Ref A "Credit Card" (scaled) |
-| `--t-h2` | 20 / 28 | 600 | Poppins | Panel title ("Jaringan", "Aktivitas terbaru") | Ref B "Market Overview" |
-| `--t-h3` | 16 / 24 | 600 | Plex Sans | Card title, table group | Ref A invoice name |
-| `--t-body` | 15 / 24 | 400 | Plex Sans | Default | existing |
-| `--t-small` | 13 / 20 | 400/500 | Plex Sans | Hints, meta, axis labels | Ref A sub-copy |
-| `--t-micro` | 12 / 16 | 500 | Plex Sans | Badges, chart tooltip date | Ref B tooltip date |
-
-Rules: sentence case everywhere, no letter-spaced caps. Headings `text-wrap: balance`. Line length ≤ 72ch for prose (model stories). Loading copy ends with `…` ("Memuat…"). Numbers in Indonesian locale via `Intl.NumberFormat('id-ID')`: `Rp 1.500.000`, `250 unit DFABI`.
+Rules: sentence case everywhere, no letter-spaced caps. Headings `text-wrap: balance`. Prose ≤ 72ch. Loading copy ends with `…`. Numbers use `Intl.NumberFormat('id-ID')`: `Rp 1.500.000`, `250 unit DFABI`.
 
 ---
 
 ## 4. Spacing, radius, elevation
 
-**Spacing** (4px base): `--s1 4` `--s2 8` `--s3 12` `--s4 16` `--s5 24` `--s6 32` `--s7 48` `--s8 64`. Card padding `--s5`; section gap `--s6`; sheet inset from canvas `--s5` (Ref A margin around the sheet).
+**Spacing** (4px base): `--s1 4` `--s2 8` `--s3 12` `--s4 16` `--s5 24` `--s6 32` `--s7 48`. Card padding 20. Section gap 28. Page padding 32 (16 on mobile).
 
-**Radius**, by hierarchy:
+**Radius**
 
 | Token | Value | Use | Source |
 |---|---|---|---|
-| `--r-sheet` | 28px | The main sheet | Ref B sheet corners |
-| `--r-card` | 20px | Stat cards, balance card, dark panels | Ref B stat cards / Sell Order |
-| `--r-tile` | 12px | History rows when highlighted, outlined tiles, graph node boxes | Ref A invoice tiles, Ref B row pill |
-| `--r-control` | 10px | Buttons, inputs, select, segmented control | Ref A "Monthly" select |
-| `--r-pill` | 999px | Badges, status chips, round icon buttons | Ref B direction icons, header icon buttons |
+| `--r-card` | 16px | Stat cards, platform tiles, panels that need a surface, popovers | X1 pastel cards |
+| `--r-tile` | 12px | Outlined tiles, notice bars, lens columns, graph node boxes | X1 |
+| `--r-control` | 10px | Nav items (the black pill), buttons, inputs, selects | X2 black pill |
+| `--r-pill` | 999px | Badges, status chip, party pills, round icon buttons, avatars | X1 avatars, header icons |
 
-**Elevation**: one shadow only, `--lift: 0 16px 32px -16px rgb(20 27 45 / .28)`, for the balance card and popovers (Ref A shadow under the dark card). Everything else is flat with `--line` outlines (Ref A invoice tiles).
+There is no sheet radius: the app fills the window (X1 has no outer frame). `--r-sheet` is removed.
+
+**Elevation**: `--lift: 0 12px 28px -12px rgb(14 15 17 / .22)` under popovers and the tooltip only. Cards and panels are flat.
 
 ---
 
 ## 5. Layout grid
 
 ```
-≥1280px (desktop)
-┌ canvas ─────────────────────────────────────────────────────────────┐
-│  ┌ sheet (r 28) ───────────────────────────────────────────────────┐ │
-│  │ sidebar 232 │ header 72: [Platform › Model]      [Pihak ▾][●net]│ │
-│  │  logo       ├────────────────────────────────────────────────────┤ │
-│  │  nav        │ content: 12 cols, gap 24, max 1280, padding 32    │ │
-│  │  …          │                                                    │ │
-│  │  platform   │                                                    │ │
-│  │  card       │                                                    │ │
-│  └─────────────┴────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────────┘
+≥1440px
+┌ sidebar 232 ─┬ header: title + subtitle                       [Pihak][●node][☾] ┐
+│ logo         │ ───────────────────────────────────────────────────────────────── │
+│ ────────     │ main column (fluid)                       │ right rail 296        │
+│ Dasbor ■     │  3 pastel stat cards                      │  Model privasi        │
+│ Riwayat      │  Jaringan (the large visual)              │  Node {pihak}         │
+│ Transfer     │  Aktivitas terbaru (table)                │  Pihak (switch)       │
+│ DvP          │                                           │                       │
+│ Alat         │                                           │                       │
+│ Lensa …      │                                           │                       │
+│ ────────     │                                           │                       │
+│ Ganti platform                                                                   │
+└──────────────┴───────────────────────────────────────────┴───────────────────────┘
 ```
 
-- **Sidebar** 232px, labelled items with outline icons (Ref B). Bottom slot holds the dark platform card (Ref B "History available" card): current platform + model + "Ganti platform".
-- **Logo**: `--aqua-tint` tile with "E", then the app name. Sidebar: "Eksplorasi" / "Rupiah Digital" on two lines (Poppins 600 17/22), sidebar width unchanged; the link's `aria-label` is the full name. Landing: the full name on one line; it wraps at narrow widths, the font never shrinks.
-- **Header** 72px, bottom `--line` divider (Ref A). Left: breadcrumb `Besu › Zeto` with the Besu model selector beside it. Right: party switcher, network status chip. Ref A/B put icon buttons there; we put the two controls that change what is visible.
-- **Content** 12-column grid, 24px gap. Left-aligned text; numbers right-aligned in tables.
-- **768–1279px**: sidebar collapses to a 72px icon rail (Ref A), each icon with `aria-label` and a tooltip. Dashboard cards go 2-up.
-- **< 768px**: sheet goes full-bleed (radius 0, no canvas inset). The sidebar becomes a horizontal icon row above the header (one tap per screen, no menu dialog; accepted by lead). Each icon keeps `aria-label` + `title`, the active one `aria-current="page"`; disabled items keep their reason in `title`. The platform card is hidden. Party pills, the node chip (dot only, text kept for screen readers) and the theme toggle share one row; a pill hint wraps below. One column; history becomes a card list (§7.6). No horizontal page scroll; wide tables scroll inside their own container.
+- **Sidebar** 232px, white, `1px --line` right edge. Top: logo block (§7.1), hairline. Then the main group, then the muted group label "Alat" with its group, then a hairline and, at the bottom, the platform line and "Ganti platform" (X2 "Log out" slot).
+- **Active item** is a solid `--ink` pill, `--sheet` text, `--r-control` (X2). Idle items `--muted`, hover `--canvas`.
+- **Header** (not sticky-boxed; a `1px --line` bottom edge). Left: small breadcrumb `Platform › Besu` with the model selector, then `h1` and the subtitle under it (X1 welcome block). Right: party pills, node chip, theme toggle (X1 search / bell / user slot).
+- **Main** padding 32. Dasbor uses a two-column grid (main + 296px rail) only from 1440px up. Below that the rail drops under the main column as a three-up row, because the longest figure ("Rp 10.000.000.000.000", the seeded bank balance) needs about 280px to stay on one line at a readable size.
+- **768–1279px**: the sidebar collapses to a 72px icon rail; each icon keeps `aria-label` and a tooltip. Group label and platform line are hidden; the dividers stay.
+- **< 768px**: full-bleed. The sidebar becomes a horizontal icon row above the header (one tap per screen). One column. History becomes a tile list (§7.6). No horizontal page scroll; wide tables scroll inside their own container.
 
-State lives in the URL (History API, no router dependency): `/besu/zeto/dasbor?pihak=A`, `/fabricx/dasbor?pihak=BI`, `/iroha3/riwayat?pihak=C`. Back/forward and deep links work.
+State lives in the URL (History API): `/besu/zeto/dasbor?pihak=A`, `/fabricx/dasbor?pihak=BI`, `/iroha3/riwayat?pihak=C`.
 
 ---
 
 ## 6. Cross-cutting visual languages
 
-### 6.1 Sealed vs empty (the core rule)
+### 6.1 Sealed vs empty (the core rule, unchanged)
 
-| State | Meaning | Visual | Copy | Screen-reader text |
-|---|---|---|---|---|
-| **Sealed** | Field exists on chain; this party's read returned `null` | Fixed-width chip, `--seal-bg`, diagonal hatch `repeating-linear-gradient(135deg, transparent 0 5px, rgb(20 27 45 / .14) 5px 6px)`, lock glyph, `--seal` text, `--r-pill` | "Tersegel" | "Tersegel: ada di chain, tidak terbaca oleh {pihak}" |
-| **Empty** | Nothing exists (no transactions, no node) | No fill, 1px dashed `--control` outline box, centred text | "Belum ada transaksi" + next action | same as copy |
-| **Not applicable** | Field does not apply (e.g. `rdAmount` on a non-DvP row) | Plain `—` in `--muted` | — | "tidak berlaku" |
+| State | Meaning | Visual | Copy |
+|---|---|---|---|
+| **Sealed** | The field exists on chain; this party's read returned `null` | Fixed-width chip, `--seal-bg`, diagonal hatch `repeating-linear-gradient(135deg, transparent 0 5px, rgb(127 137 160 / .22) 5px 6px)`, lock glyph, `--seal` text, `--r-pill` | "Tersegel" |
+| **Empty** | Nothing exists | No fill, 1px dashed `--control` outline, centred text | "Belum ada transaksi" + next action |
+| **Not applicable** | The field does not apply | Plain `—` in `--muted` | — |
 
-Rules:
-- The seal chip has a **fixed width per field type** (amount 112px, party 96px, flow 120px), so its width never leaks the length of the hidden value.
-- **Whole row sealed.** When every content field of a transaction is null (flow, asset, amount, RD leg, both counterparty sides), the row shows ONE chip across the content columns: "Transaksi tersegel · ada di chain, tidak terbaca oleh {pihak}", same hatch, lock and "Kenapa tersegel?" disclosure. Time and block stay visible. The text is the same for every row, so it leaks nothing. Per-field chips are only for a partly readable row (`partial`, or one counterparty side).
-- A sealed field is never computed, guessed, or copied from another party's lens (contract v1.1).
-- `Counterparty` with one side `null` shows that side sealed and the other side readable: `Bank Mandala → [Tersegel]`.
-- `flow: null` shows a sealed flow chip with a neutral transaction icon. `asset: null` shows a sealed asset chip.
-- The chip is a disclosure button (UX M3), name "Kenapa tersegel?". It opens a popover (`--r-tile`, `--lift`) with one line per model from `copy.ts` and a link "Buka di lensa". Example (Zeto): "Chain hanya menyimpan commitment dan bukti ZK. Node {pihak} tidak memegang kunci untuk membukanya." Esc and outside click close it; focus returns to the chip.
-- Visual source: Ref A's patterned dark card ("value exists, under cover"), simplified to one hatch so it works at chip size.
+Rules: fixed chip width per field type (amount 112, party 96, flow 120) so width never leaks the hidden length. A row with nothing readable shows ONE chip across the content columns ("Transaksi tersegel · ada di chain, tidak terbaca oleh {pihak}"). Per-field chips only for a partly readable row. A sealed field is never computed, guessed or copied from another lens. The chip is a disclosure "Kenapa tersegel?" with the per-model line from `copy.ts` and "Buka di lensa"; Esc closes it and focus returns to the chip. Fabric-X, party BI: a sealed row carries "Belum dilaporkan bank" in `--partial`.
 
-### 6.2 Iroha 3 transparency
+### 6.2 Iroha 3 transparency (unchanged)
 
-- A one-line notice under the header on every Iroha 3 screen, `--tint-iroha` background, eye icon: **"Iroha 3 tanpa privasi: keempat pihak melihat semua transaksi dalam bentuk terbuka."** A "Selengkapnya" disclosure (`<details>`) reveals: "Torii hanya membatasi akun yang boleh membaca. Itu kontrol akses, bukan kerahasiaan." (from `copy.ts`). Never dismissible (UX L2). It does not block any action.
-- The party switcher still works and shows the hint "Tampilan sama untuk semua pihak".
-- In the lens view, the four columns render identical data with a single "Sama untuk semua pihak" badge across them. Nothing visually implies protection.
-- The seal never appears on Iroha 3. If the adapter ever returns `null`, it renders sealed like anywhere else: the UI shows the chain's answer, not the expected one.
+One notice under the header on every Iroha 3 screen, `--tint-peach`: **"Iroha 3 tanpa privasi: keempat pihak melihat semua transaksi dalam bentuk terbuka."** with a "Selengkapnya" `<details>`: "Torii hanya membatasi akun yang boleh membaca. Itu kontrol akses, bukan kerahasiaan." Never dismissible. The seal never appears on Iroha 3 unless the chain returns `null`. The lens shows "Sama untuk semua pihak".
 
 ### 6.3 Verdict badges
 
-Pill, icon + text, never colour alone. Copy reuses `VERDICT` in `copy.ts`:
-
-| Verdict | Icon | Text | Tokens |
-|---|---|---|---|
-| `clear` | eye | "Terbaca utuh" | `--clear` on `--clear-bg` |
-| `reported` | eye | "Laporan terverifikasi" | clear |
-| `notarised` | eye | "Ditandatangani BI" | clear |
-| `viewkey` | eye | "Dipetakan via view key" | clear |
-| `partial` | half-eye | "Nominal terlihat, pihak tidak" | `--partial` on `--partial-bg` |
-| `sealed` | lock + hatch | "Tersegel" | `--seal` on `--seal-bg` with hatch |
+Pill, icon + text, `--r-pill`, 26px high. `clear` family: `--clear` on `--clear-bg`. `partial`: `--partial` on `--partial-bg`. `sealed`: hatch (§6.1). Copy from `VERDICT` in `copy.ts`.
 
 ---
 
 ## 7. Components
 
-Each lists anatomy, states, and source.
+### 7.1 Sidebar  · X2 · Flow
 
-### 7.0 Reference → component map
+- **Logo**: a 36px black circle (`--ink`, `--sheet` letter "E", Figtree 600) and the name on two lines, "Eksplorasi" / "Rupiah Digital" (Figtree 600 15/18). The link's `aria-label` is the full name. Hairline under it.
+- **Groups**: main group "Dasbor", "Riwayat", "Transfer", "DvP" (BI sees "Penjualan perdana"); group label **"Alat"** (`--t-micro`, `--muted`, sentence case) then "Lensa", "Laporan ke BI", "Stress test TPS". The order is the one in §10.
+- **Item**: 44px high, outline icon 20px, label `--t-body` 500. Active: `--ink` pill (X2). Disabled: `--faint`, the reason as a clamped two-line `small` below, and in `title` (unchanged behaviour).
+- **Bottom**: hairline, then "{Platform}" with "Model Zeto" or "Satu model" in `--muted`, and the item "Ganti platform" with a swap icon, styled as an idle nav item (X2 "Log out").
 
-Every element of both references, and where it lands. A drop is deliberate and gives a reason.
+### 7.2 Platform picker (landing)  · X1 stat cards · Flow
 
-| Ref | Element | Component / token | Note |
+Three tiles in a row (stack below 1280), `--r-card`, tint background (`--tint-besu|fabricx|iroha`), no border, hover shows a `--control` outline. A 44px `--ink` circle with the platform letter (B, F, I), the platform name `--t-h2`, tagline, the "Siapa melihat isi transaksi" row (three chips: BI / Pihak transaksi / Bank lain, each eye "Lihat" or lock "Tidak"), and a footer with a status dot. Headline `--t-display`: "Satu transaksi, empat sudut pandang"; sub "Pilih platform, lalu lihat transaksi yang sama dari sisi BI dan tiga bank." Copy unchanged.
+
+### 7.3 Model selector (Besu only) and party switcher  · X1 header · Flow
+
+Both are native radio groups drawn as a pill track: `--canvas` fill, no border, 3px inset, selected segment `--ink` with `--sheet` text, 36px high, min 44px wide, `--r-pill`. The party control keeps four always-visible pills `BI · A · B · C` in a `<fieldset>` with the legend "Pihak"; the accessible name is the full party name. Iroha 3 adds "Tampilan sama untuk semua pihak". On the TPS screen the pills are disabled with "Tidak berlaku untuk stress test". The header status chip and the theme toggle are 36/40px round, `--canvas` fill, no border (X1 round header icons).
+
+### 7.4 Stat card  · X1 pastel cards · Flow
+
+`--r-card`, tint background, no border, padding 20. Top row: a 32px round white icon disc (`--sheet`, outline icon in `--ink`) and the label in `--muted` (`--t-small`). Below: the figure (`--t-figure`, weight 500). Below that, one secondary line in `--muted` (`--t-micro`) in the slot where X1 has "+30% This month". **No sparkline and no delta**: nothing here has a time series (§1.1).
+
+The figure never abbreviates (it is proof). Its size is a container query on the card: `font-size: min(32px, N cqi)` with `N` chosen by digit count (≤14: 11.5, ≤18: 8.9, ≤23: 7, ≤28: 5.7, longer: 4.5). One line at ≥ 1440, at most two at 390. An `{ error }` renders the error text in `--muted`, never `0`.
+
+Dasbor cards:
+
+| Card | Tint | Figure | Source |
 |---|---|---|---|
-| A | Periwinkle page background | `--canvas` | |
-| A | White sheet inset from the canvas | sheet (`--sheet`, `--r-sheet`) | |
-| A | Square logo tile, aqua background | Sidebar logo (`--aqua-tint` tile) | |
-| A | Icon-only nav rail | Sidebar collapsed rail (768–1279px) | desktop uses the labelled Ref B sidebar |
-| A | Search field in the header | dropped | no searchable data; history is short and filtered by party |
-| A | Header icon buttons (chat, bell, menu) | header slot → PartySwitcher + network status chip; menu button only < 768px | chat/bell dropped: no messages or notifications in the app |
-| A | Large page heading + one-line subtitle | page `h1` (`--t-h1`) + `.sub` on every screen | |
-| A | Tabs Budget / Spending / Balance / Value | ModelSelector segmented control (Besu) | underline tab style kept for the asset toggle in Transfer (RD / DFABI) |
-| A | Dark card with geometric pattern, name, big amount | BalanceCard (RD) | |
-| A | Aqua footer strip with card number / date / CVC | BalanceCard footer: node, asset | card number/CVC have no equivalent |
-| A | Second card, white outlined | dropped | UX M1: DFABI is a stat card, so the balance never shows twice |
-| A | Third card, faded | dropped | only two assets; a faded card would read as "disabled" |
-| A | "My Spending" big figure | StatCard figure / Dasbor heading figure | |
-| A | "Monthly" select | native `<select>` style (Compose fields) | the party is pills, not a select (UX H2) |
-| A | Ink + aqua bar chart, value label on top | BarChart (TPS per model) | |
-| A | Invoice tiles (#id, name, date, amount, download) | HistoryTable mobile tile; tx id in mono as `#id` | download icon → "Buka di lensa" |
-| A | Prev/next round arrow buttons | Riwayat "Muat lebih banyak" | paging by count, not carousel |
-| A | Card shadow | `--lift` | balance card + popovers only |
-| B | Labelled sidebar with outline icons | Sidebar (desktop) | |
-| B | Dark "History available" card at the sidebar bottom | Sidebar platform card ("Ganti platform") | |
-| B | Rounded sheet corners | `--r-sheet` | |
-| B | Search pill + round icon buttons | dropped | same reason as Ref A search/bell |
-| B | "Dashboard" heading + Filters button | Dasbor `h1`; Filters dropped | filtering is the party switch |
-| B | Three pastel stat cards, black icon tile, sparkline, % caption | StatCard ×3 (Saldo DFABI, Node Anda, Model privasi) + platform tints; PlatformPicker tiles | % caption → a secondary line ("blok {n}", verdict style); sparkline dropped: no time series behind any of the three |
-| B | Card kebab menu | dropped | no per-card actions |
-| B | Line chart, dot markers, dashed guides, dark tooltip pill | LineChart (TPS over time) | tooltip pill reused for NetworkGraph node detail |
-| B | Weekly select on the chart | dropped | stress runs are short; no period choice |
-| B | "Recent Activities" rows with round direction icons | HistoryTable rows (desktop) | icons = sender/receiver/issue/DvP/observer |
-| B | "Completed" status text | verdict badge | status = what the party can read |
-| B | Dark "Sell Order" panel, highlighted row pill | BI report panel (Laporan); selected-row pill in HistoryTable | |
-| — | Not in refs | NetworkGraph, Sealed chip, Iroha notice, States | required by the flow; styled from ref tokens (tiles, pills, ink) |
+| "Saldo RD" (`section.hero`, figure in `.big`) | blue | RD balance | `/api/balance`; secondary line "{node}" (e.g. "Paladin node 2") |
+| "Saldo DFABI" (`region` with `.fig`) | green | DFABI balance in units | `/api/balance` |
+| "Node Anda" | blue | "Aktif" / "Mati" / "Tidak diketahui" | the party's own nodes from `/api/network`; secondary line "blok {n}" detail |
 
-### 7.1 Platform picker (landing)  · Ref B stat cards · Flow
+The class names `hero`, `big`, `fig` are kept: the e2e and demo harness select on them.
 
-Three large tiles in a row (stack on mobile), each a `<button>` inside a list:
+### 7.5 Right rail  · X1 "Top …" lists · Flow
 
-- Tint background (`--tint-besu|fabricx|iroha`), `--r-card`, black 48px tile with the platform letter (B, F, I) top-left (Ref B coin tile; letters, not glyphs, by decision), platform name in `--t-h2`, one-line tagline, footer row with node count and a live status dot.
-- Copy: "Besu" + "Tiga model privasi: Zeto, Noto, Stealth" · "Fabric-X" + "Bukti ZK dan pseudonim Idemix, endorsement 3 dari 4" · "Iroha 3" + "Lane publik, tanpa privasi".
-- States: hover raises the border to `--control`; focus ring; pressed navigates. If `/api/health` shows the platform unreachable: status dot `--down` + "Tidak terjangkau", tile stays clickable (the screens show their own error state).
-- Page headline (`--t-display`): "Satu transaksi, empat sudut pandang". Sub: "Pilih platform, lalu lihat transaksi yang sama dari sisi BI dan tiga bank." (UX H3)
-- Each tile has a 3-cell row "Siapa melihat isi transaksi": "BI" / "Pihak transaksi" / "Bank lain", each an icon + text (eye "Lihat" or lock "Tidak"). Besu: Lihat · Lihat · Tidak. Fabric-X: Lihat · Lihat · Tidak. Iroha 3: Lihat · Lihat · Lihat, plus "tanpa privasi". The row is captioned "Klaim model; buktinya ada di Lensa." Static copy in `copy.ts`.
+Three short lists under a title and an optional text link (X1 "See all"), each row a 36px round avatar, a name with a `--muted` second line, and a value or status right-aligned. Hairline between rows, no card surface.
 
-### 7.2 Model selector (Besu only)  · existing `.seg` · Flow
-
-Segmented control beside the breadcrumb: "Zeto" · "Noto" · "Stealth". `role="radiogroup"` built from native radio inputs styled as segments. Below the header, a one-line model tagline from `MODEL_COPY[model].tag` in `--muted`. Hidden for Fabric-X and Iroha 3 (single model each).
-
-### 7.3 Party switcher  · Ref A tabs + Ref B pills · Flow (UX H2, M5)
-
-Switching party is the demo's core gesture, so all four parties stay visible: a segmented control of 4 pills `BI · A · B · C`, built from native radio inputs in a `<fieldset>` with the visible legend "Pihak".
-
-- Each pill: 36px high, min 44px wide, `--r-pill`, `--t-small` 600. Selected: `--ink` fill, white text. Others: transparent, `--muted` text, hover `--canvas`.
-- Accessible name and tooltip carry the full party name ("Bank Nusantara (B)"). The whole control fits 320px.
-- Changing it updates `?pihak=`, keeps the current screen, and triggers the seal transition (§8).
-- Iroha 3 adds the hint "Tampilan sama untuk semua pihak".
-- The pills stay usable during a running transaction: a run keeps its own request (§7.9).
-- On the TPS screen the pills are disabled with the hint "Tidak berlaku untuk stress test" (a stress run is not party-scoped).
-- The Dasbor `h1` names the party: "Dasbor · Bank Nusantara".
-
-### 7.4 Stat card  · Ref B (UX M1, M2)
-
-`--r-card`, platform tint background, black icon tile left, figure in Poppins 600 with the label under it. No sparkline: none of the three values has a time series. ≥1280 the three cards stack beside the RD hero; 768–1279 they sit in a row under it. Long figures never get abbreviated (the figure is proof): font size steps down by character count (≤14 / ≤18 / ≤23 / ≤28 / longer), on the hero too. Target: one line at ≥1280, at most two at 390. Dasbor, three cards:
-
-| Card | Figure | Source |
+| List | Rows | Source |
 |---|---|---|
-| "Saldo DFABI" | balance in units | `/api/balance` DFABI; `{ error }` renders the error text in `--muted`, never `0` |
-| "Node Anda" | "Aktif" / "Mati" + "blok {n}" | the party's own node(s) from the App-level `/api/network` |
-| "Model privasi" | model name + one-line verdict style ("Bukti ZK", "Notary BI", "Alamat sekali pakai", "Tanpa privasi") | static, `copy.ts` |
+| "Model privasi" (`region`, `.fig` = model name) | one row: model name, `MODEL_STYLE` line | static, `copy.ts` |
+| "Node {pihak}" | the party's own nodes: label, kind, status text + dot | `/api/network` |
+| "Pihak" | BI and three banks: initials avatar, name, node label; the viewing party is marked "Dilihat" and is selected; the others are buttons that switch `?pihak=` | `meta.parties`; a switch, never a balance (R1: another party's balance is not this party's read) |
 
-"Transaksi terlihat" is dropped: a count cannot be computed from `history(5)`.
+Below 1440px the three lists sit in a three-up row under the main column.
 
-### 7.5 Balance card  · Ref A dark card (UX M1)
+### 7.6 Transaction history  · X1 table · contract v1.1
 
-One dark hero card for RD. `--ink-panel`, `--r-card`, `--lift`. Top: party name (`--t-h3`, white), RD balance in `--t-display`. Background carries the Ref A geometric pattern as a faint inline-SVG `<pattern>` at 6% opacity (decorative, `aria-hidden`). Footer strip in `--aqua` with `--ink` text: "Node" (from `nodeLabel()` in `copy.ts`, e.g. "Paladin node 2") and "Aset: Rupiah Digital". A balance `{ error }` shows the error text in the card in place of the figure (Fabric-X BI: "BI tidak memegang saldo transfer"). DFABI is a stat card (§7.4), so the balance never appears twice.
+Desktop: semantic `<table>` with caption "Riwayat transaksi sebagai {pihak}". No cell borders; a `--line` hairline between rows; header row in `--muted` `--t-small`, no fill (X1). Columns: icon (36px round, `--canvas` disc with the direction glyph: arrow out sender, arrow in receiver, plus issue, swap DvP, eye observer, dot for flow `null`), Transaksi (`flowName`, role in `--muted` below), Pihak, Nominal (right, tabular), Kaki RD (right; DvP and award only), Status (verdict badge), Waktu (`at`, block in mono below; `at` null → "Tanpa cap waktu", never sealed). Row hover `--canvas`; the selected row (opened in the lens) `--blue-tint`, `--r-tile`. A row with nothing readable collapses into one chip (§6.1). Rows are `<tr>`; the first cell holds a real link "Buka di lensa". Newest first, page 20, "Muat lebih banyak" up to 100. Footer "Menampilkan {n} transaksi terbaru". Truncated reply: `--partial-bg` notice "Sebagian riwayat (batas pemindaian)".
 
-### 7.6 Transaction history  · Ref B Recent Activities · contract v1.1
+Mobile: each row becomes a `--line`-outlined tile, `--r-tile`: icon, flow, large amount, counterparty, time.
 
-Desktop: semantic `<table>` with caption "Riwayat transaksi sebagai {pihak}". Columns:
+### 7.7 Network graph  · X1 chart slot · Flow · inline SVG
 
-| Column | Content | Null rendering |
+The "Jaringan" panel holds the large visual, where X1 has "Earnings". A lane diagram, one column per owner plus "Bersama". A legend row at the panel top right (X1 "First half / Top Gross"): dot + "Aktif", ring + "Mati", dashed ring + "Tidak diketahui". Node = `--r-tile` box with a `--line` stroke on `--sheet`, kind label, status dot; links 1.5px `--line`, dashed `--down` when a node is down. The selected party's lane is `--blue-tint` with "Node Anda". Hover/focus on a node shows `detail` in a **dark tooltip pill** (`--ink-panel`, white text, `--lift`), exactly X1's "$307.48K / June 2024" pill. Every node is focusable with `role="img"` and a full `aria-label`; a visually hidden `<table>` repeats the nodes. Poll 10s. Mobile: list form, links hidden.
+
+### 7.8 Charts  · X1 line chart · inline SVG
+
+- **Line chart** (TPS over time): 2px `--ink` curve, optional second series 2px `--green-line`, dashed horizontal guides in `--line`, no vertical axis line, month-style labels in `--muted` `--t-small`, a dashed vertical guide and the dark tooltip pill on the hovered point.
+- **Bar chart** (TPS per model): series alternate `--ink` and `--blue`, 4px top radius, value label above the highlighted bar, 4 y ticks, baseline only.
+- Every chart has `<title>`/`<desc>` and a "Lihat data" `<table>`. Numbers `id-ID`; axis title with the unit ("transaksi/detik").
+
+### 7.9 Forms: transfer and DvP  · Flow
+
+Inputs 40px, `--r-control`, `--control` border, label above (`--t-small` 600), hint below in `--muted`. Primary button `--ink`, white text, 44px, `--r-control` ("Kirim transaksi"). Errors inline in `--danger` with an icon; focus moves to the first error. Asset tabs are underline tabs ("Rupiah Digital (RD)" | "Obligasi DFABI"), active `--ink` underline. Progress keeps the four-step timeline, the only numbered sequence. Subtitle "Dikirim oleh {pihak}". Form values stay after an error; the error block offers "Coba lagi" (502/503) or "Lihat stress test" (409). The run survives navigation. Award variant (BI, `/dvp`): title "Penjualan perdana DFABI ↔ RD", fields "Bank pembeli" and "Jumlah (unit DFABI)", price line from `PRICE_PER_UNIT`, button "Jalankan penjualan". The `/dvp` nav item reads "Penjualan perdana" for BI.
+
+### 7.10 Lens view  · Flow
+
+Four columns (2×2 on tablet, stacked on mobile), one per party in `PARTY_ORDER`, each `--r-card` with a `--line` outline. The viewing party's column is outlined 2px `--ink` and tagged "Pihak Anda" (a `--ink` pill). Content per column: name, role label, verdict badge, amount, counterparty, flow, "Di chain" key/value list in mono, the `method` line in `--muted`. Award and DvP rules, role chips and outsider behaviour are unchanged from v1: BI "Penerbit & pengawas", buyer "Pembeli DFABI", others "Tidak terlibat"; outsiders follow the model, never the flow.
+
+### 7.11 BI report  · X1 table, light
+
+v1's dark panel is dropped: X1 has no dark panels. "Laporan ke BI" is a white panel, `--r-card`, `--line` outline, a plain table like §7.6 with columns "Pengirim", "Transaksi", "Nominal", "Cocok dengan chain" (badge). Row hover `--canvas`. Only for party BI; a bank gets the neutral state "Hanya BI yang menerima laporan" with "Lihat sebagai BI". Hidden on Iroha 3 ("Tidak berlaku di Iroha 3").
+
+### 7.12 Empty, error, loading
+
+| State | Visual | Copy |
 |---|---|---|
-| (icon) | 36px round tinted icon: arrow out (sender), arrow in (receiver), plus (issue), swap (DvP), eye (regulator/outsider) | flow null → neutral dot icon |
-| Transaksi | `flowName` + asset | flow/asset null → seal chip |
-| Pihak | `counterpartyLine()` | per side seal |
-| Nominal | right-aligned, tabular | seal chip (fixed width) |
-| Kaki RD | DvP and award (`isDvpFlow`): `rdAmount` | `null` on DvP/award → seal; other flows → `—` |
-| Status | verdict badge (§6.3) | — |
-| Waktu | `at` formatted `id-ID`, block in mono below | `at` null → "Tanpa cap waktu" in `--muted` (Fabric-X), never sealed (absence of a timestamp is not redaction) |
+| Loading | `--canvas` skeleton rows, shimmer off under reduced motion, `aria-busy` | "Memuat…" (hidden) |
+| Empty | Dashed box, one action | "Belum ada transaksi" / "Kirim transaksi pertama dari menu Transfer." + "Buat transfer" (BI: "Terbitkan RD") |
+| Not available (501) | Dashed box, no retry | "Belum tersedia di platform ini" + reason |
+| Error (502) | `--danger-bg` block, icon, server text verbatim, retry | "Tidak dapat membaca chain" + "Coba lagi" |
+| Partial outage | `--partial-bg` bar | "Sebagian node tidak terjangkau. Data mungkin tidak lengkap." |
 
-A row with nothing readable collapses its five content columns into one row-wide seal chip (§6.1); icon link and Waktu stay. The same rule applies to a Lensa column.
+A 502 from `/api/history` is always the error state, never "Belum ada transaksi".
 
-Fabric-X, party BI only: a sealed row is a transaction on BI's ledger that no bank has reported yet (the BI-offline case). It carries the line "Belum dilaporkan bank" in `--partial` under the chip or badge. For a bank the seal keeps its plain meaning.
+### 7.13 Stress test guard
 
-Row hover: `--canvas` background. Selected row (opened in the lens): `--aqua-tint` pill row, `--r-tile` (Ref B highlighted Sell Order row). Rows are `<tr>` with a real `<button>` in the first cell for "Buka di lensa".
-
-Mobile: each row becomes a `--line`-outlined tile, `--r-tile` (Ref A invoice tile): icon + flow on top, amount large, counterparty and time below.
-
-Rules from the contract: an absent row means the party cannot see the transaction. The UI renders nothing for it, never a placeholder row. Newest first, page size 20 ("Muat lebih banyak" up to 100). Each row links to `/…/lensa/:tx`.
-
-Footer (UX L3): "Menampilkan {n} transaksi terbaru" in `--muted`. When the reply carries `x-history-truncated: 1`, a `--partial-bg` notice above the table: "Sebagian riwayat (batas pemindaian)", with the line "Riwayat lama di luar batas ini tidak ditampilkan." Same notice on the Dasbor history panel.
-
-### 7.7 Network graph  · Flow · inline SVG
-
-A lane diagram, not a force layout (deterministic, no dependency):
-
-```
-   Bank Indonesia    Bank Mandala    Bank Nusantara    Bank Sejahtera     Bersama
-  ┌────────────┐   ┌────────────┐   ┌────────────┐   ┌────────────┐   ┌─────────┐
-  │ ◉ validator│───│ ◉ validator│───│ ◉ validator│───│ ◉ validator│   │ ◉ orderer│
-  │ ◉ paladin  │   │ ◉ paladin  │   │ ◉ paladin  │   │ ◉ paladin  │   └─────────┘
-  └────────────┘   └────────────┘   └────────────┘   └────────────┘
-```
-
-- One column per `owner` (`PARTY_ORDER` with BI first visually), plus a "Bersama" column for `owner: null`. Column header = party name.
-- Node = rounded rect (`--r-tile`), kind icon + `label`, status dot. Kind labels (Indonesian): `besu-validator` "Validator Besu", `paladin` "Node Paladin", `fsc-node` "Node token FSC", `fabricx-committer` "Committer Fabric-X", `fabricx-orderer` "Orderer Fabric-X", `iroha-peer` "Peer Iroha".
-- Links = 1.5px `--line` paths; links touching a `down` node become dashed `--down`.
-- Status: `up` filled `--up` dot + text "Aktif"; `down` hollow `--down` ring + "Mati"; `unknown` dashed `--faint` ring + "Tidak diketahui". Text always present (not colour alone).
-- The selected party's column gets an `--aqua-tint` lane background and the label "Node Anda".
-- Hover/focus on a node shows `detail` in a dark tooltip pill (Ref B chart tooltip). Every node is focusable (`<g tabindex="0" role="img" aria-label="{label}, {status}, milik {owner}">`), and a visually hidden `<table>` lists the same nodes for screen readers.
-- Refresh: poll `/api/network` every 10 s; "Diperbarui {n} detik lalu" in `--muted`.
-- Mobile: columns stack vertically, links hidden, list form.
-
-### 7.8 Charts  · Ref A bar, Ref B line · inline SVG
-
-- **Bar chart** (TPS per model, per-run comparison): alternating series `--ink` and `--aqua-edge` by model order (zeto, noto, stealth, fabricx, iroha3; `--aqua-edge` because plain `--aqua` is 1.7:1 on white), every bar labelled with its model name, 4px top radius, value label above the highlighted bar (Ref A "$9,880,00" above Jun). Y-axis 4 ticks, `--muted` `--t-small`, no gridlines except a baseline.
-- **Line chart** (TPS over time in a stress run): 2px `--ink` curve, dot markers on sample points, dashed horizontal guides in `--line`, dark tooltip pill with value + time (Ref B "$2954 Nov 29 2020").
-- Every chart has a `<title>`/`<desc>`, and a "Lihat data" disclosure with a `<table>` of the same values.
-- Numbers formatted `id-ID`; units in the axis title ("transaksi/detik").
-
-### 7.9 Forms: transfer and DvP  · existing Compose · Ref A select
-
-Restyle of `Compose.tsx`. Inputs 40px, `--r-control`, `--control` border, label above, hint below in `--muted`. Primary button `--ink` fill, white text, 44px, `--r-control` ("Kirim transaksi"). Amount input `inputmode="numeric"`, `autocomplete="off"`. Errors inline under the field, `--danger`, icon + text, focus moves to the first error. Progress uses the existing four-step timeline (the only numbered sequence).
-
-- **Asset picker** (Transfer): Ref A underline tabs "Rupiah Digital (RD)" | "Obligasi DFABI". Issue vs transfer follows the party: BI issues ("Penerbitan RD"), a bank transfers ("Transfer RD").
-- **Subtitle** (UX M5): "Dikirim oleh {pihak}". The progress panel keeps "Dikirim oleh {pihak saat kirim}" for the whole run, even after a party switch.
-- **Recovery** (UX M4): form values stay after an error. The error block shows the server reason and one action: "Coba lagi" for 502/503, "Lihat stress test" when a stress test holds the lock (409). Focus moves to the block.
-- The run survives navigation: leaving the screen and coming back shows the same progress or result.
-- **Award, BI variant** (ARCHITECTURE.md §7): the `/dvp` screen as party BI is the primary-market sale. Same layout as DvP, no new component.
-  - Title `FLOW_NAME.award` "Penjualan perdana DFABI ↔ RD"; subtitle "Dikirim oleh Bank Indonesia". BI is the seller through the route party, never a field.
-  - Fields: "Bank pembeli" (A/B/C select), "Jumlah (unit DFABI)". The hint and price line are the DvP ones: "{n} unit DFABI · dibayar Rp {n × 1.000.000}" and "Harga per unit Rp 1.000.000 (ketentuan transaksi)", from the shared `PRICE_PER_UNIT`, never typed by the user.
-  - Primary button "Jalankan penjualan" (not "Terbitkan": RD moves too). Same four-step progress, "Selesai di blok", "Buka di lensa".
-  - No BI stock line in the MVP. A missing stock surfaces as the server's error block (UX M4).
-  - Disabled model: the adapter's `award` reason as the `.notice` above the button, button disabled (same as a disabled DvP).
-- **Nav label per party:** the `/dvp` item reads "Penjualan perdana" for BI and "DvP" for a bank. Same swap icon, same position.
-
-### 7.10 Lens view (one transaction, four parties)  · existing Lenses · Flow
-
-Four columns (2×2 on tablet, stacked on mobile), one per party in `PARTY_ORDER`. Each: party name + role label (`roleLabel()`), verdict badge, fields (amount, counterparty, flow) using §6.1, "Di chain" key/value list in mono, `method` line in `--muted`. The column for the party selected in the header is outlined in `--ink` with "Pihak Anda".
-
-**Award row and columns** (history §7.6 and lens, same rules):
-- Icon: the DvP swap glyph (any `isDvpFlow` flow). Transaksi cell: "Penjualan perdana DFABI ↔ RD"; Pihak: "Bank Indonesia → {bank}"; Nominal in DFABI units; Kaki RD readable or sealed (§6.1).
-- Role chips (`roleLabel`, dvp = true): BI "Penerbit & pengawas" (BI is a party here, never "Pengawas"), buyer "Pembeli DFABI", other banks "Tidak terlibat".
-- Verdicts: BI and the buyer read their own legs, so `clear`. BI shows no "Laporan terverifikasi" and the row never appears in "Laporan ke BI" (§7.11).
-- Outsider banks follow the model, never the flow: one row-wide seal on Zeto and Noto, `partial` on Stealth, clear on Iroha 3 under its "Sama untuk semua pihak" badge (§6.2). Nothing is derived from BI's or the buyer's column.
-
-### 7.11 BI report panel  · Ref B Sell Order
-
-`--ink-panel`, `--r-card`. Title "Laporan ke BI". Table columns: "Pengirim", "Nominal", "Cocok dengan chain" (badge). Matching row highlighted with an `--aqua` pill (Ref B selected row). Source: BI's own history, verdicts `reported`, `notarised`, `viewkey`.
-
-Only for party BI (UX H1). For a bank the sidebar item is disabled with the hint "Hanya BI yang menerima laporan". A deep link as a bank shows that reason as a neutral state plus the button "Lihat sebagai BI" (switches the party pill). Hidden on Iroha 3.
-
-### 7.12 Empty, error, loading states
-
-| State | Visual | Copy (Indonesian) |
-|---|---|---|
-| Loading | Skeleton blocks in `--canvas`, shimmer off under reduced motion; `aria-busy="true"` on the region | "Memuat…" (visually hidden) |
-| Empty (history) | Dashed box (§6.1), icon, one action (UX L5) | "Belum ada transaksi" / "Kirim transaksi pertama dari menu Transfer." + button "Buat transfer"; for BI the button is "Terbitkan RD" |
-| Not available (501) | Dashed box, info icon, no retry (UX H5) | "Belum tersedia di platform ini" + the server reason |
-| Empty (graph) | Dashed box | "Belum ada node terdaftar untuk platform ini." |
-| Error (adapter 502) | `--danger-bg` block, icon, server message verbatim, retry button | title "Tidak dapat membaca chain", body = API message, button "Coba lagi" |
-| Error (400) | Same block | "Parameter tidak valid: {pesan}" |
-| Partial outage | Banner under header, `--partial-bg` | "Sebagian node tidak terjangkau. Data mungkin tidak lengkap." |
-
-Per contract v1.1: a 502 from `/api/history` is always the error state, never "Belum ada transaksi". Error copy says what failed and what to do; it does not apologise.
-
-### 7.13 Header status chip  · existing `.net`
-
-Pill: status dot + "{n}/{total} node aktif" from the App-level `/api/network` (same data as the Dasbor graph). Click opens the dashboard's graph. `aria-live="polite"` announces changes from up to down.
-
-Header right side, in order (UX L1): party pills (§7.3), status chip, theme toggle (40px round outlined icon button, Ref A header icon style, `aria-label="Ganti tema"`, sets `data-theme`). No search field: a listed deviation (§7.0).
-
-### 7.14 Stress test guard  · Ref B dark card (UX H4)
-
-- **Confirm dialog** (native `<dialog>`, `--r-card`) before a run starts: "Mulai stress test?" Body lists the transaction count, models and time limit, plus "Transfer dan DvP diblokir selama tes." Buttons "Mulai" (`--ink`) and "Batal" (outlined). Esc cancels.
-- **Global banner** under the header on every screen while a run is active, `--ink-panel` strip: "Stress test berjalan · {n}/{total} transaksi" + link "Lihat" (to TPS) + button "Hentikan". `aria-live="polite"` for start and end only, not every tick.
-- **409 copy** in Transfer/DvP when the lock holder is a stress test: "Stress test sedang berjalan. Transfer dan DvP bisa dipakai lagi setelah selesai." + action "Lihat stress test".
+Native `<dialog>` "Mulai stress test?" (`--r-card`, `--lift`), buttons "Mulai" (`--ink`) and "Batal" (outlined). Global banner under the header while a run is active, `--ink-panel` strip: "Stress test berjalan · {n}/{total} transaksi", link "Lihat", button "Hentikan". 409 copy: "Stress test sedang berjalan. Transfer dan DvP bisa dipakai lagi setelah selesai."
 
 ---
 
@@ -392,13 +270,13 @@ Header right side, in order (UX L1): party pills (§7.3), status chip, theme tog
 
 | Moment | Motion | Duration / easing |
 |---|---|---|
-| **Party switch (signature moment)** | Fields that become unreadable: text fades out while the hatch slides in from the left inside the chip. Fields that become readable: hatch slides out, value fades in. Only `transform`/`opacity`. | 220ms, `cubic-bezier(.2,.7,.2,1)`, 20ms stagger per column, max 4 |
+| **Party switch (the one signature moment)** | Newly unreadable fields: text fades out while the hatch slides in from the left inside the chip. Newly readable: hatch slides out, value fades in. `transform` and `opacity` only | 220ms, `cubic-bezier(.2,.7,.2,1)`, 20ms stagger per column, max 4 |
 | Route change | Content cross-fade | 120ms |
-| Popover / tooltip | Fade + 4px rise | 120ms |
-| Node `up` dot | Soft pulse ring (existing `@keyframes p`) | 2s loop |
-| Skeleton shimmer | Gradient slide | 1.2s loop |
+| Popover, tooltip | Fade + 4px rise | 120ms |
+| Node up dot | Soft pulse ring | 2s loop |
+| Skeleton | Gradient slide | 1.2s loop |
 
-No entrance animations on page load, no hover lift on cards. `transition` lists properties explicitly (never `all`). Under `prefers-reduced-motion: reduce`: all of the above become instant swaps, and the pulse and shimmer stop.
+No entrance animations, no hover lift. `transition` names its properties. Under `prefers-reduced-motion: reduce` everything is an instant swap and the pulse and shimmer stop.
 
 ---
 
@@ -406,61 +284,66 @@ No entrance animations on page load, no hover lift on cards. `transition` lists 
 
 Target WCAG 2.2 AA.
 
-1. Contrast per §2 tables; `--faint` never carries meaningful text.
-2. Never colour alone: verdicts, statuses, and seals always pair icon + text.
-3. Keyboard: every action is a native `<button>`, `<a>`, `<select>`, or input. Visible focus: 2px `--focus` outline, 2px offset (`--focus-on-ink` on dark panels). Focus not obscured by the sticky header (`scroll-margin-top: 88px`).
-4. Skip link "Lewati ke konten" as the first focusable element. Landmarks: `<nav aria-label="Navigasi utama">`, `<header>`, `<main>`.
-5. Headings in order: one `h1` per screen, panels `h2`.
-6. Live regions: party switch announces "Menampilkan data sebagai {pihak}" (`aria-live="polite"`); transaction progress and node status changes are polite too.
-7. Seal chip has the screen-reader text from §6.1; the hatch is a background (not announced).
-8. SVG charts and graph: `role="img"` with `aria-label`/`<title>`, plus a data table alternative.
-9. Target size ≥ 24×24 (rail icons and round icon buttons 40×40).
-10. `<html lang="id">` (already set). Mixed-language terms (DvP, view key) need no `lang` change.
-11. Zoom to 200% and widths down to 320px without horizontal page scroll.
-12. Native `<select>` gets explicit `background-color` and `color` for dark mode.
+1. Contrast per §2; `--faint` never carries meaningful text.
+2. Never colour alone: verdicts, statuses and seals pair icon and text. Node status text is coloured (X1) and always has its dot or ring and its word.
+3. Every action is a native `<button>`, `<a>`, `<select>` or input. Visible focus: 2px `--focus`, 2px offset (`--focus-on-ink` on `--ink-panel`). The active nav pill keeps its focus ring visible against the white page. `scroll-margin-top: 88px`.
+4. Skip link "Lewati ke konten" first. Landmarks: `<nav aria-label="Navigasi utama">`, `<header>`, `<main>`.
+5. One `h1` per screen (now inside `<header>`), panels `h2`. After in-app navigation focus moves to the `h1`.
+6. Live regions: "Menampilkan data sebagai {pihak}" (polite); run progress and node status are polite.
+7. The seal chip has the screen-reader text from §6.1. The hatch is a background.
+8. SVG charts and the graph: `role="img"` with `aria-label`, plus a data table.
+9. Target size ≥ 24×24; round icon buttons 36–40.
+10. `<html lang="id">`. Zoom to 200% and 320px width without horizontal page scroll.
+11. Native `<select>` gets explicit `background-color` and `color` for dark mode.
+12. The rail "Pihak" list is real buttons with the full party name as the accessible name; the current one has `aria-current="true"`.
 
 ---
 
 ## 10. Screen map
 
 ```
-/  Pilih platform (7.1)
-├─ /besu ──► model selector (7.2): /besu/zeto | /besu/noto | /besu/stealth
-│      └─ each model has the per-model screens below
+/  Pilih platform (7.2)
+├─ /besu ──► /besu/zeto | /besu/noto | /besu/stealth
 ├─ /fabricx
 └─ /iroha3  (+ transparency notice on every screen, 6.2)
 
-Per platform/model, ?pihak=BI|A|B|C on every URL (7.3):
-  /dasbor     Dasbor · {pihak}: RD hero card (7.5) · 3 stat cards (7.4) · network graph (7.7) · recent history (7.6, 5 rows)
-  /riwayat    Riwayat transaksi: full history table (7.6), "Muat lebih banyak"
-  /transfer   Transfer: RD/DFABI issue + transfer form (7.9) → progress → lens (7.10)
-  /dvp        DvP (bank) or Penjualan perdana (BI): DFABI ↔ RD form (7.9) → progress → lens (7.10)
-  /lensa/:tx  Lensa: one transaction from four parties (7.10)
-  /laporan    Laporan ke BI (7.11), Zeto + Fabric-X only
-  /tps        Stress test TPS: config (existing StressConfig) · live line chart · results bar chart (7.8)
+Per platform/model, ?pihak=BI|A|B|C on every URL:
+  /dasbor     Dasbor · {pihak}: 3 stat cards (7.4) · Jaringan (7.7) · Aktivitas terbaru (7.6, 5 rows) · right rail (7.5)
+  /riwayat    Riwayat transaksi: full table (7.6)
+  /transfer   Transfer: form (7.9) → progress → lens
+  /dvp        DvP (bank) or Penjualan perdana (BI)
+  /lensa/:tx  Lensa (7.10)
+  /laporan    Laporan ke BI (7.11), Zeto + Fabric-X
+  /tps        Stress test TPS: config · live line chart · bar chart (7.8)
 ```
 
-Sidebar items (Indonesian, in order): "Dasbor", "Riwayat", "Transfer", "DvP", "Lensa", "Laporan ke BI", "Stress test TPS". Footer card: "Ganti platform".
+Sidebar items in order: "Dasbor", "Riwayat", "Transfer", "DvP", then under "Alat": "Lensa", "Laporan ke BI", "Stress test TPS". Footer: "Ganti platform". Disabled items stay in the nav with their reason, never hidden ("Laporan ke BI" for a bank: "Hanya BI yang menerima laporan"; hidden on Iroha 3).
 
-Disabled items stay in the nav with their reason as hint text, never hidden (UX journey (e)):
-- a flow the adapter reports as disabled (`capabilities()`): the adapter's `reason`;
-- "Penjualan perdana" for party BI (the `/dvp` item): the adapter's `award` reason while that model has no award (e.g. "Belum dibangun");
-- "Laporan ke BI" for a bank: "Hanya BI yang menerima laporan". On Iroha 3 the item is hidden (no reports on a transparent lane).
-
-Data per screen (ARCHITECTURE.md §3.3 is authoritative):
-
-| Screen | API |
-|---|---|
-| Pilih platform | `GET /api/meta`, `GET /api/health` |
-| Dasbor | `GET /api/balance`, `GET /api/history?limit=5`, App-level `GET /api/network` |
-| Riwayat | `GET /api/history?limit=20..100` |
-| Transfer / DvP | existing `POST /api/tx`, `GET /api/tx/:runId/events` |
-| Lensa | last run result, else 4× `GET /api/history?limit=100` |
-| Laporan ke BI | `GET /api/history?party=BI` |
-| Stress test TPS | existing `/api/stress*` |
+Data per screen is as in ARCHITECTURE.md §3.3; this restyle adds no route and no request.
 
 ---
 
-## 11. Decisions on earlier open items
+## 11. Reference → component map
 
-All three were settled by lead in ARCHITECTURE.md §4: the BI report reads BI's history (no new route), `GET /api/balance` was added, and Poppins is loaded through the existing Google Fonts link.
+A drop is deliberate and gives its reason.
+
+| Ref | Element | Lands in | Note |
+|---|---|---|---|
+| X1 | White page, no frame | `--sheet` on `body`; no outer canvas | v1's periwinkle canvas and 28px sheet are gone |
+| X1 | Welcome heading + muted subtitle | Header `h1` + `.sub` (§5) | "Welcome back" greeting dropped: no user account in the app |
+| X1 | Search icon | dropped | no searchable data |
+| X1 | Bell icon | dropped | no notifications |
+| X1 | User chip (avatar, name, chevron) | Party pills (§7.3) | the "user" here is the viewing party |
+| X1 | Three pastel stat cards | StatCard ×3 (§7.4) | |
+| X1 | "+30% This month" delta | one secondary line | a delta would be a derived number |
+| X1 | Sparkline | dropped | no time series behind any value |
+| X1 | "Earnings" line chart, tooltip pill | Jaringan panel (§7.7) with the dark tooltip; line chart on the TPS screen (§7.8) | |
+| X1 | Legend dots | Jaringan legend | |
+| X1 | "Top selling products" table | History table (§7.6) | |
+| X1 | "In Stock / Out of stock" coloured text | node status text, verdict badges | |
+| X1 | Right rail lists, "See all" | Right rail (§7.5), "Lihat semua" | |
+| X2 | Logo, hairline | Sidebar logo (§7.1) | |
+| X2 | Black active pill | `.nav[aria-current=page]` | |
+| X2 | "Tools" label and group | "Alat" group | |
+| X2 | "Log out" | "Ganti platform" | no session to end |
+| — | Not in the refs | Sealed chip, Iroha notice, lens, forms, States | required by the flow; styled from the same tokens |
