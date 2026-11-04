@@ -2,6 +2,8 @@ import { rpcUp } from '../health.ts';
 import type { Network, NetworkNode, Receipt, ReceiptPart } from '../adapter.ts';
 import { PARTIES, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
+import { Interface } from '../../../../besu/stealth-address/ts/chain.ts';
+import { EVENT_ABI } from './event-abi.ts';
 import { kubectl, type Exec, type FabricxState } from './fabricx.ts';
 
 // network() of the Besu-based models (zeto, noto, stealth; ARCHITECTURE.md §2.3 besu-network.ts).
@@ -111,13 +113,30 @@ export const jsonRpc: JsonRpc = async <T>(url: string, method: string, params: u
 
 interface EthReceipt {
   status: string; blockNumber: string; blockHash: string; transactionIndex: string; from: string; to: string | null;
-  contractAddress: string | null; gasUsed: string; effectiveGasPrice?: string; logs: { address: string; topics: string[] }[];
+  contractAddress: string | null; gasUsed: string; effectiveGasPrice?: string; logs: { address: string; topics: string[]; data: string }[];
 }
 const dec = (hex: string) => BigInt(hex).toString();
 const short = (a: string) => (a.length > 14 ? `${a.slice(0, 8)}…${a.slice(-4)}` : a);
 // Zeto reports amounts in hex ("0x01"), Noto in decimal; both shown in decimal units
 const units = (v: string) => { try { return BigInt(v).toString(); } catch { return v; } };
 const LOG_ROWS_MAX = 12; // ponytail: first logs only; a DvP emits under ten
+
+// A log as the ABI names it: "UTXOTransfer(inputs=[1], outputs=[2], submitter=0x5ee7fb…7a84, data=0x… (64 byte))". Event data is public on
+// chain, so decoding it shows nothing a node did not already serve. Unknown topic0 (or a log that does not decode): null.
+const EVENTS = new Interface(EVENT_ABI);
+const arg = (v: unknown): string => {
+  if (typeof v === 'bigint') return v.toString();
+  if (typeof v === 'boolean') return String(v);
+  if (typeof v === 'string') return /^0x[0-9a-f]*$/i.test(v) && v.length > 42 ? `${v.slice(0, 10)}… (${(v.length - 2) / 2} byte)` : v.length > 20 ? short(v) : v;
+  if (Array.isArray(v)) return `[${v.length}]`;
+  return String(v);
+};
+export function describeLog(l: { topics: string[]; data: string }): { name: string; args: string } | null {
+  try {
+    const p = EVENTS.parseLog(l);
+    return p && { name: p.name, args: p.fragment.inputs.map((inp, i) => `${inp.name || `arg${i}`}=${arg(p.args[i])}`).join(', ') };
+  } catch { return null; }
+}
 
 export async function besuReceipt(hash: string, call: JsonRpc = jsonRpc, url = BESU_RPC): Promise<Pick<Receipt, 'source' | 'chain'>> {
   if (!/^0x[0-9a-f]{64}$/i.test(hash)) throw new Error(`Hash transaksi tidak valid: ${hash.slice(0, 80)}`);
@@ -138,7 +157,12 @@ export async function besuReceipt(hash: string, call: JsonRpc = jsonRpc, url = B
   ];
   const logs: ReceiptPart[] = r.logs.length === 0 ? [] : [{
     title: `Event log (${r.logs.length})`,
-    rows: r.logs.slice(0, LOG_ROWS_MAX).map((l, i) => ({ label: `Log ${i} · ${short(l.address)}`, value: l.topics[0] ?? '(tanpa topic)' })),
+    rows: r.logs.slice(0, LOG_ROWS_MAX).map((l, i) => {
+      const ev = describeLog(l);
+      return ev
+        ? { label: `Log ${i} · ${ev.name}`, value: `${ev.args}; kontrak ${short(l.address)}` }
+        : { label: `Log ${i} · event tidak dikenal`, value: `${l.topics[0] ?? '(tanpa topic)'}; kontrak ${short(l.address)}` };
+    }),
   }];
   return { source: 'Besu RPC (validator 1)', chain: [{ title: 'Receipt Besu', rows }, ...logs] };
 }

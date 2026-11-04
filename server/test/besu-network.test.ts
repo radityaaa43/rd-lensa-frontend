@@ -144,3 +144,23 @@ describe('Paladin node receipt', () => {
     expect(n).toEqual({ source: 'Node Paladin 2 (Bank Mandala)', parts: [], note: 'Node Bank Mandala tidak menyimpan receipt Paladin untuk transaksi ini' });
   });
 });
+
+// ---- event names from the vendored ABI (event-abi.ts) ----
+import { Interface } from '../../../besu/stealth-address/ts/chain.ts';
+import { describeLog } from '../src/adapters/besu-network.ts';
+
+describe('receipt log names', () => {
+  it('names a known event and formats its arguments', () => {
+    const erc20 = new Interface(['event Transfer(address indexed from, address indexed to, uint256 value)']);
+    const log = erc20.encodeEventLog('Transfer', ['0x' + '11'.repeat(20), '0x' + '22'.repeat(20), 1000n]);
+    expect(describeLog(log)).toEqual({ name: 'Transfer', args: 'from=0x111111…1111, to=0x222222…2222, value=1000' });
+  });
+  it('shows array lengths and byte counts, never whole blobs', () => {
+    const zeto = new Interface(['event UTXOTransfer(uint256[] inputs, uint256[] outputs, address indexed submitter, bytes data)']);
+    const log = zeto.encodeEventLog('UTXOTransfer', [[1n], [2n, 3n], '0x' + '33'.repeat(20), '0x' + 'ab'.repeat(64)]);
+    expect(describeLog(log)?.args).toBe('inputs=[1], outputs=[2], submitter=0x333333…3333, data=0xabababab… (64 byte)');
+  });
+  it('an unknown topic is null', () => {
+    expect(describeLog({ topics: ['0x' + '00'.repeat(32)], data: '0x' })).toBeNull();
+  });
+});

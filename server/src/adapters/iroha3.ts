@@ -9,6 +9,7 @@ import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type Ba
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
 import { loadAuth, partyKey, signedHeaders, type Auth } from './iroha3-auth.ts';
+import { joinInFlight } from './besu-network.ts';
 import { decodeBox, type Decoded, type NoritoCtx } from './iroha3-norito.ts';
 
 // Iroha 3 (071e281e), public lane, no APS yet: RD and DFABI are plain assets, DvP is the native DvpIsi.
@@ -350,13 +351,29 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     return { ...base, flow, asset: d.asset, role: roleFromParties(party, counterparty, issue), amount: d.quantity, rdAmount: null, counterparty };
   }
 
+  // One account-list scan per party at a time: concurrent history() calls (Dasbor 5, Riwayat 20, Lensa 100) share it. The Torii query is
+  // limit=PAGE_ROWS whatever the caller asks, and each list took ~1.3 s on the live Torii (2026-11-04): three queued scans crossed the
+  // 20 s route deadline and kept the balance read waiting past LANE_WAIT_MS. A scan that already finished is never reused.
+  const scans = new Map<PartyId, () => Promise<Awaited<ReturnType<typeof accountRows>>[]>>();
+  function scanOf(party: PartyId) {
+    let scan = scans.get(party);
+    if (!scan) {
+      scan = joinInFlight(() => inLane(party, async () => {
+        const lists: Awaited<ReturnType<typeof accountRows>>[] = [];
+        for (const p of Object.keys(acct) as PartyId[]) lists.push(await accountRows(party, acct[p], PAGE_ROWS));
+        return lists;
+      }));
+      scans.set(party, scan);
+    }
+    return scan();
+  }
+
   async function history(party: PartyId, limit: number): Promise<HistoryItem[] & { truncated?: true }> {
     if (!Number.isInteger(limit) || limit < 1) throw new Error('limit harus bilangan bulat >= 1');
     const want = Math.min(limit, HISTORY_MAX);
     // Lists and decodes both go through the party's operator account on its Torii, so they run in its lane, one after another.
+    const lists = await scanOf(party);
     return inLane(party, async () => {
-      const lists: Awaited<ReturnType<typeof accountRows>>[] = [];
-      for (const p of Object.keys(acct) as PartyId[]) lists.push(await accountRows(party, acct[p], PAGE_ROWS));
       const byHash = new Map<string, AccountRow>();
       for (const { rows } of lists) for (const r of rows) byHash.set(r.entrypoint_hash, r);
       // Rows older than the newest oldest-row of a cut list may be missing others from that list: stop there and say so.

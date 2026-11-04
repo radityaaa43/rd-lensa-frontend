@@ -86,7 +86,9 @@ What `network()` returns:
 and `Receipt { source; chain: ReceiptPart[]; node: { source; parts; note } | null }`. Rows are display-ready Indonesian text.
 - `tx` is a `HistoryItem.id`. A tx the chain does not hold throws (route 502). No wait loop: a listed tx is already final.
 - **`chain`** = the public receipt, the same answer on every node: Zeto/Noto/Stealth `eth_getTransactionReceipt` +
-  `eth_getBlockByNumber` on the Besu RPC tunnel (validator 1), event logs (first 12, topic0 raw); Fabric-X `tx_status` and the
+  `eth_getBlockByNumber` on the Besu RPC tunnel (validator 1), event logs (first 12) named and decoded with the event fragments
+  vendored in `adapters/event-abi.ts` (49 events of the Zeto, Noto/Pente, Atom and Stealth contracts; an unknown topic0 stays raw;
+  `Interface` comes through `besu/stealth-address/ts/chain.ts`, the server's one ethers entry); Fabric-X `tx_status` and the
   ledger keys in `committer-db-0` (`readLedger(tx, 0)`); Iroha 3 `ledger transaction get` + `transaction status` on the party's own
   Torii as `op-<party>`.
 - **`node`** = what the party's OWN node holds beyond that (R1). Only Zeto and Noto (Paladin): `ptx_queryTransactionReceipts`
@@ -95,7 +97,11 @@ and `Receipt { source; chain: ReceiptPart[]; node: { source; parts; note } | nul
   (owner, amount, salt). A node that was never party to the tx answers `PD011658` and has no states: `note` says "Tidak ada data
   privat di node {pihak}". Stealth, Fabric-X and Iroha 3 return `node: null`.
 - Live check 2026-11-04 (6 txs, 4 nodes): base receipt on all four nodes; private part only on the parties (Zeto: sender and
-  receiver; Noto: + BI as notary); a DvP maps to 2-3 Paladin receipts.
+  receiver; Noto: + BI as notary); a DvP maps to 2-3 Paladin receipts. Every log of those txs decoded (0 unknown).
+- Iroha 3: the receipt runs in the party's lane (a CLI query must not overlap an account-list read on one Torii). Concurrent
+  `history()` calls of one party share one in-flight account-list scan (`scanOf`): each list takes ~1.3 s on the live Torii and the
+  query is `limit=PAGE_ROWS` whatever the caller asks, so Dasbor + Riwayat + Lensa queued three scans (19.8 s, at the 20 s deadline);
+  shared, the same load ends in 6.8 s.
 
 ## 2. Server
 

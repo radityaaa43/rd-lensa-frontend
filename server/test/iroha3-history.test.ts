@@ -225,6 +225,24 @@ describe('iroha3 history, Torii limits', () => {
     expect(track.bad).toBe(0);
   });
 
+  // 2026-11-04 live: each account list takes ~1.3 s on this Torii and the query is limit=PAGE_ROWS whatever the caller asks, so
+  // Dasbor (5), Riwayat (20) and Lensa (100) on one party queued three full scans; the last crossed the 20 s route deadline.
+  test('concurrent history() calls on one party share one account-list scan', async () => {
+    const { adapter, calls, track } = setup({ delay: 15 });
+    const [a, b, c] = await Promise.all([adapter.history('A', 20), adapter.history('A', 3), adapter.history('A', 100)]);
+    expect(calls.filter((x) => x.url.pathname.includes('/transactions'))).toHaveLength(4); // one list per account, not 4 x 3
+    expect(track.bad).toBe(0);
+    expect(b.map((i) => i.id)).toEqual(a.slice(0, 3).map((i) => i.id));
+    expect(c.map((i) => i.id)).toEqual(a.map((i) => i.id));
+  });
+
+  test('a scan that finished is not reused: the next call reads the lists again', async () => {
+    const { adapter, calls } = setup();
+    await adapter.history('A', 20);
+    await adapter.history('A', 20);
+    expect(calls.filter((x) => x.url.pathname.includes('/transactions'))).toHaveLength(8);
+  });
+
   test('a hash that is not 64 lowercase hex never reaches the CLI', async () => {
     const bad = '--help'.padEnd(64, 'x');
     BOX[bad] = { box: ISSUE, authority: 'acct-BI' };
