@@ -8,6 +8,7 @@ import { Compose } from '../demo/Compose.tsx';
 import { Timeline } from '../demo/Timeline.tsx';
 import type { DemoAction, DemoState } from '../demo/demoState.ts';
 import { shortHash } from '../format.ts';
+import { TracePanel } from '../ui/Trace.tsx';
 
 type ModelRoute = Extract<Route, { page: 'model' }>;
 const BUSY = 'Transaksi lain sedang diproses';
@@ -57,6 +58,8 @@ export function Transfer({ meta, route, run, dispatch, send, stressRunning, dvp 
               <a className="btn" {...linkTo({ ...route, screen: 'lensa', tx: run.result.txHash })}>Buka di lensa</a>
             </div>
           )}
+          {/* the flow as the sender's node and the chain recorded it (DESIGN.md §7.10b) */}
+          {run.phase === 'done' && run.result && <TracePanel key={run.result.txHash} meta={meta} model={req.model} tx={run.result.txHash} party={req.from} />}
           {run.phase === 'error' && (
             <div className="state error" role="alert" tabIndex={-1} ref={errRef}>
               <h3>{stressHoldsLock ? 'Stress test sedang berjalan' : 'Transaksi gagal'}</h3>

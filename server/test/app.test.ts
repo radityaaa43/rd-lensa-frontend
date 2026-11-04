@@ -461,6 +461,19 @@ test('receipt 503 without adapter, 501 when not built, 502 scrubbed when the nod
   expect(res.json().reason).toMatch(/^Receipt Zeto di node Bank Nusantara tidak dapat dibaca/);
 });
 
+test('trace returns the flow; 400 on a bad tx; 502 scrubbed', async () => {
+  const a = fakeAdapter('zeto');
+  const app = make({ zeto: a });
+  const ok = await app.inject(`/api/trace?model=zeto&party=A&tx=${TX}`);
+  expect(ok.statusCode).toBe(200);
+  expect(ok.json().steps.map((s: { title: string }) => s.title)).toEqual(['Lock DFABI dibuat', 'Eksekusi atomik: kedua kaki pindah']);
+  expect((await app.inject('/api/trace?model=zeto&party=A&tx=0x12')).statusCode).toBe(400);
+  a.trace = async () => { throw new Error('Command failed: kubectl --kubeconfig /home/x/alibaba.yaml'); };
+  const bad = await app.inject(`/api/trace?model=zeto&party=A&tx=${TX}`);
+  expect(bad.statusCode).toBe(502);
+  expect(bad.body).not.toContain('alibaba.yaml');
+});
+
 test('balance returns both assets as strings', async () => {
   const res = await make().inject('/api/balance?model=zeto&party=A');
   expect(res.statusCode).toBe(200);

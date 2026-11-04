@@ -1,4 +1,4 @@
-import type { Capability, HistoryItem, Network, Receipt } from '../../server/src/adapter.ts';
+import type { Capability, HistoryItem, Network, Receipt, Trace } from '../../server/src/adapter.ts';
 import type { FlowId, FlowRequest, ModelId, PartyId } from '../../server/src/domain.ts';
 import type { StressConfig, StressSnapshot } from '../../server/src/stress.ts';
 import type { TxResult } from './demo/demoState.ts';
@@ -50,6 +50,7 @@ export const getHistory = (model: ModelId, party: PartyId, limit: number) =>
     }));
 export const getNetwork = (model: ModelId) => call<Network>(`/api/network?model=${model}`);
 export const getBalance = (model: ModelId, party: PartyId) => call<Balance>(`/api/balance?model=${model}&party=${party}`);
+export const getTrace = (model: ModelId, party: PartyId, tx: string) => call<Trace>(`/api/trace?model=${model}&party=${party}&tx=${encodeURIComponent(tx)}`);
 export const getReceipt = (model: ModelId, party: PartyId, tx: string) => call<Receipt>(`/api/receipt?model=${model}&party=${party}&tx=${encodeURIComponent(tx)}`);
 export const postTx = (req: FlowRequest) => post<{ runId: string }>('/api/tx', req);
 export const getStress = () => call<StressSnapshot | null>('/api/stress'); // body is null (204) before the first run

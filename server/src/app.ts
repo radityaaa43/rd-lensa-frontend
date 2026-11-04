@@ -20,6 +20,7 @@ const TX_DEADLINE_MS = 120_000;
 const HISTORY_MS = 20_000;
 const NETWORK_MS = 5_000;
 const RECEIPT_MS = 20_000;
+const TRACE_MS = 30_000; // a DvP is ~8 txs, each read with its receipt, block and (own node) Paladin record
 const HISTORY_LIMIT = 20;
 const HEALTH_POLL_MS = 3_000; // /api/health is polled by the UI; stress and tx keep the longer HEALTH_MS
 const KEEP_RUN_MS = 5 * 60_000;
@@ -215,6 +216,20 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       if (e instanceof NotAvailableError) return reply.code(501).send({ reason: e.message });
       request.log.error({ err: e }, `receipt ${model} ${party}`); // the original stays in the server log; the client gets the scrubbed reason
       return reply.code(502).send({ reason: `Receipt ${MODEL_NAMES[model]} di node ${PARTIES[party].name} tidak dapat dibaca: ${msg(e)}` });
+    }
+  });
+
+  // v1.6: the flow the tx ends, every on-chain step with its chain times, events, request and response (ARCHITECTURE.md §2.2)
+  app.get<{ Querystring: { model: ModelId; party: PartyId; tx: string } }>('/api/trace', { schema: { querystring: receiptQuery } }, async (request, reply) => {
+    const { model, party, tx } = request.query;
+    const a = adapters[model];
+    if (!a) return reply.code(503).send(modelUnavailable(model));
+    try {
+      return await withDeadline(a.trace(tx, party), TRACE_MS, 'Alur transaksi');
+    } catch (e) {
+      if (e instanceof NotAvailableError) return reply.code(501).send({ reason: e.message });
+      request.log.error({ err: e }, `trace ${model} ${party}`);
+      return reply.code(502).send({ reason: `Alur transaksi ${MODEL_NAMES[model]} di node ${PARTIES[party].name} tidak dapat dibaca: ${msg(e)}` });
     }
   });
 

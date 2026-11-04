@@ -261,6 +261,18 @@ Under the four lens columns, after a hairline: **"Receipt dari jaringan"**.
 - **Node part** (Zeto, Noto): "Receipt di node tiap pihak", four columns in `PARTY_ORDER` style (BI, A, B, C), the viewing party's column outlined 2px `--ink` with "Pihak Anda". Each column is that party's own node read. A node without private data shows the dashed note "Tidak ada data privat di node {pihak}: node ini hanya memegang receipt publik": the same visual language as Empty (§6.1), because nothing private exists on that node. 2 columns below 1280px, 1 below 768px.
 - Loading, 501 and 502 use `Polled` (§7.12). The panel adds no motion.
 
+### 7.10b Transaction flow from the network  · Flow (v2.1)
+
+"Alur transaksi di jaringan", above the receipt in Lensa and under the result on Transfer/DvP (read through the sender's node there).
+- Summary line: "{n} langkah di chain", "total {s} dari langkah pertama sampai terakhir", a colour legend per component: Paladin `--ink`,
+  Besu `--blue`, Torii/FSC `--green-line`.
+- One row per on-chain step: number disc, title ("Lock DFABI dibuat", "Atom DvP dideploy", "Eksekusi atomik: kedua kaki pindah"…),
+  block, time, short hash, the step total right-aligned in tabular figures. Under it a 10px track on the flow's shared time axis with one
+  segment per component span (min 3px), then "Paladin 0,18 s · Susun, bukti/endorse…" lines, the event names as mono pills, and a
+  "Request dan response" disclosure with summary tiles and "Lihat JSON" (pre, max 320px, scrolls).
+- A step without a span shows "tanpa durasi" and a 3px tick at its time point; the panel's note says why (Fabric-X, Iroha 3, outsider).
+- Seconds are id-ID with two decimals ("1,83 s"). No motion.
+
 ### 7.11 BI report  · X1 table, light
 
 v1's dark panel is dropped: X1 has no dark panels. "Laporan ke BI" is a white panel, `--r-card`, `--line` outline, a plain table like §7.6 with columns "Pengirim", "Transaksi", "Nominal", "Cocok dengan chain" (badge). Row hover `--canvas`. Only for party BI; a bank gets the neutral state "Hanya BI yang menerima laporan" with "Lihat sebagai BI". Hidden on Iroha 3 ("Tidak berlaku di Iroha 3").

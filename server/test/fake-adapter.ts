@@ -1,4 +1,4 @@
-import { CANCELLED, type Capability, type HistoryItem, type LensView, type ModelAdapter, type Network, type Receipt } from '../src/adapter.ts';
+import { CANCELLED, type Capability, type HistoryItem, type LensView, type ModelAdapter, type Network, type Receipt, type Trace, type TraceStep } from '../src/adapter.ts';
 import { FLOWS, PRICE_PER_UNIT, isDvpFlow, roleOf, type FlowId, type FlowRequest, type ModelId } from '../src/domain.ts';
 
 const FLOW_IDS: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp', 'award'];
@@ -61,6 +61,22 @@ export function fakeAdapter(
       nodes: (['BI', 'A', 'B', 'C'] as const).map((owner, i) => ({ id: `node${i + 1}`, label: `Node ${i + 1}`, kind: 'paladin', owner, status: 'up', detail: 'ok' })),
       links: [{ from: 'node1', to: 'node2' }, { from: 'node1', to: 'node3' }, { from: 'node1', to: 'node4' }],
     }),
+    // a fixed two-step flow; the first step has the party's own node record (Paladin + Besu spans), the second block time only
+    trace: async (tx, party): Promise<Trace> => {
+      const io = (v: string) => ({ summary: [{ label: 'Fungsi', value: v }], json: { method: 'eth_getTransactionByHash', params: [tx] } });
+      const step = (title: string, block: number, spans: TraceStep['spans'], own: boolean): TraceStep => ({
+        title, tx: block === 42 ? tx : '0x' + 'cd'.repeat(32), block, at: `2026-11-02T10:00:0${block - 40}.000Z`, spans,
+        events: [{ name: 'LockCreated', args: 'lockId=0x1' }], req: io(title), resp: io('Berhasil'),
+        node: own ? { source: `Node Paladin (${party})`, req: io('createLock'), resp: io('ok') } : null,
+      });
+      return {
+        source: 'Fake RPC', note: null,
+        steps: [
+          step('Lock DFABI dibuat', 41, [{ component: 'Paladin', label: 'Susun', start: '2026-11-02T10:00:00.000Z', end: '2026-11-02T10:00:00.180Z' }, { component: 'Besu', label: 'Masuk blok', start: '2026-11-02T10:00:00.180Z', end: '2026-11-02T10:00:01.000Z' }], party !== 'C'),
+          step('Eksekusi atomik: kedua kaki pindah', 42, [{ component: 'Besu', label: 'Blok', start: '2026-11-02T10:00:01.000Z', end: '2026-11-02T10:00:03.000Z' }], false),
+        ],
+      };
+    },
     // zeto/noto carry a per-node (Paladin) part; C plays the bank outside the tx, whose node holds only the public receipt
     receipt: async (tx, party): Promise<Receipt> => ({
       source: 'Fake RPC',

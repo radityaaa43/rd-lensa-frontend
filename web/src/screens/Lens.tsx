@@ -10,6 +10,7 @@ import { MODEL_COPY } from '../demo/copy.ts';
 import type { DemoState, TxResult } from '../demo/demoState.ts';
 import { shortHash } from '../format.ts';
 import { ReceiptPanel } from '../ui/Receipt.tsx';
+import { TracePanel } from '../ui/Trace.tsx';
 import { Empty } from '../ui/States.tsx';
 
 type ModelRoute = Extract<Route, { page: 'model' }>;
@@ -70,6 +71,7 @@ function Body({ meta, model, tx, block, note, cols, active }: { meta: Meta; mode
         {PLATFORM_OF[model] === 'iroha3' && <span className="badge partial">Sama untuk semua pihak</span>}
       </div>
       <Lenses meta={meta} model={model} cols={cols} active={active} txHash={tx} />
+      <TracePanel key={`t|${model}|${tx}|${active}`} meta={meta} model={model} tx={tx} party={active} />
       <ReceiptPanel key={`${model}|${tx}`} meta={meta} model={model} tx={tx} active={active} />
       <details className="story"><summary>Kenapa tiap pihak melihat hal berbeda</summary><p>{MODEL_COPY[model].story}</p></details>
     </section>

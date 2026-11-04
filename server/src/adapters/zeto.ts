@@ -4,6 +4,7 @@ import {
   type BankId, type FlowId, type FlowRequest, type PartyId,
 } from '../domain.ts';
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, WarmingUpError } from '../adapter.ts';
+import { besuTrace, nameFrom } from './besu-trace.ts';
 import { besuNetwork, besuReceipt, holdBack, joinInFlight, paladinNodeReceipt, receiptPage, type ReceiptLike } from './besu-network.ts';
 import type { EventLike } from './noto.ts';
 import { afterLock } from '../deadline.ts';
@@ -501,6 +502,7 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
     lens,
     history,
     network: () => besuNetwork({ paladin: true }),
+    trace: (tx, party) => besuTrace(tx, party, { paladin: true, name: nameFrom({ [lower(state.rd)]: 'RD', [lower(state.dfabi)]: 'DFABI', [lower(state.atomFactory)]: 'AtomFactory' }) }),
     receipt: async (tx, party) => {
       const [chain, node] = await Promise.all([besuReceipt(tx), paladinNodeReceipt(party, tx)]); // public receipt + the party's own Paladin node
       return { ...chain, node };

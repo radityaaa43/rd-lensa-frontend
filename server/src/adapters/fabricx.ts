@@ -332,6 +332,21 @@ export function createFabricxAdapter(exec: Exec) {
     history,
     network,
     // the shared committer DB is the public ledger; a party's FSC node keeps no per-tx receipt beyond its wallet, so node is null
+    // one atomic token request on the ledger; the 3-of-4 endorsement and finality run between FSC nodes and leave no time on the ledger
+    trace: async (tx) => {
+      const { block, onChain } = await readLedger(tx, 0);
+      const sql = 'select … from tx_status, ns_rd_dfabi_v2 where tx_id = <tx> (psql di committer-db-0)';
+      return {
+        source: 'DB committer Fabric-X (committer-db-0)',
+        note: 'Ledger Fabric-X tidak mencatat waktu. Endorsement 3 dari 4 institusi dan finality terjadi antar node FSC; durasinya hanya terukur saat transaksi dijalankan (langkah di layar Transfer/DvP).',
+        steps: [{
+          title: 'Token request dikomit ke ledger', tx, block, at: null, spans: [], events: [],
+          req: { summary: [{ label: 'Dibaca dengan', value: 'tx_status dan kunci ledger' }, { label: 'Tx id', value: tx }], json: { query: sql, params: [tx] } },
+          resp: { summary: [{ label: 'Status validasi', value: 'Valid (kode 1)' }, { label: 'Blok', value: String(block) }, ...onChain.filter((r) => r.label !== 'Tx id')], json: { block, rows: onChain } },
+          node: null,
+        }],
+      };
+    },
     receipt: async (tx) => {
       const { block, onChain } = await readLedger(tx, 0); // throws for a tx the ledger rejected or does not hold
       return {

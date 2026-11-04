@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, StepEvent } from '../adapter.ts';
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
 import { besuNetwork, besuReceipt } from './besu-network.ts';
+import { besuTrace, nameFrom } from './besu-trace.ts';
 import { BANKS, FLOWS, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type PartyId } from '../domain.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import type { Sample } from '../stats.ts';
@@ -512,6 +513,10 @@ export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl 
     history,
     network: () => besuNetwork({ paladin: false }),
     // no Paladin: a stealth transfer is a plain ERC-20 call, so the public receipt is all a node holds
+    trace: (tx, party) => besuTrace(tx, party, {
+      paladin: false, rpc: rpcUrl,
+      name: nameFrom({ [d.rd.toLowerCase()]: 'RD', [d.bond.toLowerCase()]: 'DFABI', [d.dvpFactory.toLowerCase()]: 'DvPFactory', [d.announcer.toLowerCase()]: 'Announcer' }),
+    }),
     receipt: async (tx) => ({ ...(await besuReceipt(tx, undefined, rpcUrl)), node: null }),
     async loadCapacity() {
       return 3 * Math.min(...PAIRS.map(([a, b]) => unused(a, b).length));

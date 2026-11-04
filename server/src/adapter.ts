@@ -38,6 +38,19 @@ export interface Receipt {
   node: { source: string; parts: ReceiptPart[]; note: string | null } | null;
 }
 
+// The flow of one tx as the network recorded it (ARCHITECTURE.md §1, v1.6): every on-chain step of it (a DvP is ~7 Besu txs), each with
+// its time spans from the chain's own clocks (block timestamps, Paladin node records, Torii rows), its events, and the request and
+// response as the chain stores them. Secrets (salts, keys, signatures) are removed before anything leaves the adapter.
+export interface TraceSpan { component: string; label: string; start: string; end: string } // ISO-8601, both from the network
+export interface TraceIO { summary: { label: string; value: string }[]; json: unknown }
+export interface TraceStep {
+  title: string; tx: string | null; block: number | null; at: string | null; // at: the time the network gives the step (block or row)
+  spans: TraceSpan[]; events: { name: string; args: string }[];
+  req: TraceIO | null; resp: TraceIO | null;
+  node: { source: string; req: TraceIO | null; resp: TraceIO | null } | null; // the party's OWN node record of this step (Paladin), if it has one
+}
+export interface Trace { source: string; steps: TraceStep[]; note: string | null }
+
 export interface ModelAdapter {
   id: ModelId;
   stepLabels: [string, string, string, string]; // spec §5.3, verbatim
@@ -54,6 +67,8 @@ export interface ModelAdapter {
   network(): Promise<Network>;
   // tx = a HistoryItem.id (the chain tx id). Read on the party's own node where the platform has one; throws when the chain has no such tx.
   receipt(tx: string, party: PartyId): Promise<Receipt>;
+  // tx = a HistoryItem.id or a run's txHash; the flow it ends is rebuilt from the chain, the node part from the party's own node.
+  trace(tx: string, party: PartyId): Promise<Trace>;
   loadCapacity(): Promise<number>;
   prepareLoad(n: number): Promise<void>;
   // signal.aborted is checked after the adapter's own lock/slot is acquired and before anything is submitted: then it throws CANCELLED.

@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, Receipt, StepEvent } from '../adapter.ts';
+import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, Receipt, StepEvent, Trace } from '../adapter.ts';
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
@@ -10,6 +10,7 @@ import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
 import { loadAuth, partyKey, signedHeaders, type Auth } from './iroha3-auth.ts';
 import { joinInFlight } from './besu-network.ts';
+import { scrub } from './besu-trace.ts';
 import { decodeBox, type Decoded, type NoritoCtx } from './iroha3-norito.ts';
 
 // Iroha 3 (071e281e), public lane, no APS yet: RD and DFABI are plain assets, DvP is the native DvpIsi.
@@ -416,6 +417,40 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     });
   }
 
+  // The flow as the party's own Torii recorded it. The only time the ledger keeps for a tx is creation_time_ms in its signed payload:
+  // the account row's timestamp_ms equals it (checked live 2026-11-04), and the height in `transaction status` is not the block that
+  // holds the tx on this lane (block 178's header predates the tx by a day). So Iroha shows one time point, never an invented duration.
+  async function trace(tx: string, party: PartyId): Promise<Trace> {
+    if (!/^[0-9a-f]{64}$/.test(tx)) throw new Error(`Hash transaksi tidak valid: ${tx.slice(0, 80)}`);
+    const [got, st] = await inLane(party, () => Promise.all([
+      json<TxGet>(op(party), ['--machine', 'ledger', 'transaction', 'get', '--hash', tx]),
+      json<Status>(op(party), ['--machine', 'ledger', 'transaction', 'status', '--hash', tx]),
+    ]));
+    const d = await decodeTx(party, tx).catch(() => null);
+    const p = got.entrypoint.External.payload;
+    const kind = d === null ? 'bukan perpindahan RD/DFABI' : d.kind === 'dvp' ? 'DvP (settlement atomik)' : d.kind === 'mint' ? `Mint ${d.asset}` : `Transfer ${d.asset}`;
+    const signed = p.creation_time_ms ? new Date(p.creation_time_ms).toISOString() : null;
+    return {
+      source: `Torii ${PARTIES[party].name} (akun operator node)`,
+      note: 'Ledger Iroha 3 hanya mencatat waktu tanda tangan transaksi; tidak ada waktu blok yang bisa dipakai untuk durasi di lane ini.'
+        + (d?.kind === 'dvp' ? ' Sebelum settlement, pembeli mengirim izin CanExecuteSettlement sebagai transaksi terpisah; izin itu belum ditautkan di alur ini.' : ''),
+      steps: [{
+        title: kind, tx, block: null, at: signed,
+        spans: [],
+        events: [],
+        req: {
+          summary: [{ label: 'Authority', value: p.authority }, { label: 'Ditandatangani (UTC)', value: signed ?? '-' }, { label: 'TTL', value: p.time_to_live_ms ? `${p.time_to_live_ms} ms` : '-' }, { label: 'Instruksi', value: `${p.instructions.Instructions.length} (${kind})` }],
+          json: { method: 'iroha ledger transaction get', params: ['--hash', tx], result: scrub(got) },
+        },
+        resp: {
+          summary: [{ label: 'Status', value: st.status.kind }, { label: 'Hasil', value: got.result?.Err ? `Ditolak: ${got.result.Err}` : 'Ok' }],
+          json: { method: 'iroha ledger transaction status', params: ['--hash', tx], result: st },
+        },
+        node: null,
+      }],
+    };
+  }
+
   async function network(): Promise<Network> {
     const parties = Object.keys(s.torii) as PartyId[];
     const nodes = await Promise.all(parties.map(async (p): Promise<NetworkNode> => {
@@ -457,6 +492,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     history,
     network,
     receipt,
+    trace,
     async loadCapacity() {
       const balances = await Promise.all(BANKS.map((b) => balanceOf(b, 'RD')));
       return 3 * Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT);

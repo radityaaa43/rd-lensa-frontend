@@ -3,7 +3,7 @@ import type { Network, NetworkNode, Receipt, ReceiptPart } from '../adapter.ts';
 import { PARTIES, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
 import { Interface } from '../../../../besu/stealth-address/ts/chain.ts';
-import { EVENT_ABI } from './event-abi.ts';
+import { EVENT_ABI } from './chain-abi.ts';
 import { kubectl, type Exec, type FabricxState } from './fabricx.ts';
 
 // network() of the Besu-based models (zeto, noto, stealth; ARCHITECTURE.md §2.3 besu-network.ts).
@@ -97,7 +97,7 @@ export async function receiptPage<R extends ReceiptLike>(
 // Besu: the public receipt from the one Besu RPC this server has (the tunnel to validator 1). Every validator holds the same receipt, so
 // this is not a party-scoped read. Paladin: the party's OWN node only (port per PARTIES[p].node, as health.ts), never another party's.
 export const BESU_RPC = 'http://127.0.0.1:8545';
-const paladinUrl = (p: PartyId) => `http://127.0.0.1:${31548 + 100 * (PARTIES[p].node - 1)}`;
+export const paladinUrl = (p: PartyId) => `http://127.0.0.1:${31548 + 100 * (PARTIES[p].node - 1)}`;
 
 export type JsonRpc = <T>(url: string, method: string, params: unknown[]) => Promise<T>;
 export const jsonRpc: JsonRpc = async <T>(url: string, method: string, params: unknown[]) => {
@@ -116,7 +116,7 @@ interface EthReceipt {
   contractAddress: string | null; gasUsed: string; effectiveGasPrice?: string; logs: { address: string; topics: string[]; data: string }[];
 }
 const dec = (hex: string) => BigInt(hex).toString();
-const short = (a: string) => (a.length > 14 ? `${a.slice(0, 8)}…${a.slice(-4)}` : a);
+export const short = (a: string) => (a.length > 14 ? `${a.slice(0, 8)}…${a.slice(-4)}` : a);
 // Zeto reports amounts in hex ("0x01"), Noto in decimal; both shown in decimal units
 const units = (v: string) => { try { return BigInt(v).toString(); } catch { return v; } };
 const LOG_ROWS_MAX = 12; // ponytail: first logs only; a DvP emits under ten
@@ -124,7 +124,7 @@ const LOG_ROWS_MAX = 12; // ponytail: first logs only; a DvP emits under ten
 // A log as the ABI names it: "UTXOTransfer(inputs=[1], outputs=[2], submitter=0x5ee7fb…7a84, data=0x… (64 byte))". Event data is public on
 // chain, so decoding it shows nothing a node did not already serve. Unknown topic0 (or a log that does not decode): null.
 const EVENTS = new Interface(EVENT_ABI);
-const arg = (v: unknown): string => {
+export const arg = (v: unknown): string => {
   if (typeof v === 'bigint') return v.toString();
   if (typeof v === 'boolean') return String(v);
   if (typeof v === 'string') return /^0x[0-9a-f]*$/i.test(v) && v.length > 42 ? `${v.slice(0, 10)}… (${(v.length - 2) / 2} byte)` : v.length > 20 ? short(v) : v;

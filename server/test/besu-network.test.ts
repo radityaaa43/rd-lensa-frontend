@@ -164,3 +164,15 @@ describe('receipt log names', () => {
     expect(describeLog({ topics: ['0x' + '00'.repeat(32)], data: '0x' })).toBeNull();
   });
 });
+
+// ---- trace: secrets never leave the adapter ----
+import { scrub } from '../src/adapters/besu-trace.ts';
+describe('trace scrub', () => {
+  it('drops salts, keys and signatures at any depth and cuts long hex', () => {
+    const out = JSON.stringify(scrub({ a: { salt: 'S1', data: { owner: 'x', SALT: 'S2' } }, privateKey: 'K', spendKey: 'K2', viewKey: 'K3', signature: ['sig'],
+      ok: 'kept', proof: '0x' + 'ab'.repeat(200), list: [{ identityKey: 'K4' }] }));
+    for (const s of ['S1', 'S2', '"K"', 'K2', 'K3', 'sig', 'K4']) expect(out).not.toContain(s);
+    expect(out).toContain('kept');
+    expect(out).toContain('(200 byte)');
+  });
+});

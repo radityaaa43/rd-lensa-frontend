@@ -5,6 +5,7 @@ import { DeadlineError, withDeadline } from '../deadline.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
 import { besuNetwork, besuReceipt, paladinNodeReceipt } from './besu-network.ts';
+import { besuTrace, nameFrom } from './besu-trace.ts';
 import type { Sample } from '../stats.ts';
 // Everything Paladin goes through the bond project's modules (its SDK 1.0.0 copy is the only one in play).
 import { appendTrade, loadPlatform, type Platform } from '../../../../besu/noto+pente/bond/src/lib/platform.ts';
@@ -405,6 +406,10 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
 
     history,
     network: () => besuNetwork({ paladin: true }),
+    trace: async (tx, party) => {
+      const { data } = await plat();
+      return besuTrace(tx, party, { paladin: true, name: nameFrom({ [data.notoCashAddress.toLowerCase()]: 'RD', [data.notoBondAddress.toLowerCase()]: 'DFABI' }) });
+    },
     receipt: async (tx, party) => {
       const [chain, node] = await Promise.all([besuReceipt(tx), paladinNodeReceipt(party, tx)]); // public receipt + the party's own Paladin node
       return { ...chain, node };

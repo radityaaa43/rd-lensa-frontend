@@ -566,3 +566,41 @@ table.hist td[data-label=Transaksi] b,table.hist td[data-label=Waktu]{white-spac
 .small{font-size:12.5px;margin:0}
 @media (max-width:1279px){.rcols{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:767px){.rcols,.rchain{grid-template-columns:1fr}.rpart dl{grid-template-columns:minmax(0,1fr)}}
+
+/* transaction flow from the network (DESIGN.md §7.10b) */
+.trace{display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);padding-top:24px;margin-top:8px}
+.trace h2{margin:0;font:600 17px/24px var(--sans);letter-spacing:-.01em}
+.tsum{display:flex;gap:8px 20px;flex-wrap:wrap;align-items:center;font-size:14px}
+.tlegend{display:inline-flex;gap:6px;align-items:center;color:var(--muted);font-size:13px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:3px;flex:none}
+.sw.paladin,.seg.paladin{background:var(--ink)}
+.sw.besu,.seg.besu{background:var(--blue)}
+.sw.torii,.seg.torii,.sw.fsc,.seg.fsc{background:var(--green-line)}
+.tsteps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.tstep{display:flex;flex-direction:column;gap:8px;padding:14px 0;border-top:1px solid var(--line)}
+.thead{display:grid;grid-template-columns:28px minmax(0,1fr) auto;gap:12px;align-items:center}
+.tnum{width:28px;height:28px;border-radius:50%;background:var(--canvas);display:grid;place-items:center;font-size:12.5px;font-weight:600}
+.ttitle{display:flex;flex-direction:column;min-width:0}
+.ttitle b{font-weight:600}
+.ttitle .muted{font-size:12.5px}
+.ttotal{font:600 15px/1 var(--sans);font-variant-numeric:tabular-nums}
+.tbar{position:relative;height:10px;margin-left:40px;background:var(--canvas);border-radius:5px;overflow:hidden}
+.tbar .seg{position:absolute;top:0;bottom:0;border-radius:5px}
+.tbar .tick{position:absolute;top:0;bottom:0;width:3px;background:var(--muted);border-radius:2px}
+.tspans{list-style:none;margin:0 0 0 40px;padding:0;display:flex;flex-wrap:wrap;gap:4px 16px;font-size:13px}
+.tspans li{display:inline-flex;gap:6px;align-items:center}
+.tevents{margin:0 0 0 40px;display:flex;flex-wrap:wrap;gap:6px}
+.tev{font:500 12px/1 var(--mono);background:var(--canvas);border-radius:var(--r-pill);padding:5px 9px}
+.tdetail{margin-left:40px;font-size:13px}
+.tdetail>summary{cursor:pointer;color:var(--muted);font-weight:500}
+.tios{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-top:10px}
+.tio{border:1px solid var(--line);border-radius:var(--r-tile);padding:12px 14px;min-width:0}
+.tio h5{margin:0 0 8px;font:600 13px/18px var(--sans)}
+.tio dl{margin:0;display:grid;grid-template-columns:minmax(100px,auto) minmax(0,1fr);gap:4px 12px}
+.tio dl>div{display:contents}
+.tio dt{color:var(--muted)}
+.tio dd{margin:0;overflow-wrap:anywhere;font:12.5px/1.5 var(--mono)}
+.tio details{margin-top:8px}
+.tio summary{cursor:pointer;color:var(--muted)}
+.tio pre{margin:8px 0 0;max-height:320px;overflow:auto;font:12px/1.5 var(--mono);background:var(--canvas);border-radius:var(--r-tile);padding:10px 12px;white-space:pre-wrap;word-break:break-all}
+@media (max-width:767px){.tbar,.tspans,.tevents,.tdetail{margin-left:0}.tio dl{grid-template-columns:minmax(0,1fr)}}

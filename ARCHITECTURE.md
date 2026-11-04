@@ -103,6 +103,22 @@ and `Receipt { source; chain: ReceiptPart[]; node: { source; parts; note } | nul
   query is `limit=PAGE_ROWS` whatever the caller asks, so Dasbor + Riwayat + Lensa queued three scans (19.8 s, at the 20 s deadline);
   shared, the same load ends in 6.8 s.
 
+**v1.6 (2026-11-04, user-approved): `trace(tx, party)`** and `GET /api/trace?model=&party=&tx=` (same schema and error mapping as
+receipt, deadline 30 s, label "Alur transaksi"). Types in `adapter.ts`: `Trace { source; steps; note }`, `TraceStep { title; tx; block;
+at; spans; events; req; resp; node }`, `TraceSpan { component; label; start; end }` (ISO from the network), `TraceIO { summary; json }`.
+- **Every time comes from the network**, never from the app: Besu block timestamps (2 s blocks); the party's OWN Paladin node record
+  of a step it submitted (`ptx_getTransactionFull`: created, `public[].created`, `completedAt`, ns resolution); Iroha 3 `creation_time_ms`
+  of the signed payload. A step with no record keeps the block-to-block span; no span is ever invented.
+- **Linking** (`adapters/besu-trace.ts`): Zeto/Noto `LockSpent` -> every `Lock*` log with that indexed `lockId` + the atom's logs;
+  Stealth `Settled(tradeId)` -> `EscrowCreated(tradeId)` and transfers whose indexed `to` is the escrow; 400-block lookback.
+- **Req/Resp** = the tx as the chain stores it (`eth_getTransactionByHash`, input decoded with `FUNCTION_ABI` in `chain-abi.ts`) and its
+  receipt; plus, on the party's own node, the Paladin request (`function`, `data`) and its submission record. `scrub()` drops every key
+  matching salt/private/secret/spendKey/viewKey/identityKey/signature and cuts hex over 64 bytes.
+- **R1**: a party sees Paladin timings and requests only for steps its own node submitted (live 2026-11-04: Zeto seller sees its lock
+  0.18 s Paladin + 1.83 s Besu, the outsider block times only).
+- **Limits, stated in `note`**: Fabric-X ledger keeps no time (1 step); Iroha 3 keeps only the signing time (the account row repeats it
+  and the status height is not the tx's block on this lane), and the buyer's `CanExecuteSettlement` grant is not linked yet.
+
 ## 2. Server
 
 ### 2.1 Files
