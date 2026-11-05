@@ -11,16 +11,18 @@ const ICON: Record<Screen, string> = {
   riwayat: 'M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4',
   transfer: 'M4 8h13l-3-3M20 16H7l3 3',
   dvp: 'M7 4v13l-3-3M17 20V7l3 3',
+  kebijakan: 'M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3zM9 12l2 2 4-4',
   lensa: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   laporan: 'M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h6',
   tps: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
 };
 const LABEL: Record<Screen, string> = {
-  dasbor: 'Dasbor', riwayat: 'Riwayat', transfer: 'Transfer', dvp: 'DvP', lensa: 'Lensa', laporan: 'Laporan ke BI', tps: 'Stress test TPS',
+  dasbor: 'Dasbor', riwayat: 'Riwayat', transfer: 'Transfer', dvp: 'DvP', lensa: 'Lensa', kebijakan: 'Kebijakan', laporan: 'Laporan ke BI', tps: 'Stress test TPS',
 };
 
 // why a screen cannot be used by this party on this model; undefined = usable (DESIGN.md §10, UX journey (e))
-function reasonOf(meta: Meta, r: ModelRoute, s: Screen): string | undefined {
+export function reasonOf(meta: Meta, r: ModelRoute, s: Screen): string | undefined {
+  if (s === 'kebijakan') return PLATFORM_OF[r.model] !== 'besu' ? 'Belum tersedia di platform ini' : r.model !== 'zeto' ? 'Kebijakan saat ini hanya untuk Zeto' : undefined;
   const caps = meta.models[r.model].capabilities;
   const allOff = (flows: FlowId[]) => {
     const c = caps[flows[0]];
@@ -36,7 +38,7 @@ function reasonOf(meta: Meta, r: ModelRoute, s: Screen): string | undefined {
 }
 
 const MAIN: Screen[] = ['dasbor', 'riwayat', 'transfer', 'dvp'];
-const TOOLS: Screen[] = ['lensa', 'laporan', 'tps'];
+const TOOLS: Screen[] = ['lensa', 'kebijakan', 'laporan', 'tps'];
 const SWAP = 'M4 8h13l-3-3M20 16H7l3 3';
 const svg = (d: string) => <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
 

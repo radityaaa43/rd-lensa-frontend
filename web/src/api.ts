@@ -1,5 +1,6 @@
 import type { Capability, HistoryItem, Network, Receipt, Trace } from '../../server/src/adapter.ts';
 import type { FlowId, FlowRequest, ModelId, PartyId } from '../../server/src/domain.ts';
+import type { GatewayStatus, Owner, Pending, PolicyDoc, Token, Version } from '../../server/src/policy/types.ts';
 import type { StressConfig, StressSnapshot } from '../../server/src/stress.ts';
 import type { TxResult } from './demo/demoState.ts';
 
@@ -16,7 +17,7 @@ export type Capacity = Partial<Record<ModelId, number>>;
 export type Balance = Record<'RD' | 'DFABI', { amount: string } | { error: string }>;
 // status: the HTTP status of a failed reply (501 = not available on this platform); absent when the server was unreachable.
 // retryAfterS: from Retry-After on a 503 (a known one-time cold start, ARCHITECTURE.md §2.2 v1.4)
-export type Reply<T> = { ok: true; body: T } | { ok: false; reason: string; status?: number; retryAfterS?: number };
+export type Reply<T> = { ok: true; body: T } | { ok: false; reason: string; status?: number; retryAfterS?: number; errors?: string[] };
 
 const OFFLINE = 'Tidak dapat terhubung ke server';
 
@@ -25,9 +26,10 @@ async function call<T>(path: string, init?: RequestInit, read: (body: unknown, r
     const res = await fetch(path, init);
     const body = await res.json().catch(() => null);
     if (res.ok) return { ok: true, body: read(body, res) };
-    const reason = (body as { reason?: string } | null)?.reason ?? `Server menjawab ${res.status}`;
+    const { reason: r, errors } = (body ?? {}) as { reason?: string; errors?: string[] };
+    const reason = r ?? `Server menjawab ${res.status}`;
     const retry = Number(res.headers.get('retry-after'));
-    return res.status === 503 && retry > 0 ? { ok: false, status: 503, reason, retryAfterS: retry } : { ok: false, status: res.status, reason };
+    return res.status === 503 && retry > 0 ? { ok: false, status: 503, reason, retryAfterS: retry } : { ok: false, status: res.status, reason, ...(Array.isArray(errors) ? { errors } : {}) };
   } catch {
     return { ok: false, reason: OFFLINE };
   }
@@ -56,6 +58,18 @@ export const postTx = (req: FlowRequest) => post<{ runId: string }>('/api/tx', r
 export const getStress = () => call<StressSnapshot | null>('/api/stress'); // body is null (204) before the first run
 export const postStress = (cfg: StressConfig) => post<StressSnapshot>('/api/stress', cfg);
 export const stopStress = () => post<StressSnapshot>('/api/stress/stop');
+
+export interface VersionView { owner: Owner; current: Version; pending: Pending | null }
+export interface PolicyView { network: VersionView; own: VersionView | null; banks: VersionView[] | null; gateways: GatewayStatus[] }
+export type PolicyUsage = Record<Token, { used: number; limit: number | null }>;
+export const getPolicy = (party: PartyId) => call<PolicyView>(`/api/policy?pihak=${party}`);
+export const getPolicyHistory = (owner: Owner, party: PartyId) => call<Version[]>(`/api/policy/${owner}/history?pihak=${party}`);
+export const getPolicyUsage = (party: PartyId) => call<PolicyUsage>(`/api/policy/usage?pihak=${party}`);
+export const submitPolicy = (owner: Owner, body: { pihak: PartyId; by: string; reason: string; doc: PolicyDoc }) => post<Pending>(`/api/policy/${owner}/drafts`, body);
+export const approvePolicy = (owner: Owner, body: { pihak: PartyId; by: string; note: string }) => post<Version>(`/api/policy/${owner}/approve`, body);
+export const rejectPolicy = (owner: Owner, body: { pihak: PartyId; by: string; note: string }) => post<{ ok: true }>(`/api/policy/${owner}/reject`, body);
+export const cancelPolicy = (owner: Owner, body: { pihak: PartyId; by: string }) => post<{ ok: true }>(`/api/policy/${owner}/cancel`, body);
+export const republishPolicy = (owner: Owner, body: { pihak: PartyId; by: string }) => post<{ ok: true }>(`/api/policy/${owner}/republish`, body);
 export const CSV_URL = '/api/stress/csv';
 
 // EventSource reconnects by itself after the server closes the stream, so every terminal event must close it.

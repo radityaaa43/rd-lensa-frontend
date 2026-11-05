@@ -7,7 +7,7 @@ export const Disc = ({ d }: { d: string }) => (
 );
 
 // DESIGN.md §7.4 (Ref X1 pastel stat card): tint, icon disc, label, figure, one secondary line. No sparkline or delta: no value here has a time series.
-export function StatCard({ tone, icon, label, figure, sub }: { tone: 'blue' | 'green'; icon: string; label: string; figure: ReactNode; sub?: ReactNode }) {
+export function StatCard({ tone, icon, label, figure, sub }: { tone: 'blue' | 'green' | 'peach'; icon: string; label: string; figure: ReactNode; sub?: ReactNode }) {
   return (
     <section className={`stat ${tone}`} aria-label={label}>
       <div className="stathead"><Disc d={icon} /><span>{label}</span></div>

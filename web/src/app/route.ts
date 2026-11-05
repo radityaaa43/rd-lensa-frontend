@@ -1,6 +1,6 @@
 import { PARTIES, PLATFORMS, PLATFORM_OF, type ModelId, type PartyId, type PlatformId } from '../../../server/src/domain.ts';
 
-export const SCREENS = ['dasbor', 'riwayat', 'transfer', 'dvp', 'lensa', 'laporan', 'tps'] as const;
+export const SCREENS = ['dasbor', 'riwayat', 'transfer', 'dvp', 'lensa', 'kebijakan', 'laporan', 'tps'] as const;
 export type Screen = (typeof SCREENS)[number];
 export type Route = { page: 'landing' } | { page: 'model'; model: ModelId; screen: Screen; party: PartyId; tx?: string };
 

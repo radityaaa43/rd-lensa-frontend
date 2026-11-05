@@ -11,6 +11,7 @@ import {
 import { probeNodes, type Probe } from './health.ts';
 import { HEALTH_MS, StressRun, validateStress, type StressConfig } from './stress.ts';
 import { toCsv } from './stats.ts';
+import { registerPolicyRoutes, registerPolicyUnavailable, type PolicyDeps } from './policy/routes.ts';
 
 type Adapters = Partial<Record<ModelId, ModelAdapter>>;
 
@@ -86,7 +87,7 @@ function scrub(v: unknown): unknown {
 
 interface Sse { send(event: string, data: unknown): void; end(): void }
 
-export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: Probe; loadFailures?: Partial<Record<ModelId, string>> } = {}): FastifyInstance {
+export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: Probe; loadFailures?: Partial<Record<ModelId, string>>; policy?: PolicyDeps } = {}): FastifyInstance {
   const app = Fastify({
     logger: { level: process.env.VITEST ? 'silent' : 'error' }, // real errors reach the console; tests stay quiet
     forceCloseConnections: true, // shutdown must not wait on keep-alive / SSE sockets
@@ -404,6 +405,8 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     return reply.header('content-type', 'text/csv; charset=utf-8')
       .header('content-disposition', 'attachment; filename="lensa-stress.csv"').send(toCsv(rows));
   });
+
+  if (opts.policy) registerPolicyRoutes(app, opts.policy); else registerPolicyUnavailable(app);
 
   if (opts.webDist) app.register(fastifyStatic, { root: opts.webDist });
 

@@ -347,7 +347,7 @@ No other folders, no component library, no CSS-in-JS.
 ### 3.2 Routing and state
 
 ```ts
-type Screen = 'dasbor' | 'riwayat' | 'transfer' | 'dvp' | 'lensa' | 'laporan' | 'tps';
+type Screen = 'dasbor' | 'riwayat' | 'transfer' | 'dvp' | 'lensa' | 'kebijakan' | 'laporan' | 'tps';
 type Route = { page: 'landing' } | { page: 'model'; model: ModelId; screen: Screen; party: PartyId; tx?: string };
 ```
 - **URLs.** `/` · `/besu/:model/:screen` · `/fabricx/:screen` · `/iroha3/:screen` · `…/lensa/:tx`,
@@ -372,6 +372,7 @@ type Route = { page: 'landing' } | { page: 'model'; model: ModelId; screen: Scre
 | Lensa | the last run result held in App, keyed by `txHash`. Otherwise (a Riwayat row, or a deep link): `getHistory(model, p, HISTORY_MAX)` for each of the 4 parties, then pick the item with `id === tx` | 4 columns on purpose (the comparison tool), active party highlighted. A party whose list lacks the tx shows "Tidak terlihat oleh pihak ini", but only if that list reaches back past the tx (its oldest `block` ≤ the tx block). Otherwise it shows "Di luar jangkauan riwayat"; outside the window, absence is never claimed. Riwayat rows link to `/…/lensa/:tx`. With no tx at all: empty state linking to Riwayat |
 | Laporan | `getHistory(model, 'BI')`, verdict ∈ {reported, notarised, viewkey} | **only when route party = BI** (UX H1). For a bank: nav item disabled, reason "Hanya BI yang menerima laporan"; a deep link shows that reason + "Lihat sebagai BI". Hidden for iroha3 |
 | TPS | existing `/api/stress*` | party switcher disabled ("Tidak berlaku untuk stress test"). Start needs a confirm dialog (UX H4) |
+| Kebijakan | `getPolicy`, `getPolicyUsage`, `getPolicyHistory`, write calls (§8) | `/besu/zeto/kebijakan` only. Disabled with a reason elsewhere (§8.4) |
 
 After a tx result, the Dasbor/Riwayat data of that model is refetched with `reload()`.
 
@@ -566,3 +567,99 @@ award: { asset: 'DFABI', issuer: true, dvp: true },
 Disabled reasons until built: Fabric-X "Driver belum punya perintah award (terbit + bayar)";
 Stealth "BI belum punya kunci penerima stealth"; Zeto "Menunggu node1 pada image Paladin yang
 sudah diperbaiki" (dropped once node1 passes).
+
+## 8. Halaman Kebijakan (OPA policy gateway, 2026-11-05)
+
+Lensa edits the off-chain rules the bank gateways enforce (`besu/opa/`, spec
+`besu/opa/docs/superpowers/specs/2026-11-05-halaman-kebijakan-design.md`, plan next to it). Two owners of documents:
+BI (`bi`, applies to all four gateways) and each bank (`bank-a`, `bank-b`, `bank-c`, applies to its own node's gateway).
+A change is drafted by one person and approved by a different one, then published. Zeto on Besu only.
+
+### 8.1 Files (`server/src/policy/`)
+
+| File | Role |
+|---|---|
+| `types.ts` | `Owner`, `BiPolicy`, `BankPolicy`, `Version`, `Pending`, `GatewayStatus`, `PolicyError(status, reason, errors?)`; `OWNER_OF_PARTY`, `BANK_BUNDLE_OF_NODE` |
+| `store.ts` | versions, pending change and audit log on disk (§8.3) |
+| `opa.ts` | runs the `opa` binary: `check` (validation rules), `test`, `assemble` the bundle dirs, `build` (`opa build -b`) |
+| `workflow.ts` | submit, approve, reject, cancel, republish; one lock per owner |
+| `publish.ts` | `buildBundles` and `Publisher` (build, ConfigMap, annotations, rollout, restore) |
+| `kube.ts` | the only kubectl calls; refuses any name outside `bank-gw-[1-4]` and `bank-gw-[1-4]-bundles` |
+| `usage.ts` | "Terpakai hari ini": today's outgoing total read from the bank's own Paladin node |
+| `routes.ts` | the endpoints (§8.2) |
+| `boot.ts` | `bootPolicy(env)` wiring for `main.ts` |
+| `cli/policy-build.ts` | `npm run policy:build -w server -- <node> <outdir>`: writes `bi.tar.gz` and `bank.tar.gz` for one gateway from the current versions. Does not touch the cluster |
+
+Policy is on only when `OPA_BIN` is set (path of the `opa` binary, in `~/.config/lensa/lensa.env`). `bootPolicy` is
+fail-soft: without `OPA_BIN`, or when setup throws (logged: "Kebijakan dinonaktifkan, gagal dimulai"), `buildApp` gets no
+`policy` and registers `registerPolicyUnavailable`: every `/api/policy*` route answers **501**
+`{ reason: "Kebijakan belum tersedia: OPA_BIN belum diatur" }` and the rest of Lensa starts normally. `mock-main.ts`
+wires the same store, workflow and publisher over an in-memory cluster where only gateway 2 exists and every rollout
+succeeds (a reason containing "uji gagal terbit" fails its first publish, for Playwright).
+
+### 8.2 Routes (in `routes.ts`)
+
+`pihak` (`BI|A|B|C`) is the acting party, as on the other routes; there is no authentication in this round.
+Reads: BI reads every owner, a bank reads BI's and its own. Writes: only the party whose own document it is
+(`OWNER_OF_PARTY`). Anything else is 403 `Pihak ini tidak dapat mengubah kebijakan tersebut`.
+
+| Route | Reply | Errors |
+|---|---|---|
+| `GET /api/policy?pihak=` | `{ network: VersionView, own: VersionView \| null, banks: VersionView[] \| null, gateways: GatewayStatus[] }`; `own` is null for BI, `banks` is set only for BI. `VersionView = { owner, current, pending }`. A status failure gives `gateways: []` | 400 · 501 |
+| `GET /api/policy/usage?pihak=` | `Record<'RD'\|'DFABI', { used, limit \| null }>` | 403 for BI (no daily limit) · 502 `Gagal membaca pemakaian hari ini` · 501 |
+| `GET /api/policy/:owner/history?pihak=` | `Version[]`, newest first | 403 · 400 · 501 |
+| `POST /api/policy/:owner/drafts` `{ pihak, by, reason, doc }` | `Pending` | 400 `Alasan perubahan wajib diisi` / `Tidak ada nilai yang berubah` / `Nama wajib diisi` · 409 `Masih ada perubahan yang menunggu persetujuan` · 422 `Kebijakan tidak valid` + `errors[]` · 403 |
+| `POST /api/policy/:owner/approve` `{ pihak, by, note }` | `Version` (the new one) | 403 `Pembuat tidak dapat menyetujui perubahannya sendiri` · 409 `Tidak ada perubahan yang menunggu persetujuan` / `Perubahan ini sedang diterbitkan` / `Kebijakan sudah berubah sejak draf ini dibuat. Buat draf baru.` · 502 `Gagal terbit ke gateway …` |
+| `POST /api/policy/:owner/reject` `{ pihak, by, note }` | `{ ok: true }` | 400 `Catatan wajib diisi bila menolak` · 409 |
+| `POST /api/policy/:owner/cancel` `{ pihak, by }` | `{ ok: true }` | 403 `Hanya pembuat yang dapat membatalkan draf` · 409 |
+| `POST /api/policy/:owner/republish` `{ pihak, by }` | `{ ok: true }` | 409 `Tidak ada perubahan yang gagal diterbitkan` · 502 |
+
+- **Schemas.** `pihak` and `:owner` are enums; bodies are `additionalProperties: false`; `by` max 60, `reason` and `note` max 500.
+- **Errors.** A `PolicyError` becomes `{ reason }` (plus `errors` on 422) with its status. Anything else goes to the app's
+  error handler (generic 500), so nothing internal reaches the client.
+- **Validation (422).** Before a draft is stored, `opa.check` evaluates `data.bi.check.errors` or `data.bank.check.errors`
+  (`besu/opa/bundles/*/*/check`: shape, ranges, bank not looser than BI, identities) and `opa.test` runs the Rego tests; the counts are kept in
+  `Pending.checks`. For a BI change, `checks.inactiveBanks` lists banks whose own limit or hours no longer fit inside BI's.
+- **Maker and checker.** `by` is a typed name ("Masuk sebagai"), compared case-insensitively between maker and approver.
+  It is an audit label, not authentication (spec §9).
+- **Identities** in documents are node-scoped: exactly one `@`, both parts non-empty; a bank is its node, so frozen
+  and counterparty entries are compared by their node part.
+- **Daily limit.** `usage.ts` asks the bank's own node `ptx_queryTransactionsFull` (domain `zeto`, `created` after today 00:00 WIB written as UTC,
+  no `from` filter, page 1000), sums `transfer` and `createLock` amounts per token contract, and throws on a full page
+  (the route then answers 502). It is the same query and sum as the gateway's Rego (spec §6.3).
+
+### 8.3 State and publishing
+
+State lives in `server/state/policy/<owner>/` (dirs 0700, files 0600): `v<N>.json` (immutable, v1 is the seed from
+`besu/opa/seeds/`), `pending.json` (at most one per owner; `state` is `waiting`, `publishing` or `publish-failed`) and
+`audit.jsonl` (`submitted`, `approved`, `rejected`, `cancelled`, `published`, `publish-failed`). Node 1's bank document
+is the `bank-bi` seed, not an owner.
+
+Approve saves `v(N+1)`, sets `publishing`, then `Publisher.publish(owner, n)`, one publish at a time:
+
+1. targets: all four nodes for `bi`, the owner's node for a bank; a node whose Deployment `bank-gw-<node>` does not exist is skipped (so today only node 2 can be published);
+2. build both tarballs (`opa build -b`) into a temp dir; the bank bundle builds alone and reads BI's values as data only;
+3. apply ConfigMap `bank-gw-<node>-bundles` (`bi.tar.gz`, `bank.tar.gz`) and set pod-template annotations `policy.lensa/bi` and `policy.lensa/bank` to the version numbers, which rolls the Deployment;
+4. wait for the rollout, 120 s; on failure restore the previous ConfigMap and annotations.
+
+Success deletes `pending.json` and audits `published`. Failure keeps the approved version, sets `publish-failed`, audits it and
+answers 502 `Gagal terbit ke gateway N` (adding `Pemulihan gagal, …` when the restore failed too); "Terbitkan ulang"
+calls `republish`. At startup `recoverInterrupted()` turns a `publishing` left by a stopped server into `publish-failed`.
+`GET /api/policy` `gateways` reads each ready pod's two annotations, so the screen shows which version a gateway really runs.
+
+### 8.4 Web
+
+`screens/Policy.tsx` plus `web/src/policy/` (`PolicyView`, `DraftForm`, `Approval`, `VersionHistory`, `form.ts`, `keep.ts`,
+`shared.tsx`). Route `/besu/zeto/kebijakan`; `Screen` gains `kebijakan` (`route.ts`), in the sidebar "Alat" group
+(`Sidebar.tsx`). `reasonOf` disables it with a reason: `Belum tersedia di platform ini` on Fabric-X and Iroha 3,
+`Kebijakan saat ini hanya untuk Zeto` on Noto and Stealth. `usePoll` keys: `${party}|kebijakan`,
+`${party}|kebijakan-pemakaian`, `${owner}|${party}|riwayat-kebijakan|${n}`. `keepLast` keeps the last data when a reload
+fails. A 501 from `/api/policy` shows `NotAvailable` with the server's reason. The name in "Masuk sebagai" is kept per
+browser in `localStorage` (`lensa.policy.by`, access guarded). Publishing to the live cluster has not been done; it needs the
+user's approval of the node2 dry-run (`besu/opa/README.md`).
+
+### 8.5 Tests
+
+`npm test -w server` (needs `OPA_BIN=$HOME/.local/bin/opa`): `server/test/policy-*.test.ts` (store, workflow, opa, publish
+against a fake kube, kube name guard, usage, boot, routes). `npm test -w web`: `policy/form.test.ts`, `keep.test.ts`,
+`app/Sidebar.test.ts`, route roundtrip. Rego: from `besu/opa`, `opa test bundles/bi bundles/bank test`. E2E: `web/e2e/policy.spec.ts` (mock server).

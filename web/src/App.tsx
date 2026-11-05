@@ -5,6 +5,7 @@ import { getHealth, getMeta, getNetwork, getStress, postTx, stopStress, watchTx,
 import { AWARD_SCREEN } from './demo/copy.ts';
 import { demoReducer, initialDemo, type DemoAction, type DemoState } from './demo/demoState.ts';
 import { Lens } from './screens/Lens.tsx';
+import { Policy } from './screens/Policy.tsx';
 import { Report } from './screens/Report.tsx';
 import { Transfer } from './screens/Transfer.tsx';
 import { Header } from './app/Header.tsx';
@@ -20,7 +21,7 @@ import { StressView } from './stress/StressView.tsx';
 type ModelRoute = Extract<Route, { page: 'model' }>;
 
 const SCREEN_TITLE: Record<ModelRoute['screen'], string> = {
-  dasbor: 'Dasbor', riwayat: 'Riwayat transaksi', transfer: 'Transfer', dvp: 'DvP', lensa: 'Lensa', laporan: 'Laporan ke BI', tps: 'Stress test TPS',
+  dasbor: 'Dasbor', riwayat: 'Riwayat transaksi', transfer: 'Transfer', dvp: 'DvP', lensa: 'Lensa', kebijakan: 'Kebijakan', laporan: 'Laporan ke BI', tps: 'Stress test TPS',
 };
 
 // muted one-line subtitle under every page heading (Ref X1 welcome block); {pihak} = viewing party
@@ -30,9 +31,12 @@ const SCREEN_SUB: Record<ModelRoute['screen'], string> = {
   transfer: 'Dikirim oleh {pihak}.',
   dvp: 'DFABI ditukar RD secara atomik.',
   lensa: 'Satu transaksi dari sisi BI dan tiga bank.',
+  kebijakan: 'Aturan {pihak} sendiri, di atas aturan BI. Tidak terlihat oleh bank lain.',
   laporan: 'Laporan bank ke BI, dicocokkan dengan chain.',
   tps: 'Beban transfer antarbank pada jaringan nyata.',
 };
+
+const SUB_KEBIJAKAN_BI = 'Aturan off-chain di gateway setiap bank. BI mengatur jaringan, setiap bank mengatur dirinya sendiri.';
 
 // true until App's first commit: child effects run before App's, so the page that loads first keeps the browser's focus
 let initialLoad = true;
@@ -50,7 +54,7 @@ function Shell({ meta, route, stress, reloadStress, tx }: { meta: Meta; route: M
   const network = usePoll(`net|${route.model}`, () => getNetwork(route.model), 10_000);
   const party = meta.parties[route.party].name;
   const award = route.screen === 'dvp' && route.party === 'BI';
-  const title = route.screen === 'dasbor' ? `Dasbor · ${party}` : award ? AWARD_SCREEN.name : SCREEN_TITLE[route.screen];
+  const title = route.screen === 'dasbor' ? `Dasbor · ${party}` : route.screen === 'kebijakan' ? `Kebijakan · ${party}` : award ? AWARD_SCREEN.name : SCREEN_TITLE[route.screen];
   // after in-app navigation, focus the new page heading so Tab and screen readers start there (DESIGN.md §9);
   // a party switch keeps focus on its pill, so the key leaves the party out; the first load keeps focus at the top
   const h1 = useRef<HTMLHeadingElement>(null);
@@ -61,7 +65,7 @@ function Shell({ meta, route, stress, reloadStress, tx }: { meta: Meta; route: M
       <Sidebar meta={meta} route={route} />
       <div>
         <Header meta={meta} route={route} network={network.data} title={title} h1={h1}
-          sub={(award ? AWARD_SCREEN.sub : SCREEN_SUB[route.screen]).replace('{pihak}', party)} />
+          sub={(award ? AWARD_SCREEN.sub : route.screen === 'kebijakan' && route.party === 'BI' ? SUB_KEBIJAKAN_BI : SCREEN_SUB[route.screen]).replace('{pihak}', party)} />
         {stress?.state === 'running' && (
           <div className="banner stress" role="status">
             <span>Stress test berjalan · {stressProgress(stress)} transaksi</span>
@@ -83,7 +87,9 @@ function Shell({ meta, route, stress, reloadStress, tx }: { meta: Meta; route: M
               ? <Transfer meta={meta} route={route} {...tx} stressRunning={stressRunning} dvp={route.screen === 'dvp'} />
             : route.screen === 'lensa' ? <Lens meta={meta} route={route} run={tx.run} />
             : route.screen === 'laporan' ? <Report meta={meta} route={route} />
-            : <StressView meta={meta} hidden={false} onRun={reloadStress} />}
+            : route.screen === 'tps' ? <StressView meta={meta} hidden={false} onRun={reloadStress} />
+            : route.screen === 'kebijakan' ? <Policy key={route.party} meta={meta} route={route} />
+            : null}
         </main>
       </div>
     </div>

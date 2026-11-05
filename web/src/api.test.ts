@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { stopStress, watchTx } from './api.ts';
+import { approvePolicy, getPolicy, getPolicyHistory, getPolicyUsage, stopStress, submitPolicy, watchTx } from './api.ts';
 
 class FakeES {
   static CONNECTING = 0; static OPEN = 1; static CLOSED = 2;
@@ -49,4 +49,24 @@ test('a POST without a body sends no content-type (Fastify rejects an empty JSON
   vi.stubGlobal('fetch', fetchMock);
   await stopStress();
   expect(fetchMock.mock.calls[0][1]).toEqual({ method: 'POST' });
+});
+
+test('a 422 reply keeps the server errors list', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    ok: false, status: 422, headers: new Headers(), json: async () => ({ reason: 'Dokumen ditolak', errors: ['jam salah'] }),
+  }));
+  expect(await submitPolicy('bi', { pihak: 'BI', by: 'a', reason: 'r', doc: {} as never })).toEqual({
+    ok: false, status: 422, reason: 'Dokumen ditolak', errors: ['jam salah'],
+  });
+});
+
+test('policy calls hit the owner routes', async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, headers: new Headers(), json: async () => ({}) });
+  vi.stubGlobal('fetch', fetchMock);
+  await getPolicy('A'); await getPolicyHistory('bank-a', 'A'); await getPolicyUsage('B');
+  await approvePolicy('bi', { pihak: 'A', by: 'x', note: '' });
+  expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+    '/api/policy?pihak=A', '/api/policy/bank-a/history?pihak=A', '/api/policy/usage?pihak=B', '/api/policy/bi/approve',
+  ]);
+  expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'POST', body: JSON.stringify({ pihak: 'A', by: 'x', note: '' }) });
 });

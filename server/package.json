@@ -8,6 +8,7 @@
     "bootstrap": "tsx src/cli/bootstrap.ts",
     "stealth:bi-key": "tsx src/cli/stealth-bi-key.ts",
     "preflight": "tsx src/cli/preflight.ts",
+    "policy:build": "tsx src/cli/policy-build.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:live": "vitest run --config vitest.live.config.ts"

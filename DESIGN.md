@@ -180,7 +180,7 @@ Pill, icon + text, `--r-pill`, 26px high. `clear` family: `--clear` on `--clear-
 ### 7.1 Sidebar  · X2 · Flow
 
 - **Logo**: a 36px black circle (`--ink`, `--sheet` letter "E", Figtree 600) and the name on two lines, "Eksplorasi" / "Rupiah Digital" (Figtree 600 15/18). The link's `aria-label` is the full name. Hairline under it.
-- **Groups**: main group "Dasbor", "Riwayat", "Transfer", "DvP" (BI sees "Penjualan perdana"); group label **"Alat"** (`--t-micro`, `--muted`, sentence case) then "Lensa", "Laporan ke BI", "Stress test TPS". The order is the one in §10.
+- **Groups**: main group "Dasbor", "Riwayat", "Transfer", "DvP" (BI sees "Penjualan perdana"); group label **"Alat"** (`--t-micro`, `--muted`, sentence case) then "Lensa", "Kebijakan", "Laporan ke BI", "Stress test TPS". The order is the one in §10.
 - **Item**: 44px high, outline icon 20px, label `--t-body` 500. Active: `--ink` pill (X2). Disabled: `--faint`, the reason as a clamped two-line `small` below, and in `title` (unchanged behaviour).
 - **Bottom**: hairline, then "{Platform}" with "Model Zeto" or "Satu model" in `--muted`, and the item "Ganti platform" with a swap icon, styled as an idle nav item (X2 "Log out").
 
@@ -293,6 +293,18 @@ A 502 from `/api/history` is always the error state, never "Belum ada transaksi"
 
 Native `<dialog>` "Mulai stress test?" (`--r-card`, `--lift`), buttons "Mulai" (`--ink`) and "Batal" (outlined). Global banner under the header while a run is active, `--ink-panel` strip: "Stress test berjalan · {n}/{total} transaksi", link "Lihat", button "Hentikan". 409 copy: "Stress test sedang berjalan. Transfer dan DvP bisa dipakai lagi setelah selesai."
 
+### 7.14 Kebijakan  · Flow (2026-11-05)
+
+Route `/besu/zeto/kebijakan`, Alat group, shield icon. Built from the existing tokens and components; no new colour.
+- **Top**: three `StatCard`s: "Versi berlaku" (blue, `v{n}`, "Terbit {WIB}"), "Gateway memakai versi ini" (green, "{x} dari {y}", or the error-coloured "Belum diterapkan: gateway belum terpasang"), "Menunggu persetujuan" (peach, "1 perubahan" or "Tidak ada").
+- **"Masuk sebagai"**: a text input (max 60) with the hint "Nama yang dicatat pada setiap pengajuan dan persetujuan. Penyetuju harus orang yang berbeda dari pembuat." The name is kept per browser.
+- **Tabs** (`.utabs`, underline): "Kebijakan berlaku", "Ubah kebijakan", "Persetujuan" (a count chip while a change waits), "Riwayat versi". Failures show in one `role="alert"` block under the tabs (`.polalert`), with the server's `errors` as a list; the tab does not move.
+- **Kebijakan berlaku**: sections (`.polsec`: `h3`, owner in `--muted` such as "Diatur BI · hanya-baca"), plain tables (`.poltbl`, §7.6 style), hours tiles with a week strip and an "Buka"/"Tutup" badge, a "Terpakai hari ini" bar with `{used} · {pct}%`, "dibekukan BI" and "Dibekukan" badges (`off`), "Aktif" (`clear`). BI also sees every bank's document read-only, and a dashed "Belum tersedia di Zeto (off-chain)" block for rules that need on-chain data.
+- **Ubah kebijakan**: one form for the acting party's own document, submit "Ajukan untuk persetujuan"; after submitting, "Buka persetujuan". The old policy stays in force until approval.
+- **Persetujuan**: five-step line "Ubah", "Uji otomatis", "Ajukan", "Disetujui orang kedua", "Terbit ke gateway"; a diff table (Parameter, Berlaku, Usulan) with only changed values; "Alasan"; the auto-test line ("Uji kebijakan otomatis: {n} dari {m} lolos"); a notice for banks that become inactive. Buttons "Setujui dan terbitkan", "Tolak" (note required), "Batalkan draf"; after a failed publish, "Terbitkan ulang". Empty: "Tidak ada perubahan yang menunggu persetujuan".
+- **Riwayat versi**: table (Versi, Perubahan, Pembuat, Penyetuju, Terbit, Tindakan); "Kembalikan" makes a new draft that still needs a second person.
+- A 501 shows the Not available state (§7.12) with the server's reason; other errors show the error state with "Coba lagi".
+
 ---
 
 ## 8. Motion
@@ -346,13 +358,14 @@ Per platform/model, ?pihak=BI|A|B|C on every URL:
   /transfer   Transfer: form (7.9) → progress → lens
   /dvp        DvP (bank) or Penjualan perdana (BI)
   /lensa/:tx  Lensa (7.10)
+  /kebijakan  Kebijakan (7.14), Besu Zeto only
   /laporan    Laporan ke BI (7.11), Zeto + Fabric-X
   /tps        Stress test TPS: config · live line chart · bar chart (7.8)
 ```
 
-Sidebar items in order: "Dasbor", "Riwayat", "Transfer", "DvP", then under "Alat": "Lensa", "Laporan ke BI", "Stress test TPS". Footer: "Ganti platform". Disabled items stay in the nav with their reason, never hidden ("Laporan ke BI" for a bank: "Hanya BI yang menerima laporan"; hidden on Iroha 3).
+Sidebar items in order: "Dasbor", "Riwayat", "Transfer", "DvP", then under "Alat": "Lensa", "Kebijakan", "Laporan ke BI", "Stress test TPS". Footer: "Ganti platform". Disabled items stay in the nav with their reason, never hidden ("Laporan ke BI" for a bank: "Hanya BI yang menerima laporan"; hidden on Iroha 3; "Kebijakan" off Zeto: "Belum tersedia di platform ini" on Fabric-X and Iroha 3, "Kebijakan saat ini hanya untuk Zeto" on Noto and Stealth).
 
-Data per screen is as in ARCHITECTURE.md §3.3; this restyle adds no route and no request.
+Data per screen is as in ARCHITECTURE.md §3.3; this restyle adds no route and no request, except the Kebijakan screen and its `/api/policy` requests (ARCHITECTURE.md §8).
 
 ---
 

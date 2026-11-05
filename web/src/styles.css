@@ -125,7 +125,7 @@ h1,h2{font-family:var(--sans);text-wrap:balance}
 .dashmain{display:flex;flex-direction:column;gap:28px;min-width:0}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
 .stat{container-type:inline-size;border-radius:var(--r-card);padding:20px;display:flex;flex-direction:column;gap:14px;min-width:0}
-.stat.blue{background:var(--tint-blue)}.stat.green{background:var(--tint-green)}
+.stat.blue{background:var(--tint-blue)}.stat.green{background:var(--tint-green)}.stat.peach{background:var(--tint-peach)}
 .stathead{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px;font-weight:500}
 .disc{width:36px;height:36px;border-radius:10px;background:var(--sheet);color:var(--ink);display:grid;place-items:center;flex:none;box-shadow:0 1px 2px rgb(14 15 17 / .06)}
 .disc .ico{width:18px;height:18px}
@@ -604,3 +604,64 @@ table.hist td[data-label=Transaksi] b,table.hist td[data-label=Waktu]{white-spac
 .tio summary{cursor:pointer;color:var(--muted)}
 .tio pre{margin:8px 0 0;max-height:320px;overflow:auto;font:12px/1.5 var(--mono);background:var(--canvas);border-radius:var(--r-tile);padding:10px 12px;white-space:pre-wrap;word-break:break-all}
 @media (max-width:767px){.tbar,.tspans,.tevents,.tdetail{margin-left:0}.tio dl{grid-template-columns:minmax(0,1fr)}}
+
+/* ---- Halaman Kebijakan (spec 7.4, DESIGN.md v2.1): same tokens, native controls ---- */
+.pol{display:flex;flex-direction:column;gap:20px;min-width:0}
+.pollbl{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+.pol input[type=text],.pol input[type=date],.pol textarea{width:100%;padding:0 12px;border:1px solid var(--control);border-radius:var(--r-control);background:var(--sheet);color:var(--ink);font:15px var(--sans)}
+.pol input[type=text],.pol input[type=date]{height:40px}
+.pol textarea{padding:10px 12px;resize:vertical}
+.pol input[aria-invalid=true]{border-color:var(--danger)}
+.pol input[type=checkbox]{width:16px;height:16px;accent-color:var(--ink);vertical-align:-3px}
+.polby{max-width:360px}
+.polby .hint2{display:block}
+.utabs .count{display:inline-grid;place-items:center;min-width:20px;height:20px;margin-left:6px;padding:0 6px;border-radius:var(--r-pill);background:var(--ink);color:var(--sheet);font-size:12px;font-weight:600}
+.polalert:not(:empty){background:var(--danger-bg);color:var(--danger);border-radius:var(--r-tile);padding:12px 16px;font-size:14px}
+.polalert p{margin:0;font-weight:600}.polalert ul{margin:6px 0 0;padding-left:20px}
+.polstack{display:flex;flex-direction:column;gap:28px}
+.polsec{display:flex;flex-direction:column;gap:12px;min-width:0}
+.polsechead{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.polsechead h3{margin:0;font-size:18px;line-height:26px}
+.poltiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.poltile,.polcard,.polna{background:var(--sheet);border:1px solid var(--line);border-radius:var(--r-card);padding:16px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.polcard{padding:24px}
+.polrow{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:14px}
+.polrow h4{margin:0;font-size:16px}
+.week{display:flex;gap:6px;flex-wrap:wrap}
+.day{padding:4px 10px;border-radius:var(--r-pill);font-size:12.5px;font-weight:600;background:var(--canvas);color:var(--faint);text-decoration:line-through}
+.day.on{background:var(--blue-tint);color:var(--blue-ink);text-decoration:none}
+.badge.off{background:var(--canvas);color:var(--muted)}
+table.poltbl{width:100%;border-collapse:collapse;font-size:14px}
+table.poltbl th,table.poltbl td{padding:10px 12px;border-top:1px solid var(--line);text-align:left;vertical-align:middle}
+table.poltbl thead th{border-top:0;font-size:12.5px;font-weight:600;color:var(--muted);white-space:nowrap}
+table.poltbl tbody th{font-weight:600}
+table.poltbl .num{text-align:right;color:inherit}
+table.poltbl td.new{font-weight:600}
+.pol .bar i{background:var(--blue)}
+.polcp,.polchips,.polhol,.polcheck{list-style:none;margin:0;padding:0}
+.polcp{display:flex;flex-direction:column;gap:8px}
+.polcp li{display:flex;align-items:center;gap:10px;font-size:14px}
+.polchips{display:flex;flex-wrap:wrap;gap:8px}
+.polchips li{background:var(--canvas);border-radius:var(--r-pill);padding:4px 12px;font-size:13px}
+.polna{gap:10px}
+.polform{display:flex;flex-direction:column;gap:20px;background:var(--sheet);border:1px solid var(--line);border-radius:var(--r-card);padding:24px}
+.polfields{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:4px 16px}
+.polfields .hint2{margin:4px 0 0;min-height:20px}
+fieldset.polhours{border:1px solid var(--line);border-radius:var(--r-tile);padding:12px 16px 16px;margin:0;display:flex;flex-direction:column;gap:12px;min-width:0}
+.polhours legend{font-size:13px;font-weight:600;padding:0 6px}
+.poldays{display:flex;gap:6px 16px;flex-wrap:wrap;font-size:14px}
+.poldays.col{flex-direction:column}
+.poldays label,.polchk{font-size:14px;cursor:pointer}
+.polpair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.polpair.add{grid-template-columns:1fr 2fr auto;align-items:end}
+.polhol{display:flex;flex-direction:column;gap:6px}
+.polhol li{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:14px}
+.btn.sm{min-height:32px;padding:0 12px;font-size:13px}
+.polactions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.polsteps{list-style:none;margin:0;padding:0;display:flex;gap:8px;flex-wrap:wrap;font-size:13px}
+.polsteps li{padding:4px 12px;border-radius:var(--r-pill);background:var(--canvas);color:var(--muted)}
+.polsteps li.done{background:var(--clear-bg);color:var(--clear)}
+.polsteps li.now{background:var(--ink);color:var(--sheet);font-weight:600}
+.polcheck{display:flex;flex-direction:column;gap:4px;font-size:14px}
+.polcheck li::before{content:"\2713";color:var(--clear);font-weight:700;margin-right:8px}
+@media (max-width:700px){.polpair,.polpair.add{grid-template-columns:1fr}.polform,.polcard{padding:16px}}

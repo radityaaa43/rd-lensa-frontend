@@ -20,6 +20,7 @@ test('parse(href(r)) equals r for every valid route', () => {
 
 test.each([
   ['/besu/zeto/riwayat', '?pihak=C', { page: 'model', model: 'zeto', screen: 'riwayat', party: 'C' }],
+  ['/besu/zeto/kebijakan', '?pihak=A', { page: 'model', model: 'zeto', screen: 'kebijakan', party: 'A' }],
   ['/fabricx/dasbor', '?pihak=A', { page: 'model', model: 'fabricx', screen: 'dasbor', party: 'A' }],
   ['/iroha3/lensa/0xff', '?pihak=B', { page: 'model', model: 'iroha3', screen: 'lensa', party: 'B', tx: '0xff' }],
 ])('parse %s%s', (path, search, want) => {
