@@ -1,8 +1,10 @@
 import { BANKS, PARTIES } from '../domain.ts';
 import type { Opa } from './opa.ts';
 import type { PolicyStore } from './store.ts';
-import { OWNER_OF_PARTY, PLATFORMS, PolicyError } from './types.ts';
-import type { BankPolicy, BiPolicy, ByPlatform, Hours, Owner, Pending, Platform, PolicyDoc, Token, Version } from './types.ts';
+import { PLATFORMS } from './platforms.ts';
+import type { Platform } from './platforms.ts';
+import { OWNER_OF_PARTY, PolicyError } from './types.ts';
+import type { BankPolicy, BiPolicy, ByPlatform, Hours, Owner, Pending, PolicyDoc, Token, Version } from './types.ts';
 
 const TOKENS: Token[] = ['RD', 'DFABI'];
 const NO_PENDING = 'Tidak ada perubahan yang menunggu persetujuan';
@@ -60,7 +62,7 @@ export class PolicyWorkflow {
       Object.fromEntries(PLATFORMS.map((p) => [p, p === platform && o === owner ? doc : cur(o, p)])) as ByPlatform<T>;
     return {
       bi: pick<BiPolicy>('bi'),
-      bank: owner === 'bi' ? { zeto: { counterparties: [] }, noto: { counterparties: [] } } : pick<BankPolicy>(owner),
+      bank: owner === 'bi' ? Object.fromEntries(PLATFORMS.map((p) => [p, { counterparties: [] } as BankPolicy])) as ByPlatform<BankPolicy> : pick<BankPolicy>(owner),
     };
   }
 

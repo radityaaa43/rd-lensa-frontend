@@ -11,6 +11,7 @@ import {
 import { probeNodes, type Probe } from './health.ts';
 import { HEALTH_MS, StressRun, validateStress, type StressConfig } from './stress.ts';
 import { toCsv } from './stats.ts';
+import { REGISTRY, isPlatform } from './policy/platforms.ts';
 import { registerPolicyRoutes, registerPolicyUnavailable, type PolicyDeps } from './policy/routes.ts';
 
 type Adapters = Partial<Record<ModelId, ModelAdapter>>;
@@ -152,7 +153,9 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       parties: PARTIES, flows: FLOWS,
       models: Object.fromEntries(MODELS.map((m) => {
         const a = adapters[m];
-        return [m, { name: MODEL_NAMES[m], available: !!a, stepLabels: a?.stepLabels ?? [], capabilities: a ? a.capabilities() : unavailable }];
+        // Kebijakan: a model with a policy document (the registry in policy/platforms.ts) and whether a gateway enforces it
+        const policy = isPlatform(m) ? { registered: true, enforced: REGISTRY[m].enforced } : { registered: false, enforced: false, reason: `Kebijakan belum tersedia untuk ${MODEL_NAMES[m]}` };
+        return [m, { name: MODEL_NAMES[m], available: !!a, stepLabels: a?.stepLabels ?? [], capabilities: a ? a.capabilities() : unavailable, policy }];
       })),
     };
   });

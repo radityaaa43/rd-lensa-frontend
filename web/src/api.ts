@@ -7,7 +7,8 @@ import type { TxResult } from './demo/demoState.ts';
 export interface Meta {
   parties: Record<PartyId, { name: string; node: 1 | 2 | 3 | 4 }>;
   flows: Record<FlowId, { asset: 'RD' | 'DFABI'; issuer: boolean; dvp: boolean }>;
-  models: Record<ModelId, { name: string; available: boolean; stepLabels: string[]; capabilities: Record<FlowId, Capability> }>;
+  // policy: does the model have Kebijakan documents (a registered platform), and does a gateway enforce them yet. An unregistered model says why not.
+  models: Record<ModelId, { name: string; available: boolean; stepLabels: string[]; capabilities: Record<FlowId, Capability>; policy: { registered: boolean; enforced: boolean; reason?: string } }>;
 }
 export interface Health {
   models: Record<ModelId, { ready: boolean; detail: string }>;

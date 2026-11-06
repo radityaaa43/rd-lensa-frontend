@@ -2,7 +2,9 @@ import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, readFil
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { STATE_DIR } from '../state.ts';
-import type { Owner, Pending, Platform, Version } from './types.ts';
+import { PLATFORMS, REGISTRY } from './platforms.ts';
+import type { Platform } from './platforms.ts';
+import type { Owner, Pending, Version } from './types.ts';
 
 export const POLICY_STATE_DIR = join(STATE_DIR, 'policy');
 export const OPA_ROOT = fileURLToPath(new URL('../../../../besu/opa', import.meta.url));
@@ -16,6 +18,7 @@ export interface AuditEvent {
 const OWNERS: Owner[] = ['bi', 'bank-a', 'bank-b', 'bank-c'];
 const VFILE = /^v(\d+)\.json$/;
 export const SPLIT_REASON = 'Kebijakan Noto dipisah dari Zeto';
+export const registeredReason = (platform: Platform) => `Platform ${REGISTRY[platform].label} didaftarkan`;
 
 // Layout (spec 7.2) under dir/<owner>/<platform>/: v<N>.json (immutable), pending.json, audit.jsonl. Dirs 0700, files 0600.
 // Before the platforms were split the same files sat directly under dir/<owner>/; migrate() copies them (see there).
@@ -94,33 +97,48 @@ export class PolicyStore {
     chmodSync(file, 0o600);
   }
 
-  // Run once at startup, safe to repeat. Per owner that still has the old layout (v<N>.json directly under dir/<owner>/):
-  // the old history, pending draft and audit log are COPIED into <owner>/zeto/ (version numbers kept) and <owner>/noto/
-  // starts at v1, a copy of the current document made by "migrasi". The old files are left where they are, untouched.
+  // Run once at startup, safe to repeat. Two steps.
+  // 1. Per owner that still has the old layout (v<N>.json directly under dir/<owner>/): the old history, pending draft and
+  //    audit log are COPIED into <owner>/zeto/ (version numbers kept) and <owner>/noto/ starts at v1, a copy of the current
+  //    document made by "migrasi". The old files are left where they are, untouched.
+  // 2. Every registered platform that has no directory yet gets v1 from the seed (maker and checker "migrasi"); an owner
+  //    that does not exist yet is left alone (history() seeds it on first read).
   migrate(): void {
     for (const owner of OWNERS) {
       const old = join(this.dir, owner);
       if (!existsSync(old)) continue;
       const files = readdirSync(old, { withFileTypes: true }).filter((f) => f.isFile()).map((f) => f.name);
-      if (!files.some((f) => VFILE.test(f))) continue;
-      const zeto = join(old, 'zeto');
-      if (!existsSync(zeto)) {
-        // built aside and renamed in one step, so a crash cannot leave a half-copied zeto directory behind
-        const tmp = join(old, 'zeto.migrasi');
-        rmSync(tmp, { recursive: true, force: true });
-        mkdirSync(tmp, { mode: 0o700 });
-        for (const f of files.filter((x) => VFILE.test(x) || x === 'pending.json' || x === 'audit.jsonl')) {
-          copyFileSync(join(old, f), join(tmp, f));
-          chmodSync(join(tmp, f), 0o600);
-        }
-        renameSync(tmp, zeto);
-      }
-      if (this.read(owner, 'noto').length === 0) {
-        const cur = this.current(owner, 'zeto');
+      if (files.some((f) => VFILE.test(f))) this.splitLegacy(owner, old, files);
+      for (const platform of PLATFORMS) {
+        if (this.read(owner, platform).length > 0) continue;
         const now = new Date().toISOString();
-        this.saveVersion({ owner, platform: 'noto', n: 1, doc: cur.doc, maker: 'migrasi', checker: 'migrasi', reason: SPLIT_REASON, note: '', submittedAt: now, approvedAt: now });
-        this.audit(owner, 'noto', { at: now, event: 'approved', by: 'migrasi', n: 1, note: SPLIT_REASON });
+        const doc = JSON.parse(readFileSync(join(this.seedsDir, `${owner}.json`), 'utf8'))[platform];
+        if (!doc) throw new Error(`Seed ${owner}.json tidak punya dokumen ${platform}`);
+        const reason = registeredReason(platform);
+        this.saveVersion({ owner, platform, n: 1, doc, maker: 'migrasi', checker: 'migrasi', reason, note: '', submittedAt: now, approvedAt: now });
+        this.audit(owner, platform, { at: now, event: 'approved', by: 'migrasi', n: 1, note: reason });
       }
+    }
+  }
+
+  private splitLegacy(owner: Owner, old: string, files: string[]): void {
+    const zeto = join(old, 'zeto');
+    if (!existsSync(zeto)) {
+      // built aside and renamed in one step, so a crash cannot leave a half-copied zeto directory behind
+      const tmp = join(old, 'zeto.migrasi');
+      rmSync(tmp, { recursive: true, force: true });
+      mkdirSync(tmp, { mode: 0o700 });
+      for (const f of files.filter((x) => VFILE.test(x) || x === 'pending.json' || x === 'audit.jsonl')) {
+        copyFileSync(join(old, f), join(tmp, f));
+        chmodSync(join(tmp, f), 0o600);
+      }
+      renameSync(tmp, zeto);
+    }
+    if (this.read(owner, 'noto').length === 0) {
+      const cur = this.current(owner, 'zeto');
+      const now = new Date().toISOString();
+      this.saveVersion({ owner, platform: 'noto', n: 1, doc: cur.doc, maker: 'migrasi', checker: 'migrasi', reason: SPLIT_REASON, note: '', submittedAt: now, approvedAt: now });
+      this.audit(owner, 'noto', { at: now, event: 'approved', by: 'migrasi', n: 1, note: SPLIT_REASON });
     }
   }
 }

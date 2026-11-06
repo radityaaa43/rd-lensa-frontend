@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
-import { SPLIT_REASON, PolicyStore } from '../src/policy/store.ts';
+import { PolicyStore, SPLIT_REASON, registeredReason } from '../src/policy/store.ts';
 import type { BankPolicy, Pending, Version } from '../src/policy/types.ts';
 
 const seedA: BankPolicy = { counterparties: ['bi@node1', 'bankB@node3'] };
@@ -12,7 +12,8 @@ function fresh() {
   const root = mkdtempSync(join(tmpdir(), 'lensa-policy-'));
   const seeds = join(root, 'seeds');
   mkdirSync(seeds);
-  writeFileSync(join(seeds, 'bank-a.json'), JSON.stringify({ zeto: seedA, noto: seedANoto }));
+  writeFileSync(join(seeds, 'bank-a.json'), JSON.stringify({ zeto: seedA, noto: seedANoto, fabricx: seedA, iroha3: seedANoto }));
+  writeFileSync(join(seeds, 'bi.json'), JSON.stringify({ zeto: { marker: 'seed-zeto' }, noto: { marker: 'seed-noto' }, fabricx: { marker: 'seed-fabricx' }, iroha3: { marker: 'seed-iroha3' } }));
   return { store: new PolicyStore(join(root, 'policy'), seeds), dir: join(root, 'policy'), seeds };
 }
 const v = (n: number): Version => ({
@@ -118,6 +119,13 @@ test('migrate: the old history becomes the Zeto history with its numbers, Noto s
   });
   expect(store.pending('bi', 'noto')).toBeNull();
   expect(readFileSync(join(dir, 'bi', 'noto', 'audit.jsonl'), 'utf8')).toContain('"by":"migrasi"');
+  // a platform registered after the split gets v1 from its seed, made by "migrasi"
+  for (const p of ['fabricx', 'iroha3'] as const) {
+    expect(store.history('bi', p)).toHaveLength(1);
+    expect(store.current('bi', p)).toMatchObject({ platform: p, n: 1, doc: { marker: `seed-${p}` }, maker: 'migrasi', checker: 'migrasi', reason: registeredReason(p) });
+  }
+  expect(registeredReason('fabricx')).toBe('Platform Fabric-X didaftarkan');
+  expect(registeredReason('iroha3')).toBe('Platform Iroha 3 didaftarkan');
   // nothing of the old layout is changed or removed
   const after = snapshot(old);
   for (const [k, text] of Object.entries(before)) expect(after[k], k).toBe(text);
@@ -152,11 +160,25 @@ test('migrate finishes an interrupted run: leftovers of a cut-short copy, or an 
   expect(existsSync(dir)).toBe(true);
 });
 
-test('migrate leaves owners without the old layout alone', () => {
+test('migrate leaves owners without a directory alone, and an existing platform directory untouched', () => {
   const { store, dir } = fresh();
   store.current('bank-a', 'zeto');
-  const before = snapshot(dir);
+  const before = snapshot(join(dir, 'bank-a', 'zeto'));
   store.migrate();
-  expect(snapshot(dir)).toEqual(before);
+  expect(snapshot(join(dir, 'bank-a', 'zeto'))).toEqual(before);
+  expect(existsSync(join(dir, 'bank-b'))).toBe(false); // an owner that was never read is seeded lazily, not by migrate
   new PolicyStore(join(dir, 'missing'), '/nonexistent').migrate(); // no store directory yet
+});
+
+test('migrate registers the platforms an existing owner lacks, once, and leaves later work alone', () => {
+  const { store, dir } = fresh();
+  store.current('bank-a', 'zeto');
+  store.migrate();
+  expect(['noto', 'fabricx', 'iroha3'].map((p) => store.history('bank-a', p as 'noto').map((x) => [x.n, x.maker, x.reason]))).toEqual([
+    [[1, 'migrasi', registeredReason('noto')]], [[1, 'migrasi', registeredReason('fabricx')]], [[1, 'migrasi', registeredReason('iroha3')]],
+  ]);
+  expect(store.current('bank-a', 'zeto')).toMatchObject({ maker: 'seed', reason: 'Versi awal' });
+  const after = snapshot(dir);
+  store.migrate();
+  expect(snapshot(dir)).toEqual(after);
 });

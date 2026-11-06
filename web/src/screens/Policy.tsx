@@ -19,7 +19,7 @@ type ModelRoute = Extract<Route, { page: 'model' }>;
 type Tab = 'policy' | 'draft' | 'approve' | 'history';
 const TABS: [Tab, string][] = [['policy', 'Kebijakan berlaku'], ['draft', 'Ubah kebijakan'], ['approve', 'Persetujuan'], ['history', 'Riwayat versi']];
 const BY_KEY = 'lensa.policy.by';
-const NAME: Record<Platform, string> = { zeto: 'Zeto', noto: 'Noto' };
+export const NOT_ENFORCED = 'Belum ditegakkan gateway: dokumen dapat disusun, tetapi belum memengaruhi transaksi';
 const REFRESH_MS = 15_000;
 
 const SHIELD = 'M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3zM9 12l2 2 4-4';
@@ -34,7 +34,8 @@ function useBy() {
 
 function Loaded({ meta, route, data, reload, loadError, onHold }: { meta: Meta; route: ModelRoute; data: PolicyData; reload(): void; loadError: string | null; onHold(held: boolean): void }) {
   const { party } = route;
-  const platform: Platform = route.model === 'noto' ? 'noto' : 'zeto';
+  const platform = route.model as Platform; // Kebijakan opens only for a registered model (Policy below checks meta)
+  const name = meta.models[route.model].name;
   const owner = OWNER_OF_PARTY[party];
   const acting = party === 'BI' ? data.network : data.own!;
   const [by, setBy] = useBy();
@@ -71,13 +72,15 @@ function Loaded({ meta, route, data, reload, loadError, onHold }: { meta: Meta; 
   return (
     <div className="pol">
       <div className="stats">
-        <StatCard tone="blue" icon={SHIELD} label={`Versi berlaku ${NAME[platform]}`} figure={`v${acting.current.n}`} sub={currentSub(p, wib(acting.current.approvedAt))} />
+        <StatCard tone="blue" icon={SHIELD} label={`Versi berlaku ${name}`} figure={`v${acting.current.n}`} sub={currentSub(p, wib(acting.current.approvedAt))} />
         <StatCard tone="green" icon={SERVER} label="Gateway memakai versi ini"
           figure={mine.length === 0 ? <span className="figerr">Belum diterapkan: gateway belum terpasang</span> : `${onCurrent} dari ${mine.length}`}
           sub={party === 'BI' ? 'Dilaporkan status OPA tiap gateway' : `bank-gw-${meta.parties[party].node}`} />
         <StatCard tone="peach" icon={CLOCK} label="Menunggu persetujuan" figure={p ? '1 perubahan' : 'Tidak ada'}
           sub={p ? (p.state === 'waiting' ? `Diajukan ${p.maker}` : STATE_SUB[p.state]) : undefined} />
       </div>
+
+      {!meta.models[route.model].policy.enforced && <p className="hint" role="note">{NOT_ENFORCED}</p>}
 
       <div className="polby">
         <label className="pollbl" htmlFor="pol-by">Masuk sebagai</label>
@@ -100,8 +103,8 @@ function Loaded({ meta, route, data, reload, loadError, onHold }: { meta: Meta; 
       </div>
 
       <div role="tabpanel" id="pol-panel" aria-labelledby={`tab-${tab}`}>
-        {tab === 'policy' ? <PolicyView party={party} platform={platform} data={data} />
-          : tab === 'draft' ? <DraftForm key={`${platform}|${acting.current.n}`} party={party} platform={platform} owner={owner} acting={acting} bi={data.network.current.doc as BiPolicy} by={by} act={act} busy={busy} onSubmitted={() => setToApprove(true)} onDirty={setDirty} />
+        {tab === 'policy' ? <PolicyView party={party} platform={platform} name={name} data={data} />
+          : tab === 'draft' ? <DraftForm key={`${platform}|${acting.current.n}`} party={party} platform={platform} name={name} owner={owner} acting={acting} bi={data.network.current.doc as BiPolicy} by={by} act={act} busy={busy} onSubmitted={() => setToApprove(true)} onDirty={setDirty} />
           : tab === 'approve' ? <Approval party={party} platform={platform} owner={owner} acting={acting} by={by} act={act} busy={busy} />
           : <VersionHistory party={party} platform={platform} owner={owner} acting={acting} by={by} act={act} busy={busy} onRestored={() => setToApprove(true)} />}
       </div>
@@ -111,10 +114,15 @@ function Loaded({ meta, route, data, reload, loadError, onHold }: { meta: Meta; 
 
 const STATE_SUB = { publishing: 'Sedang diterbitkan ke gateway', 'publish-failed': 'Gagal diterbitkan ke gateway' } as const;
 
-// Halaman Kebijakan (spec 7.4): the documents of the platform in the URL (Zeto or Noto). App keys this on the party and platform,
-// so tabs and drafts start fresh for each.
+// Halaman Kebijakan (spec 7.4): the documents of the platform in the URL (any registered platform, /api/meta says which). App keys
+// this on the party and platform, so tabs and drafts start fresh for each.
 export function Policy({ meta, route }: { meta: Meta; route: ModelRoute }) {
-  const platform: Platform = route.model === 'noto' ? 'noto' : 'zeto';
+  const reg = meta.models[route.model].policy;
+  return reg.registered ? <Registered meta={meta} route={route} /> : <NotAvailable reason={reg.reason ?? 'Kebijakan belum tersedia'} />;
+}
+
+function Registered({ meta, route }: { meta: Meta; route: ModelRoute }) {
+  const platform = route.model as Platform;
   const policy = usePoll(`${route.party}|${platform}|kebijakan`, () => getPolicy(route.party, platform));
   const last = useRef<PolicyData>();
   const [held, setHeld] = useState(false);

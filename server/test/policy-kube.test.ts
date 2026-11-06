@@ -42,11 +42,14 @@ test('bundleStatus rejects when kubectl fails or answers non-JSON', async () => 
   await expect(stub('echo not-json').kube.bundleStatus()).rejects.toThrow();
 });
 
-test('names outside bank-gw-* are refused before kubectl runs', async () => {
+test('names outside <platform>-gw-1..4 are refused before kubectl runs', async () => {
   const { kube, log } = stub(`echo called >> "$0.args"`);
   const dir = log.replace(/\/log$/, '');
   await expect(kube.applyConfigMap('kube-root-ca.crt', big)).rejects.toThrow(/ditolak/);
   await expect(kube.getConfigMap('bank-gw-5-bundles')).rejects.toThrow(/ditolak/);
   await expect(kube.deploymentExists('bank-gw-2-bundles')).rejects.toThrow(/ditolak/);
+  await expect(kube.deploymentExists('paladin-node1')).rejects.toThrow(/ditolak/);
+  await expect(kube.deploymentExists('bundle-server')).rejects.toThrow(/ditolak/);
+  await expect(kube.getConfigMap('fabricx-gw-1')).rejects.toThrow(/ditolak/); // a ConfigMap name must end in -bundles
   expect(existsSync(join(dir, 'kubectl.args'))).toBe(false);
 });

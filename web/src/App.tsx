@@ -88,7 +88,7 @@ function Shell({ meta, route, stress, reloadStress, tx }: { meta: Meta; route: M
             : route.screen === 'lensa' ? <Lens meta={meta} route={route} run={tx.run} />
             : route.screen === 'laporan' ? <Report meta={meta} route={route} />
             : route.screen === 'tps' ? <StressView meta={meta} hidden={false} onRun={reloadStress} />
-            : route.screen === 'kebijakan' ? <Policy key={route.party} meta={meta} route={route} />
+            : route.screen === 'kebijakan' ? <Policy key={`${route.party}|${route.model}`} meta={meta} route={route} />
             : null}
         </main>
       </div>

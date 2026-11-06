@@ -32,7 +32,9 @@ function HoursTile({ token, hours, holidays, bi }: { token: Token; hours: Hours 
 
 const cpText = (ids: string[]) => (ids.length === PARTICIPANTS.length - 1 ? 'Semua peserta' : ids.length ? ids.map(nameOfId).join(', ') : 'Tidak ada');
 
-function Usage({ party, platform, doc }: { party: PartyId; platform: Platform; doc: BankPolicy }) {
+export const NO_USAGE = 'Pemakaian harian belum tersedia untuk platform ini';
+
+function Usage({ party, platform, name, doc }: { party: PartyId; platform: Platform; name: string; doc: BankPolicy }) {
   const usage = usePoll<PolicyUsage>(`${party}|${platform}|kebijakan-pemakaian`, () => getPolicyUsage(party, platform));
   return (
     <Section title="Limit per token" who="Diatur bank ini · hanya untuk bank ini">
@@ -49,7 +51,7 @@ function Usage({ party, platform, doc }: { party: PartyId; platform: Platform; d
                 <td className="num">{doc.max_per_tx?.[t] === undefined ? 'Ikut BI' : formatAmount(doc.max_per_tx[t]!, t)}</td>
                 <td className="num">{doc.daily_limit?.[t] === undefined ? 'Belum diatur' : formatAmount(doc.daily_limit[t]!, t)}</td>
                 <td>
-                  {usage.error !== null ? <span className="muted">{usage.error}</span>
+                  {usage.error !== null ? <span className="muted">{usage.status === 501 ? NO_USAGE : usage.error}</span>
                     : !u ? <span className="muted">Memuat…</span>
                     : pct === null ? <span className="muted">{formatAmount(u.used, t)} · belum ada limit harian</span>
                     : <><div className="bar" aria-hidden="true"><i style={{ width: `${pct}%` }} /></div><span className="muted">{formatAmount(u.used, t)} · {pct}%</span></>}
@@ -59,18 +61,18 @@ function Usage({ party, platform, doc }: { party: PartyId; platform: Platform; d
           })}
         </tbody>
       </table></div>
-      <p className="hint">Nilai bank tidak boleh lebih longgar dari batas BI. &quot;Terpakai hari ini&quot; dihitung gateway dari node Paladin bank ini sendiri, untuk transaksi {platform === 'noto' ? 'Noto' : 'Zeto'} saja, dan direset 00:00 WIB.</p>
+      <p className="hint">Nilai bank tidak boleh lebih longgar dari batas BI. &quot;Terpakai hari ini&quot; dihitung gateway dari node Paladin bank ini sendiri, untuk transaksi {name} saja, dan direset 00:00 WIB.</p>
     </Section>
   );
 }
 
-function BankView({ party, platform, data }: { party: PartyId; platform: Platform; data: PolicyData }) {
+function BankView({ party, platform, name, data }: { party: PartyId; platform: Platform; name: string; data: PolicyData }) {
   const bi = data.network.current.doc as BiPolicy;
   const doc = data.own!.current.doc as BankPolicy;
   const self = idOf(party);
   return (
     <>
-      <Usage party={party} platform={platform} doc={doc} />
+      <Usage party={party} platform={platform} name={name} doc={doc} />
       <Section title="Counterparty yang diizinkan" who="Diatur bank ini">
         <ul className="polcp">
           {PARTICIPANTS.filter((x) => x.id !== self).map((x) => (
@@ -158,7 +160,7 @@ function BiView({ data, platform }: { data: PolicyData; platform: Platform }) {
             <div className="polrow"><span>Limit total sirkulasi</span><span className="badge off">Total suplai tersegel</span></div>
           </div>
         </Section>
-      ) : (
+      ) : platform === 'noto' && (
         <Section title="Saldo dan suplai" who="Diatur BI · hanya untuk Noto">
           <div className="tablewrap"><table className="poltbl">
             <caption className="vh">Batas saldo dan suplai BI per token</caption>
@@ -180,12 +182,12 @@ function BiView({ data, platform }: { data: PolicyData; platform: Platform }) {
 }
 
 // "Kebijakan berlaku": what the gateways enforce now. BI reads the banks' documents here, read-only.
-export function PolicyView({ party, platform, data }: { party: PartyId; platform: Platform; data: PolicyData }) {
+export function PolicyView({ party, platform, name, data }: { party: PartyId; platform: Platform; name: string; data: PolicyData }) {
   const acting = party === 'BI' ? data.network : data.own!;
   return (
     <div className="polstack">
       {notYetPublished(acting.pending) && <p className="hint">Versi v{acting.current.n} sudah disetujui tetapi belum terbit ke semua gateway. Sebagian gateway mungkin masih memakai versi sebelumnya.</p>}
-      {party === 'BI' ? <BiView data={data} platform={platform} /> : <BankView party={party} platform={platform} data={data} />}
+      {party === 'BI' ? <BiView data={data} platform={platform} /> : <BankView party={party} platform={platform} name={name} data={data} />}
     </div>
   );
 }

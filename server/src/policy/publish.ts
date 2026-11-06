@@ -5,8 +5,10 @@ import type { GatewayBundles, Kube } from './kube.ts';
 import type { Opa } from './opa.ts';
 import { SEEDS_DIR } from './store.ts';
 import type { PolicyStore } from './store.ts';
-import { BANK_BUNDLE_OF_NODE, PLATFORMS, PolicyError } from './types.ts';
-import type { BankPolicy, BiPolicy, ByPlatform, GatewayStatus, Owner, Platform } from './types.ts';
+import { PLATFORMS, REGISTRY, sinkNames } from './platforms.ts';
+import type { Platform } from './platforms.ts';
+import { BANK_BUNDLE_OF_NODE, PolicyError } from './types.ts';
+import type { BankPolicy, BiPolicy, ByPlatform, GatewayStatus, Owner } from './types.ts';
 
 type Node = 1 | 2 | 3 | 4;
 const NODES: Node[] = [1, 2, 3, 4];
@@ -20,8 +22,9 @@ const FRESH_S = 60;
 export type Versions = ByPlatform<number>;
 export interface Pin { owner: Owner; platform: Platform; n: number }
 
-// Bundle revisions carry both versions: 'bi-z25-n1', 'bank-a-z3-n1', 'bank-bi-z1-n1'.
-export const revisionOf = (name: string, v: Versions): string => `${name}-z${v.zeto}-n${v.noto}`;
+// Bundle revisions carry every platform's version, in registry order: 'bi-zeto.25-noto.1-fabricx.1-iroha3.1',
+// 'bank-a-zeto.3-noto.1-fabricx.1-iroha3.1', 'bank-bi-zeto.1-noto.1-fabricx.1-iroha3.1'.
+export const revisionOf = (name: string, v: Versions): string => `${name}-${PLATFORMS.map((p) => `${p}.${v[p]}`).join('-')}`;
 
 // Writes bi.tar.gz and bank.tar.gz for one gateway into outDir from the store's current versions. `pin` names a
 // version of one document (owner and platform) that is not current yet (the one being published). Node 1's bank documents
@@ -36,17 +39,17 @@ export async function buildBundles(
     if (!v) throw new Error(`Versi ${owner} ${platform} v${pin.n} tidak ditemukan`);
     return v;
   };
-  const both = <T>(pick: (platform: Platform) => { n: number; doc: unknown }) => {
+  const all = <T>(pick: (platform: Platform) => { n: number; doc: unknown }) => {
     const vs = PLATFORMS.map((p) => [p, pick(p)] as const);
     return {
       n: Object.fromEntries(vs.map(([p, v]) => [p, v.n])) as Versions,
       docs: Object.fromEntries(vs.map(([p, v]) => [p, v.doc])) as ByPlatform<T>,
     };
   };
-  const bi = both<BiPolicy>((p) => version('bi', p));
+  const bi = all<BiPolicy>((p) => version('bi', p));
   const bankName = BANK_BUNDLE_OF_NODE[node];
   const seed = bankName === 'bank-bi' ? JSON.parse(readFileSync(join(SEEDS_DIR, 'bank-bi.json'), 'utf8')) as ByPlatform<BankPolicy> : null;
-  const bank = both<BankPolicy>((p) => (seed ? { n: 1, doc: seed[p] } : version(bankName as Owner, p)));
+  const bank = all<BankPolicy>((p) => (seed ? { n: 1, doc: seed[p] } : version(bankName as Owner, p)));
   const work = mkdtempSync(join(tmpdir(), 'lensa-bundle-'));
   try {
     opa.assemble(node, bi.docs, bank.docs, work);
@@ -58,12 +61,33 @@ export async function buildBundles(
   return { bi: bi.n, bank: bank.n };
 }
 
-// 'bank-a-z3-n1' -> { zeto: 3, noto: 1 }; anything else (an older 'bank-a-v3', none) -> nothing reported
-const versionOf = (revision: string | null | undefined): ByPlatform<number | null> => {
-  const m = /-z(\d+)-n(\d+)$/.exec(revision ?? '');
-  return m ? { zeto: Number(m[1]), noto: Number(m[2]) } : { zeto: null, noto: null };
-};
-const reported = (v: ByPlatform<number | null>): v is Versions => v.zeto !== null && v.noto !== null;
+const NEW_TAIL = /((?:-[a-z0-9]+\.\d+)+)$/;
+const LEGACY_TAIL = /-z(\d+)-n(\d+)$/;
+let warnedLegacy = false;
+
+// 'bank-a-zeto.3-noto.1-fabricx.1-iroha3.1' -> { zeto: 3, noto: 1, fabricx: 1, iroha3: 1 }; a platform the revision does not
+// name is null. The format before the registry, 'bank-a-z3-n1', is still read (fabricx and iroha3 null) because live gateways
+// report it until the first publish in the new format; that fallback is logged once per process, not once per poll.
+// Anything else (an older 'bank-a-v3', none) reports nothing.
+export function versionOf(revision: string | null | undefined): ByPlatform<number | null> {
+  const rev = revision ?? '';
+  const out = Object.fromEntries(PLATFORMS.map((p) => [p, null])) as ByPlatform<number | null>;
+  const tail = NEW_TAIL.exec(rev)?.[1];
+  if (tail) {
+    const got = new Map([...tail.matchAll(/-([a-z0-9]+)\.(\d+)/g)].map((m) => [m[1]!, Number(m[2])]));
+    for (const p of PLATFORMS) out[p] = got.get(p) ?? null;
+    return out;
+  }
+  const old = LEGACY_TAIL.exec(rev);
+  if (!old) return out;
+  if (!warnedLegacy) {
+    warnedLegacy = true;
+    console.warn(`Gateway masih melaporkan revisi format lama (${rev}); format baru dipakai setelah terbit pertama`);
+  }
+  return { ...out, zeto: Number(old[1]), noto: Number(old[2]) };
+}
+// A gateway counts as reporting once every platform it enforces has a version; the others follow with the first new-format publish.
+const reported = (v: ByPlatform<number | null>): boolean => PLATFORMS.every((p) => !REGISTRY[p].enforced || v[p] !== null);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface PublisherTiming { waitMs?: number; pollMs?: number }
@@ -76,7 +100,7 @@ export class Publisher {
     private readonly timing: PublisherTiming = {},
   ) {}
 
-  // One publish at a time: two documents can both touch the same gateway ConfigMap. Either platform rebuilds both bundles.
+  // One publish at a time: two documents can both touch the same gateway ConfigMap. Any platform rebuilds the bundles of every gateway.
   publish(owner: Owner, platform: Platform, n: number): Promise<void> {
     const run = this.queue.then(() => this.publishNow({ owner, platform, n }));
     this.queue = run.catch(() => {});
@@ -84,16 +108,20 @@ export class Publisher {
   }
 
   private async publishNow(pin: Pin): Promise<void> {
-    const targets = pin.owner === 'bi' ? NODES : NODES.filter((x) => BANK_BUNDLE_OF_NODE[x] === pin.owner);
-    const failed: Node[] = [];
+    // The gateways of every platform, once each; a sink named like `<name>-gw-<node>` serves node <node>'s bundles.
+    const targets = sinkNames().flatMap((sink) => {
+      const node = Number(/-gw-([1-4])$/.exec(sink)?.[1]) as Node;
+      return NODES.includes(node) && (pin.owner === 'bi' || BANK_BUNDLE_OF_NODE[node] === pin.owner) ? [{ sink, node }] : [];
+    });
+    const failed: string[] = [];
     const lost: string[] = [];
     // In parallel: each gateway waits for the kubelet's ConfigMap refresh (about a minute), so one by one a BI publish took ~5 min.
-    const results = await Promise.all(targets.map((node) => this.publishNode(node, pin)));
+    const results = await Promise.all(targets.map((t) => this.publishNode(t.sink, t.node, pin)));
     for (const [i, r] of results.entries()) {
-      const node = targets[i];
       if (r === 'ok' || r === 'skipped') continue;
-      failed.push(node);
-      if (r !== 'restored') lost.push(`gateway ${node}: ${r}`);
+      const name = targets[i]!.sink.replace(/^bank-gw-/, ''); // the bank gateways are told apart by their node number alone
+      failed.push(name);
+      if (r !== 'restored') lost.push(`gateway ${name}: ${r}`);
     }
     if (failed.length) {
       const note = lost.length ? `. Pemulihan gagal, ${lost.join('; ')}` : '';
@@ -105,8 +133,7 @@ export class Publisher {
   // No Deployment is touched: the gateways pull the new bundles from bundle-server by themselves. The publish counts as
   // done for a node once its gateway reports the new revisions (a bundle with a bad signature is never activated,
   // so it never reports).
-  private async publishNode(node: Node, pin: Pin): Promise<'ok' | 'skipped' | 'restored' | string> {
-    const deploy = `bank-gw-${node}`;
+  private async publishNode(deploy: string, node: Node, pin: Pin): Promise<'ok' | 'skipped' | 'restored' | string> {
     const cm = `${deploy}-bundles`;
     let touched = false;
     let prevCm: Record<string, Buffer> | null = null;
@@ -135,7 +162,7 @@ export class Publisher {
     }
   }
 
-  // Polls the sink until the gateway reports both bundles at the built revisions (both platform versions), or the time is up.
+  // Polls the sink until the gateway reports both bundles at the built revisions (every platform's version), or the time is up.
   private async waitFor(deploy: string, v: { bi: Versions; bank: Versions }): Promise<boolean> {
     const { waitMs = WAIT_MS, pollMs = POLL_MS } = this.timing;
     const deadline = Date.now() + waitMs;
@@ -162,7 +189,7 @@ export class Publisher {
       console.error(`Status bundle gagal dibaca: ${e.message}`);
       return {} as Record<string, GatewayBundles>;
     }) : {};
-    const none = { zeto: null, noto: null };
+    const none = Object.fromEntries(PLATFORMS.map((p) => [p, null])) as ByPlatform<number | null>;
     return NODES.map((node, i) => {
       if (!deployed[i]) return { node, deployed: false, bi: none, bank: none, ready: false };
       const r = reports[`bank-gw-${node}`];

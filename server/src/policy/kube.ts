@@ -17,10 +17,10 @@ export interface GatewayBundles {
   bundles: Record<string, { revision: string | null; code: string | null; message: string | null }>;
 }
 
-// The module only ever touches bank-gw-1..4 and their bundle ConfigMaps in paladin (and reads the sink status of
-// bundle-server): any other name is refused before kubectl is spawned.
+// The module only ever touches gateways named `<name>-gw-1..4` (bank-gw-N, or another platform's gateway from the registry)
+// and their bundle ConfigMaps in paladin (and reads the sink status of bundle-server): any other name is refused before kubectl is spawned.
 const guard = (kind: 'deploy' | 'configmap', name: string): string => {
-  if (!(kind === 'deploy' ? /^bank-gw-[1-4]$/ : /^bank-gw-[1-4]-bundles$/).test(name)) throw new Error(`Nama ${kind} ditolak: ${name}`);
+  if (!(kind === 'deploy' ? /^[a-z0-9]+-gw-[1-4]$/ : /^[a-z0-9]+-gw-[1-4]-bundles$/).test(name)) throw new Error(`Nama ${kind} ditolak: ${name}`);
   return name;
 };
 

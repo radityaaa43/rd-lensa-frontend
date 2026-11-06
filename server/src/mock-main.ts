@@ -8,11 +8,13 @@ import { buildApp } from './app.ts';
 import { fakeAdapter } from '../test/fake-adapter.ts';
 import type { GatewayBundles, Kube } from './policy/kube.ts';
 import { Opa } from './policy/opa.ts';
-import { Publisher } from './policy/publish.ts';
+import { PLATFORMS } from './policy/platforms.ts';
+import { Publisher, revisionOf as bundleRevision } from './policy/publish.ts';
 import type { PolicyDeps } from './policy/routes.ts';
 import { OPA_ROOT, PolicyStore, SEEDS_DIR } from './policy/store.ts';
 import { OWNER_OF_PARTY, PolicyError } from './policy/types.ts';
-import type { BankPolicy, Platform } from './policy/types.ts';
+import type { BankPolicy } from './policy/types.ts';
+import type { Platform } from './policy/platforms.ts';
 import { PolicyWorkflow } from './policy/workflow.ts';
 
 // Stealth amounts are public on chain, so the outsider sees the amount but not the parties.
@@ -31,10 +33,11 @@ const revisionOf = (b: Buffer): string | null => {
 };
 // Halaman Kebijakan: the real store, workflow and publisher over an in-memory cluster where only gateway 2 exists and
 // every rollout succeeds. Without OPA_BIN, a stub reports no errors and no tests so the screen still works.
+const one = Object.fromEntries(PLATFORMS.map((p) => [p, 1])) as Record<(typeof PLATFORMS)[number], number>;
 class MockKube implements Kube {
-  // gateway 2 starts on version 1 of both bundles (both platforms)
+  // gateway 2 starts on version 1 of both bundles (every platform)
   private readonly maps = new Map<string, Record<string, Buffer>>([['bank-gw-2-bundles', {
-    'bi.tar.gz': Buffer.from('{"revision":"bi-z1-n1"}'), 'bank.tar.gz': Buffer.from('{"revision":"bank-a-z1-n1"}'),
+    'bi.tar.gz': Buffer.from(JSON.stringify({ revision: bundleRevision('bi', one) })), 'bank.tar.gz': Buffer.from(JSON.stringify({ revision: bundleRevision('bank-a', one) })),
   }]]);
   deploymentExists = async (name: string) => name === 'bank-gw-2';
   getConfigMap = async (name: string) => this.maps.get(name) ?? null;

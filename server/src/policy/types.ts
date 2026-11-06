@@ -1,8 +1,8 @@
+import type { Platform } from './platforms.ts';
 export type Token = 'RD' | 'DFABI';
 export type Owner = 'bi' | 'bank-a' | 'bank-b' | 'bank-c'; // editable documents
-// Each platform has its own document per owner, with its own versions, maker-checker and history.
-export type Platform = 'zeto' | 'noto';
-export const PLATFORMS: Platform[] = ['zeto', 'noto'];
+// Each platform (the registry, platforms.ts) has its own document per owner, with its own versions, maker-checker and history.
+export type { Platform };
 export type ByPlatform<T> = Record<Platform, T>;
 export interface Hours { days: number[]; open: string; close: string }
 export interface BiPolicy {

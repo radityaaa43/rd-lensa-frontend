@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { jsonRpc, paladinUrl, type JsonRpc } from '../adapters/besu-network.ts';
 import type { PartyId } from '../domain.ts';
 import { OPA_ROOT } from './store.ts';
-import type { Platform, Token } from './types.ts';
+import type { Platform } from './platforms.ts';
+import type { Token } from './types.ts';
 
 const PAGE = 1000;
 const WIB_MS = 7 * 3_600_000;
@@ -11,7 +12,7 @@ const DAY_MS = 86_400_000;
 const COUNTED = new Set(['transfer', 'createLock', 'prepareUnlock']);
 
 // Contract address -> token of one platform, from the BI bundle in git (structural, not editable through Lensa); same map the gateway reads.
-export const biContracts = (platform: Platform = 'zeto'): Record<string, Token> =>
+export const biContracts = (platform: Platform): Record<string, Token> =>
   JSON.parse(readFileSync(join(OPA_ROOT, 'bundles/bi/bi/config/data.json'), 'utf8'))[platform].contracts;
 
 interface Row { function: string; to: string | null; data?: { to?: string; amount?: string; from?: string; transfers?: Out[]; recipients?: Out[] } }
@@ -31,7 +32,7 @@ const outs = (r: Row): Out[] => {
 // bank's own node returns only what it submitted, so every identity of the node counts. Today starts at 00:00 WIB, written as UTC.
 // Refuses (throws) on a full page rather than showing a number that is too low.
 export async function usage(
-  party: PartyId, limits: Partial<Record<Token, number>> = {}, platform: Platform = 'zeto',
+  party: PartyId, limits: Partial<Record<Token, number>> = {}, platform: Platform,
   rpc: JsonRpc = jsonRpc, contracts: Record<string, Token> = biContracts(platform), now = new Date(),
 ): Promise<Record<Token, { used: number; limit: number | null }>> {
   const start = new Date(Math.floor((now.getTime() + WIB_MS) / DAY_MS) * DAY_MS - WIB_MS).toISOString().replace('.000Z', 'Z');

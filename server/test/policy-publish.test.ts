@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { expect, test, vi } from 'vitest';
 import type { GatewayBundles, Kube } from '../src/policy/kube.ts';
 import type { Opa } from '../src/policy/opa.ts';
+import { REGISTRY } from '../src/policy/platforms.ts';
 import { Publisher } from '../src/policy/publish.ts';
 import { PolicyStore, SEEDS_DIR } from '../src/policy/store.ts';
 import { PolicyError } from '../src/policy/types.ts';
@@ -16,9 +17,14 @@ const biSeed: BiPolicy = {
   holidays: [], frozen: [],
 };
 const bankSeed: BankPolicy = { counterparties: ['bi@node1'] };
-// every owner's seed file is { zeto, noto }; the Noto documents differ so a mix-up between the platforms shows
-const biSeeds: ByPlatform<BiPolicy> = { zeto: biSeed, noto: { ...biSeed, max_per_tx: { RD: 2000, DFABI: 200 } } };
-const bankSeeds: ByPlatform<BankPolicy> = { zeto: bankSeed, noto: { counterparties: ['bi@node1', 'bankC@node4'] } };
+// every owner's seed file has one document per registered platform; they differ so a mix-up between the platforms shows
+const biSeeds: ByPlatform<BiPolicy> = {
+  zeto: biSeed, noto: { ...biSeed, max_per_tx: { RD: 2000, DFABI: 200 } },
+  fabricx: { ...biSeed, max_per_tx: { RD: 3000, DFABI: 300 } }, iroha3: { ...biSeed, max_per_tx: { RD: 4000, DFABI: 400 } },
+};
+const bankSeeds: ByPlatform<BankPolicy> = {
+  zeto: bankSeed, noto: { counterparties: ['bi@node1', 'bankC@node4'] }, fabricx: { counterparties: ['bi@node1', 'bankB@node3'] }, iroha3: { counterparties: [] },
+};
 
 // Fake opa: assemble writes the two documents, build packs "revision + document" into the tarball path.
 const fakeOpa = {
@@ -32,6 +38,9 @@ const fakeOpa = {
     writeFileSync(out, JSON.stringify({ revision, keyId, doc: JSON.parse(readFileSync(join(dir, 'doc.json'), 'utf8')) }));
   },
 } as unknown as Opa;
+
+// 'bank-a-zeto.3-noto.1-fabricx.1-iroha3.1'
+const R = (name: string, z = 1, n = 1, f = 1, i = 1) => `${name}-zeto.${z}-noto.${n}-fabricx.${f}-iroha3.${i}`;
 
 // The "gateway" of MemKube loads a ConfigMap's bundles on `sync(node)` and then reports their revisions, like the sink does.
 // `autoSync` = the gateway polls by itself right after an apply; `refuse` = it rejects the bundle (bad signature) and keeps the old one.
@@ -49,7 +58,7 @@ class MemKube implements Kube {
     for (const n of nodes) {
       this.deployed.add(`bank-gw-${n}`);
       this.cms.set(`bank-gw-${n}-bundles`, { 'bi.tar.gz': Buffer.from('old-bi'), 'bank.tar.gz': Buffer.from('old-bank') });
-      this.active.set(`bank-gw-${n}`, { bi: 'bi-z1-n1', bank: 'bank-x-z1-n1' });
+      this.active.set(`bank-gw-${n}`, { bi: R('bi'), bank: R('bank-x') });
     }
   }
   async deploymentExists(name: string) { return this.deployed.has(name); }
@@ -83,11 +92,11 @@ function setup(kube: MemKube) {
   const store = new PolicyStore(join(root, 'policy'), seeds);
   return { store, pub: new Publisher(kube, fakeOpa, store, { waitMs: 60, pollMs: 5 }) };
 }
-const rev = (z: number, n = 1) => ({ zeto: z, noto: n });
-const none = { zeto: null, noto: null };
+const rev = (z: number, n = 1, f = 1, i = 1) => ({ zeto: z, noto: n, fabricx: f, iroha3: i });
+const none = { zeto: null, noto: null, fabricx: null, iroha3: null };
 const tar = (kube: MemKube, node: number, which: 'bi' | 'bank') =>
   JSON.parse(kube.cms.get(`bank-gw-${node}-bundles`)![`${which}.tar.gz`]!.toString()) as { revision: string; keyId?: string; doc: unknown };
-const saveV2 = (store: PolicyStore, owner: 'bi' | 'bank-a', platform: Platform, doc: BiPolicy | BankPolicy) =>
+const saveV2 = (store: PolicyStore, owner: 'bi' | 'bank-a' | 'bank-b', platform: Platform, doc: BiPolicy | BankPolicy) =>
   store.saveVersion({ owner, platform, n: 2, doc, maker: 'm', checker: 'c', reason: 'r', note: '', submittedAt: 'x', approvedAt: 'x' });
 
 test('bi change goes to every deployed gateway, signed with the owner keys, and no Deployment is touched', async () => {
@@ -96,11 +105,11 @@ test('bi change goes to every deployed gateway, signed with the owner keys, and 
   const doc = { ...biSeed, frozen: ['X'] };
   saveV2(store, 'bi', 'zeto', doc);
   await pub.publish('bi', 'zeto', 2);
-  // both platforms in the bundle: the new Zeto document next to the current Noto one
-  for (const node of [1, 2, 3, 4]) expect(tar(kube, node, 'bi')).toEqual({ revision: 'bi-z2-n1', keyId: 'bi', doc: { zeto: doc, noto: biSeeds.noto } });
+  // every platform in the bundle: the new Zeto document next to the current ones of the others
+  for (const node of [1, 2, 3, 4]) expect(tar(kube, node, 'bi')).toEqual({ revision: R('bi', 2), keyId: 'bi', doc: { ...biSeeds, zeto: doc } });
   // BI's own node-1 bank bundle is signed by BI, every bank's by that bank
-  expect(tar(kube, 1, 'bank')).toEqual({ revision: 'bank-bi-z1-n1', keyId: 'bi', doc: JSON.parse(readFileSync(join(SEEDS_DIR, 'bank-bi.json'), 'utf8')) });
-  expect(['bank-a-z1-n1:bank-a', 'bank-b-z1-n1:bank-b', 'bank-c-z1-n1:bank-c']).toEqual([2, 3, 4].map((n) => `${tar(kube, n, 'bank').revision}:${tar(kube, n, 'bank').keyId}`));
+  expect(tar(kube, 1, 'bank')).toEqual({ revision: R('bank-bi'), keyId: 'bi', doc: JSON.parse(readFileSync(join(SEEDS_DIR, 'bank-bi.json'), 'utf8')) });
+  expect([`${R('bank-a')}:bank-a`, `${R('bank-b')}:bank-b`, `${R('bank-c')}:bank-c`]).toEqual([2, 3, 4].map((n) => `${tar(kube, n, 'bank').revision}:${tar(kube, n, 'bank').keyId}`));
   // the only writes are the four ConfigMaps: no annotation patch, no rollout (Lensa's port-forward stays up)
   expect(kube.calls).toEqual([1, 2, 3, 4].map((n) => `apply bank-gw-${n}-bundles`));
   expect((await pub.status()).map((g) => [g.bi, g.bank, g.ready])).toEqual([[rev(2), rev(1), true], [rev(2), rev(1), true], [rev(2), rev(1), true], [rev(2), rev(1), true]]);
@@ -112,8 +121,8 @@ test('bank change goes to its gateway only', async () => {
   const doc: BankPolicy = { counterparties: ['bi@node1', 'bankB@node3'] };
   saveV2(store, 'bank-a', 'noto', doc);
   await pub.publish('bank-a', 'noto', 2);
-  expect(tar(kube, 2, 'bank')).toEqual({ revision: 'bank-a-z1-n2', keyId: 'bank-a', doc: { zeto: bankSeeds.zeto, noto: doc } });
-  expect(tar(kube, 2, 'bi')).toEqual({ revision: 'bi-z1-n1', keyId: 'bi', doc: biSeeds });
+  expect(tar(kube, 2, 'bank')).toEqual({ revision: R('bank-a', 1, 2), keyId: 'bank-a', doc: { ...bankSeeds, noto: doc } });
+  expect(tar(kube, 2, 'bi')).toEqual({ revision: R('bi'), keyId: 'bi', doc: biSeeds });
   expect(kube.calls).toEqual(['apply bank-gw-2-bundles']);
   expect((await pub.status())[1]).toEqual({ node: 2, deployed: true, bi: rev(1), bank: rev(1, 2), ready: true });
 });
@@ -137,7 +146,7 @@ test('a gateway that never reports the new revision (bundle refused, e.g. bad si
   expect(e).toBeInstanceOf(PolicyError);
   expect(e).toMatchObject({ status: 502, message: 'Gagal terbit ke gateway 2' });
   expect(kube.cms.get('bank-gw-2-bundles')).toEqual({ 'bi.tar.gz': Buffer.from('old-bi'), 'bank.tar.gz': Buffer.from('old-bank') });
-  for (const node of [1, 3, 4]) expect(tar(kube, node, 'bi').revision).toBe('bi-z2-n1');
+  for (const node of [1, 3, 4]) expect(tar(kube, node, 'bi').revision).toBe(R('bi', 2));
 });
 
 test('an old revision keeps the publish waiting for the whole window', async () => {
@@ -190,16 +199,18 @@ test('missing gateway reported not deployed', async () => {
   ]);
 });
 
-test('status: fresh report gives the versions of both platforms, stale report or an older revision format gives not ready, unreadable sink does not throw', async () => {
+test('status: fresh report gives the versions of every platform, stale report or an older revision format gives not ready, unreadable sink does not throw', async () => {
   const kube = new MemKube(1, 2, 3);
-  kube.active.set('bank-gw-1', { bi: 'bi-z3-n2', bank: 'bank-bi-z2-n4' });
-  kube.active.set('bank-gw-3', { bi: 'bi-v3', bank: 'bank-c-z1-n1' }); // an older revision format reports nothing
+  kube.active.set('bank-gw-1', { bi: R('bi', 3, 2, 5, 6), bank: R('bank-bi', 2, 4, 1, 1) });
+  kube.active.set('bank-gw-3', { bi: 'bi-v3', bank: 'bank-c-z1-n1' }); // a format without versions reports nothing; the pre-registry one reports zeto and noto
   kube.age.set('bank-gw-2', 61); // gateway gone quiet
-    const { pub } = setup(kube);
+  const { pub } = setup(kube);
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   const s = await pub.status();
-  expect(s[0]).toEqual({ node: 1, deployed: true, bi: rev(3, 2), bank: rev(2, 4), ready: true });
+  warn.mockRestore();
+  expect(s[0]).toEqual({ node: 1, deployed: true, bi: rev(3, 2, 5, 6), bank: rev(2, 4), ready: true });
   expect(s[1]).toEqual({ node: 2, deployed: true, bi: none, bank: none, ready: false });
-  expect(s[2]).toEqual({ node: 3, deployed: true, bi: none, bank: rev(1), ready: false });
+  expect(s[2]).toEqual({ node: 3, deployed: true, bi: none, bank: { ...rev(1), fabricx: null, iroha3: null }, ready: false });
   kube.bundleStatus = async () => { throw new Error('sink down'); };
   const err = vi.spyOn(console, 'error').mockImplementation(() => {});
   expect((await pub.status()).map((g) => g.ready)).toEqual([false, false, false, false]);
@@ -245,8 +256,8 @@ test('publishes are serialized', async () => {
   saveV2(store, 'bi', 'zeto', { ...biSeed, frozen: ['X'] });
   saveV2(store, 'bank-a', 'noto', { counterparties: ['bi@node1', 'bankB@node3'] });
   await Promise.all([pub.publish('bi', 'zeto', 2), pub.publish('bank-a', 'noto', 2)]);
-  expect(tar(kube, 2, 'bi').revision).toBe('bi-z2-n1');
-  expect(tar(kube, 2, 'bank').revision).toBe('bank-a-z1-n2');
+  expect(tar(kube, 2, 'bi').revision).toBe(R('bi', 2));
+  expect(tar(kube, 2, 'bank').revision).toBe(R('bank-a', 1, 2));
 });
 
 test('a Noto publish rebuilds both bundles with the Zeto document unchanged, and the gateway must report both versions', async () => {
@@ -254,6 +265,40 @@ test('a Noto publish rebuilds both bundles with the Zeto document unchanged, and
   const { store, pub } = setup(kube);
   saveV2(store, 'bi', 'noto', { ...biSeeds.noto, frozen: ['bankB@node3'] });
   await pub.publish('bi', 'noto', 2);
-  expect(tar(kube, 2, 'bi')).toMatchObject({ revision: 'bi-z1-n2', doc: { zeto: biSeeds.zeto, noto: { frozen: ['bankB@node3'] } } });
+  expect(tar(kube, 2, 'bi')).toMatchObject({ revision: R('bi', 1, 2), doc: { zeto: biSeeds.zeto, noto: { frozen: ['bankB@node3'] }, fabricx: biSeeds.fabricx, iroha3: biSeeds.iroha3 } });
   expect((await pub.status())[1]).toMatchObject({ bi: rev(1, 2), bank: rev(1), ready: true });
+});
+
+test('a fabricx document publishes without waiting for fabricx gateways that do not exist: every bank gateway gets the new revision, no 502', async () => {
+  const kube = new MemKube(1, 2, 3, 4); // no fabricx or iroha3 Deployment
+  const { store, pub } = setup(kube);
+  saveV2(store, 'bi', 'fabricx', { ...biSeed, frozen: ['X'] });
+  const t0 = Date.now();
+  await pub.publish('bi', 'fabricx', 2); // fabricx.gateways is [] today
+  expect(Date.now() - t0).toBeLessThan(55); // waitMs is 60: nothing was waited out
+  for (const node of [1, 2, 3, 4]) expect(tar(kube, node, 'bi').revision).toBe(R('bi', 1, 1, 2, 1));
+  expect(kube.calls).toEqual([1, 2, 3, 4].map((n) => `apply bank-gw-${n}-bundles`));
+});
+
+test('a registered platform that lists gateways which are not deployed yet is skipped like any missing Deployment, whatever its document', async () => {
+  const kube = new MemKube(1, 2, 3, 4);
+  const asked: string[] = [];
+  const exists = kube.deploymentExists.bind(kube);
+  kube.deploymentExists = async (name) => { asked.push(name); return exists(name); };
+  const { store, pub } = setup(kube);
+  const was = REGISTRY.iroha3.gateways;
+  REGISTRY.iroha3.gateways = ['iroha3-gw-1', 'iroha3-gw-2', 'bank-gw-1']; // bank-gw-1 is also the zeto one: asked once
+  try {
+    saveV2(store, 'bi', 'iroha3', { ...biSeed, frozen: ['X'] });
+    await pub.publish('bi', 'iroha3', 2);
+    saveV2(store, 'bank-b', 'iroha3', { counterparties: [] });
+    await pub.publish('bank-b', 'iroha3', 2);
+  } finally {
+    REGISTRY.iroha3.gateways = was;
+  }
+  expect(asked.filter((n) => n === 'bank-gw-1')).toHaveLength(1);
+  expect(asked).toContain('iroha3-gw-1');
+  // only the Deployments that exist got a ConfigMap: the four bank ones for BI, bank B's alone for its own document
+  expect(kube.calls).toEqual([1, 2, 3, 4].map((n) => `apply bank-gw-${n}-bundles`).concat('apply bank-gw-3-bundles'));
+  expect(tar(kube, 3, 'bank').revision).toBe(R('bank-b', 1, 1, 1, 2));
 });

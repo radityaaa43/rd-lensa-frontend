@@ -22,6 +22,8 @@ test.each([
   ['/besu/zeto/riwayat', '?pihak=C', { page: 'model', model: 'zeto', screen: 'riwayat', party: 'C' }],
   ['/besu/zeto/kebijakan', '?pihak=A', { page: 'model', model: 'zeto', screen: 'kebijakan', party: 'A' }],
   ['/fabricx/dasbor', '?pihak=A', { page: 'model', model: 'fabricx', screen: 'dasbor', party: 'A' }],
+  ['/fabricx/kebijakan', '?pihak=BI', { page: 'model', model: 'fabricx', screen: 'kebijakan', party: 'BI' }],
+  ['/iroha3/kebijakan', '?pihak=C', { page: 'model', model: 'iroha3', screen: 'kebijakan', party: 'C' }],
   ['/iroha3/lensa/0xff', '?pihak=B', { page: 'model', model: 'iroha3', screen: 'lensa', party: 'B', tx: '0xff' }],
 ])('parse %s%s', (path, search, want) => {
   expect(parse(path, search)).toEqual(want);

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PLATFORMS } from './platforms.ts';
 import type { BankPolicy, BiPolicy, ByPlatform, Owner } from './types.ts';
 
 function run(bin: string, args: string[], allowFail = false): Promise<string> {
@@ -19,9 +20,10 @@ export class Opa {
   // keysDir holds <keyId>.pem, the owners' private signing keys (outside the repo); without it bundles are built unsigned.
   constructor(private readonly bin: string, private readonly opaRoot: string, private readonly keysDir?: string) {}
 
-  // Copies both bundles into outDir (bi/, bank/) and overlays the editable documents, one per platform: data.bi.config.policy
-  // = { zeto, noto } next to BI's structural keys, data.bank.config = { policy: { zeto, noto } }. The bank documents belong to
-  // `node` and are chosen by the caller (node 1 always gets seeds/bank-bi.json), so `node` does not alter the output.
+  // Copies both bundles into outDir (bi/, bank/) and overlays the editable documents, one per registered platform:
+  // data.bi.config.policy = { zeto, noto, ... } next to BI's structural keys and data.bi.config.platforms (the registered
+  // ids, which the validators check for a missing document), data.bank.config = { policy: { zeto, noto, ... } }. The bank
+  // documents belong to `node` and are chosen by the caller (node 1 always gets seeds/bank-bi.json), so `node` does not alter the output.
   assemble(_node: 1 | 2 | 3 | 4, bi: ByPlatform<BiPolicy>, bank: ByPlatform<BankPolicy>, outDir: string): void {
     mkdirSync(outDir, { recursive: true, mode: 0o700 });
     cpSync(join(this.opaRoot, 'bundles/bi'), join(outDir, 'bi'), { recursive: true });
@@ -29,6 +31,7 @@ export class Opa {
 
     const biFile = join(outDir, 'bi/bi/config/data.json');
     const data = JSON.parse(readFileSync(biFile, 'utf8'));
+    data.platforms = [...PLATFORMS];
     data.policy = bi; // optional keys left undefined (Noto balance limits) are not written
     writeFileSync(biFile, JSON.stringify(data, null, 2), { mode: 0o600 });
 

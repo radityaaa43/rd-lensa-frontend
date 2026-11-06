@@ -2,8 +2,10 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { PartyId } from '../domain.ts';
 import type { PolicyStore } from './store.ts';
 import type { PolicyWorkflow } from './workflow.ts';
+import { PLATFORMS, REGISTRY } from './platforms.ts';
+import type { Platform } from './platforms.ts';
 import { OWNER_OF_PARTY, PolicyError } from './types.ts';
-import type { GatewayStatus, Owner, Pending, Platform, PolicyDoc, Token, Version } from './types.ts';
+import type { GatewayStatus, Owner, Pending, PolicyDoc, Token, Version } from './types.ts';
 
 export type PolicyDeps = {
   store: PolicyStore;
@@ -15,10 +17,11 @@ export interface VersionView { owner: Owner; platform: Platform; current: Versio
 
 const NOT_ALLOWED = 'Pihak ini tidak dapat mengubah kebijakan tersebut';
 export const POLICY_UNAVAILABLE = 'Kebijakan belum tersedia: OPA_BIN belum diatur';
+export const NO_USAGE = 'Pemakaian harian belum tersedia untuk platform ini';
 const BANK_OWNERS: Owner[] = ['bank-a', 'bank-b', 'bank-c'];
 
 const pihak = { enum: ['BI', 'A', 'B', 'C'] } as const;
-const model = { enum: ['zeto', 'noto'] } as const;
+const model = { enum: [...PLATFORMS] } as const;
 const owner = { type: 'object', required: ['owner'], properties: { owner: { enum: ['bi', 'bank-a', 'bank-b', 'bank-c'] } } } as const;
 const by = { type: 'string', maxLength: 60 } as const;
 const text = { type: 'string', maxLength: 500 } as const;
@@ -67,8 +70,10 @@ export function registerPolicyRoutes(app: FastifyInstance, deps: PolicyDeps): vo
   app.get<{ Querystring: Q }>('/api/policy/usage', { schema: { querystring: query } }, async (req, reply) => {
     const p = req.query.pihak;
     if (p === 'BI') return denied(reply);
+    const platform = req.query.model ?? 'zeto';
+    if (!REGISTRY[platform].usage) return reply.code(501).send({ reason: NO_USAGE }); // a platform without a usage source in the registry
     try {
-      return await deps.usage!(p, req.query.model ?? 'zeto');
+      return await deps.usage!(p, platform);
     } catch (e) {
       console.error(`Pemakaian harian ${p} gagal dibaca:`, e);
       return reply.code(502).send({ reason: 'Gagal membaca pemakaian hari ini' });

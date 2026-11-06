@@ -6,7 +6,6 @@ import { parseAmount } from './form.ts';
 import { DAYS, PARTICIPANTS, Steps, idOf, type Act } from './shared.tsx';
 
 const TOKENS: Token[] = ['RD', 'DFABI'];
-const NAME: Record<Platform, string> = { zeto: 'Zeto', noto: 'Noto' };
 const UNIT: Record<Token, string> = { RD: 'Rp', DFABI: 'unit' };
 const text = (n: number | undefined) => (n === undefined ? '' : n.toLocaleString('id-ID'));
 const timeOk = (s: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(s) || s === '24:00';
@@ -182,7 +181,7 @@ function useBankForm(bank: BankPolicy, bi: BiPolicy, self: string) {
   return { doc, fields };
 }
 
-interface Props { party: PartyId; platform: Platform; owner: Owner; acting: VersionView; bi: BiPolicy; by: string; act: Act; busy: boolean; onSubmitted(): void; onDirty(dirty: boolean): void }
+interface Props { party: PartyId; platform: Platform; name: string; owner: Owner; acting: VersionView; bi: BiPolicy; by: string; act: Act; busy: boolean; onSubmitted(): void; onDirty(dirty: boolean): void }
 
 // Shared frame: steps, fields, reason, and the one button. Name and reason are checked by the server, whose answer is shown as is.
 function Frame({ party, platform, owner, by, act, busy, onSubmitted, onDirty, title, doc, fields }: Omit<Props, 'acting' | 'bi'> & { title: string; doc(): BiPolicy | BankPolicy | null; fields: ReactNode }) {
@@ -213,8 +212,8 @@ function Frame({ party, platform, owner, by, act, busy, onSubmitted, onDirty, ti
   );
 }
 
-const BiForm = (p: Props) => { const f = useBiForm(p.acting.current.doc as BiPolicy, p.platform === 'noto'); return <Frame {...p} title={`Draf perubahan · Kebijakan jaringan ${NAME[p.platform]}`} doc={f.doc} fields={f.fields} />; };
-const BankForm = (p: Props) => { const f = useBankForm(p.acting.current.doc as BankPolicy, p.bi, idOf(p.party)); return <Frame {...p} title={`Draf perubahan · Kebijakan bank ${NAME[p.platform]}`} doc={f.doc} fields={f.fields} />; };
+const BiForm = (p: Props) => { const f = useBiForm(p.acting.current.doc as BiPolicy, p.platform === 'noto'); return <Frame {...p} title={`Draf perubahan · Kebijakan jaringan ${p.name}`} doc={f.doc} fields={f.fields} />; };
+const BankForm = (p: Props) => { const f = useBankForm(p.acting.current.doc as BankPolicy, p.bi, idOf(p.party)); return <Frame {...p} title={`Draf perubahan · Kebijakan bank ${p.name}`} doc={f.doc} fields={f.fields} />; };
 
 // "Ubah kebijakan": one form for the acting party's own document, started from its current version.
 // App keys this on the current version, so a publish resets the fields.
