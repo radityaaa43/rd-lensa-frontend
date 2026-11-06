@@ -19,11 +19,11 @@ test('registry: platforms in order, zeto and noto enforced on the four bank gate
   expect(PLATFORMS.map((p) => [p, REGISTRY[p].label, REGISTRY[p].enforced, REGISTRY[p].gateways, !!REGISTRY[p].usage])).toEqual([
     ['zeto', 'Zeto', true, ['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4'], true],
     ['noto', 'Noto', true, ['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4'], true],
-    ['fabricx', 'Fabric-X', false, [], false],
+    ['fabricx', 'Fabric-X', false, ['fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4'], false], // usage only with LENSA_FABRICX_GW=1
     ['iroha3', 'Iroha 3', false, [], false],
   ]);
   // the sinks the Publisher waits for: every platform's gateways, once each
-  expect(sinkNames()).toEqual(['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4']);
+  expect(sinkNames()).toEqual(['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4', 'fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4']);
 });
 
 test('/api/meta says per model whether it has a policy document and whether a gateway enforces it', async () => {

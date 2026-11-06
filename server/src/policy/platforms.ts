@@ -1,6 +1,7 @@
 import type { PartyId } from '../domain.ts';
 import type { Token } from './types.ts';
 import { usage } from './usage.ts';
+import { fabricxUsage, transport } from '../adapters/fabricx.ts';
 
 // The one place that lists the platforms with a policy document. Everything else (store, bundles, revisions, routes,
 // readiness, the web screen through /api/meta) is derived from this array and REGISTRY, so a new platform is one entry here
@@ -26,7 +27,11 @@ const BANK_GATEWAYS = ['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4'];
 export const REGISTRY: Record<Platform, PlatformInfo> = {
   zeto: { label: 'Zeto', gateways: BANK_GATEWAYS, enforced: true, usage: (party, limits) => usage(party, limits, 'zeto') },
   noto: { label: 'Noto', gateways: BANK_GATEWAYS, enforced: true, usage: (party, limits) => usage(party, limits, 'noto') },
-  fabricx: { label: 'Fabric-X', gateways: [], enforced: false },
+  // fx-gw-N (fabric-x/opa/DESIGN.md); usage through the bank's gateway, so only once Lensa uses them (LENSA_FABRICX_GW=1)
+  fabricx: {
+    label: 'Fabric-X', gateways: ['fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4'], enforced: false,
+    ...(transport() ? { usage: (party: Exclude<PartyId, 'BI'>, limits: Partial<Record<Token, number>> | undefined) => fabricxUsage(party, limits) } : {}),
+  },
   iroha3: { label: 'Iroha 3', gateways: [], enforced: false },
 };
 
