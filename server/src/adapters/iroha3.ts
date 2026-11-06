@@ -71,7 +71,7 @@ const runCli = (dir: string): Cli => (config, args, stdin) => new Promise((resol
       try { message = (JSON.parse(stderr) as { error?: { message?: string } }).error?.message; } catch { /* not JSON */ }
       const code = (err as { code?: unknown }).code ?? 'tidak diketahui';
       const raw = message ?? (stderr.trim().split('\n').pop() || String(code));
-      console.error(`[iroha3] CLI gagal (kode ${code}):`, raw);
+      if (!/Failed to find asset/.test(raw)) console.error(`[iroha3] CLI gagal (kode ${code}):`, raw); // a missing balance record is read as 0, not a failure
       reject(new CliError(`iroha CLI gagal (kode ${code})`, raw)); // never the CLI text or err.message (the command line)
     });
   child.stdin!.on('error', () => {}); // a child that exits without reading stdin gives EPIPE here; unhandled it would crash the whole server, and the exit code still arrives in the callback
@@ -98,7 +98,6 @@ interface TxGet {
   result_hash?: string;
   entrypoint: { External: { payload: { authority: string; creation_time_ms?: number; time_to_live_ms?: number; instructions: { Instructions: string[] } } } };
 }
-interface Movement { source: string; destination: string; quantity: string }
 interface Ctx { sid?: string }
 
 // What history() needs on top of the CLI: each party's operator key (signs the Torii account reads) and the decoder context.
@@ -242,26 +241,19 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     if (instructions.Instructions.length !== 1 || instructions.Instructions[0] !== await render(p.signer, p.args)) {
       throw new Error(`Isi transaksi di node ${PARTIES[party].name} tidak sama dengan permintaan`);
     }
-    let amount = req.amount;
-    let rdAmount: string | null = null; // dvp: the payment leg of the settlement receipt
-    let counterparty: Counterparty = { from: partyOf.get(authority) ?? null, to: req.to };
-    if (dvp) {
-      const receipt = await json<{ content: { details: { value: { delivery: Movement; payment: Movement } } } }>(op(party), ['--machine', 'ledger', 'query', 'stdin'],
-        JSON.stringify({ singular: { type: 'FindSettlementReceiptById', payload: { id: sid } } }));
-      const d = receipt.content.details.value.delivery; // the DFABI leg
-      const owner = (asset: string) => partyOf.get(asset.slice(asset.indexOf('#') + 1)) ?? null;
-      amount = d.quantity;
-      rdAmount = receipt.content.details.value.payment.quantity;
-      counterparty = { from: owner(d.source), to: owner(d.destination) };
-    }
+    // The stored instruction equals the rendered request (above), so the DvP legs are the request's: DFABI `amount` from -> to,
+    // `amount * PRICE_PER_UNIT` RD to -> from. FindSettlementReceiptById is not read: Torii fans that query out to every
+    // dataspace (torii lib.rs target_scope_singular_query has no scope for it) and 403s an account without CanReadRestrictedDataspace.
+    const amount = req.amount;
+    const rdAmount = dvp ? (BigInt(amount) * PRICE_PER_UNIT).toString() : null;
+    const counterparty: Counterparty = dvp ? { from: req.from, to: req.to } : { from: partyOf.get(authority) ?? null, to: req.to };
     const onChain = [
       { label: 'Tx hash', value: result.txHash },
       { label: 'Blok', value: String(result.block) },
       { label: 'Authority', value: authority },
       ...(dvp ? [{ label: 'Settlement id', value: sid! }] : []),
     ];
-    const read = dvp ? '`ledger transaction get`, `FindSettlementReceiptById`' : '`ledger transaction get`';
-    const method = `Node validator ${PARTIES[party].name} menyimpan transaksi ini dalam bentuk terbuka, sama seperti tiga validator lain. Dibaca dengan akun operator node (${read}).`
+    const method = `Node validator ${PARTIES[party].name} menyimpan transaksi ini dalam bentuk terbuka, sama seperti tiga validator lain. Dibaca dengan akun operator node (\`ledger transaction get\`).`
       + (role === 'outsider' ? ' Akun bank ini sendiri ditolak Torii (HTTP 403), tetapi itu hanya izin API, bukan enkripsi.' : '');
     return { party, role, verdict: 'clear', amount, rdAmount, counterparty, onChain, method };
   }
