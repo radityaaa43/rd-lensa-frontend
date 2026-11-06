@@ -64,6 +64,9 @@ const receiptQuery = {
 
 const json =(v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x));
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+// An OPA gateway deny reaches the Paladin SDK as an axios error with status 403 (raw text: "Request failed with status code 403").
+const isGatewayDeny = (e: unknown) => (e as { isAxiosError?: boolean; response?: { status?: number } } | null)?.isAxiosError === true
+  && (e as { response?: { status?: number } }).response?.status === 403;
 
 // No server internals in what a client receives (ARCHITECTURE.md §2.2): cut a CLI command line, drop `--kubeconfig …`,
 // replace absolute paths. URLs survive: their '/' never follows whitespace, a quote, '(', '=', ':' or ','.
@@ -270,7 +273,8 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       })(), TX_DEADLINE_MS, 'Transaksi');
       emit('result', out);
     } catch (e) {
-      emit('error', { reason: msg(e) });
+      if (isGatewayDeny(e)) app.log.error({ err: e }, `tx ${req.model} ${req.flow} denied by gateway`); // the original stays in the log
+      emit('error', { reason: isGatewayDeny(e) ? `Ditolak kebijakan di gateway ${PARTIES[req.from].name}` : msg(e) }); // Paladin calls go through the initiator's gateway
     } finally {
       closed = true;
       run.done = true;

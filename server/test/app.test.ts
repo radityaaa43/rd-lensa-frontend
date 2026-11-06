@@ -199,6 +199,19 @@ test('tx failure is delivered as an error event and frees the lock', async () =>
   expect((await post(a, '/api/tx', req)).statusCode).toBe(202);
 });
 
+test('a gateway 403 (axios error from the Paladin SDK) reads as a policy deny naming the initiator; other errors stay as they are', async () => {
+  const z = fakeAdapter('zeto');
+  const axios403 = Object.assign(new Error('Request failed with status code 403'), { isAxiosError: true, response: { status: 403 } });
+  z.run = async () => { throw axios403; };
+  const a = make({ zeto: z });
+  const base = await listen(a);
+  const { runId } = (await post(a, '/api/tx', req)).json();
+  expect(await readSse(base, `/api/tx/${runId}/events`)).toEqual([{ event: 'error', data: { reason: "Ditolak kebijakan di gateway Bank Mandala" } }]);
+  z.run = async () => { throw Object.assign(new Error('Request failed with status code 500'), { isAxiosError: true, response: { status: 500 } }); };
+  const r2 = (await post(a, '/api/tx', req)).json();
+  expect(await readSse(base, `/api/tx/${r2.runId}/events`)).toEqual([{ event: 'error', data: { reason: 'Request failed with status code 500' } }]);
+});
+
 test('rejects a second run while one is active', async () => {
   const z = fakeAdapter('zeto');
   const release = gated(z);
