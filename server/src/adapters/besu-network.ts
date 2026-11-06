@@ -1,4 +1,5 @@
 import { rpcUp } from '../health.ts';
+import { BESU_RPC, gwFetch, gwUrl, paladinUrl } from '../gateway.ts';
 import type { Network, NetworkNode, Receipt, ReceiptPart } from '../adapter.ts';
 import { PARTIES, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
@@ -68,7 +69,7 @@ export async function besuNetwork(opts: { paladin: boolean }, deps?: BesuNetwork
   const paladin = opts.paladin
     ? Promise.all(nums.map(async (n): Promise<NetworkNode> => {
       const port = 31548 + 100 * (n - 1);
-      const up = await rpc(`http://127.0.0.1:${port}`, 'transport_nodeName');
+      const up = await rpc(gwUrl(`http://127.0.0.1:${port}`), 'transport_nodeName');
       return { id: `paladin-${n}`, label: `Node Paladin ${n}`, kind: 'paladin', owner: OWNER(n), status: up ? 'up' : 'down', detail: up ? `RPC ${port} menjawab` : `RPC ${port} tidak menjawab (port-forward aktif?)` };
     }))
     : Promise.resolve([] as NetworkNode[]);
@@ -96,12 +97,11 @@ export async function receiptPage<R extends ReceiptLike>(
 // ---- receipts (ARCHITECTURE.md §2.3 "Receipts", v1.5) ----
 // Besu: the public receipt from the one Besu RPC this server has (the tunnel to validator 1). Every validator holds the same receipt, so
 // this is not a party-scoped read. Paladin: the party's OWN node only (port per PARTIES[p].node, as health.ts), never another party's.
-export const BESU_RPC = 'http://127.0.0.1:8545';
-export const paladinUrl = (p: PartyId) => `http://127.0.0.1:${31548 + 100 * (PARTIES[p].node - 1)}`;
+export { BESU_RPC, paladinUrl };
 
 export type JsonRpc = <T>(url: string, method: string, params: unknown[]) => Promise<T>;
 export const jsonRpc: JsonRpc = async <T>(url: string, method: string, params: unknown[]) => {
-  const res = await fetch(url, {
+  const res = await gwFetch(url, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: AbortSignal.timeout(10_000),
   });

@@ -7,9 +7,10 @@ import { BANKS, FLOWS, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, typ
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import type { Sample } from '../stats.ts';
 import { STATE_DIR, readState, writeState } from '../state.ts';
+import { gwAgent, gwUrl } from '../gateway.ts';
 // Server code never imports ethers itself: everything chain-related comes from stealth-address, so one ethers copy is in play.
 import {
-  Contract, JsonRpcProvider, TRANCHE_A, Wallet, announcements, artifact, biRows, cert, chainNow, contracts, pay, read,
+  Contract, FetchRequest, JsonRpcProvider, TRANCHE_A, Wallet, announcements, artifact, biRows, cert, chainNow, contracts, pay, read,
   type Deployed, type LoggedAnnouncement,
 } from '../../../../besu/stealth-address/ts/chain.ts';
 import { parseBondMetadata } from '../../../../besu/stealth-address/ts/bond.ts';
@@ -92,8 +93,18 @@ export function flowLabel(dvp: boolean, kind: 'rd' | 'bond', fromBI: boolean): F
   return dvp ? (fromBI ? 'award' : 'dvp') : (`${kind === 'rd' ? 'rd' : 'dfabi'}-${fromBI ? 'issue' : 'transfer'}` as FlowId);
 }
 
-export function createStealthAdapter(state: StealthState, rpcUrl = state.rpcUrl ?? 'http://127.0.0.1:8545'): ModelAdapter {
-  const provider = new JsonRpcProvider(rpcUrl, undefined, { cacheTimeout: -1 });
+// With gateway mTLS on (gateway.ts) ethers must present the client cert: its FetchRequest takes an https agent.
+export function besuRequest(url: string): string | FetchRequest {
+  const agent = gwAgent();
+  if (!agent) return url;
+  const req = new FetchRequest(url);
+  req.getUrlFunc = FetchRequest.createGetUrlFunc({ agent });
+  return req;
+}
+
+// LENSA_BESU_RPC (the gateway's Besu door) wins over the URL the stack was deployed on (state.rpcUrl).
+export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process.env.LENSA_BESU_RPC ?? state.rpcUrl ?? 'http://127.0.0.1:8545')): ModelAdapter {
+  const provider = new JsonRpcProvider(besuRequest(rpcUrl), undefined, { cacheTimeout: -1 });
   const { deployed: d, chainId, banks } = state;
   const bi = new Wallet(state.deployerKey, provider);
   const reader = contracts(d, provider);
