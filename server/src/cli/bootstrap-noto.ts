@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { BI_DATA_FILE, latestContractData, syncNoto } from '../policy/noto-config.ts';
 import { STATE_DIR, readState, writeState } from '../state.ts';
 
 const BOND_DIR = fileURLToPath(new URL('../../../../besu/noto+pente/bond/', import.meta.url));
@@ -15,9 +17,13 @@ export async function bootstrap(): Promise<void> {
     process.exit(1);
   }
   const dataDir = join(STATE_DIR, 'noto');
+  const previous = existsSync(dataDir) ? latestContractData(dataDir) : undefined;
   execFileSync('npx', ['ts-node', 'src/index.ts', '--cache', dataDir,
     '--cash-per-investor', '10000000000000', '--supply', '1000000', '--units-per-investor', '1000'],
   { cwd: BOND_DIR, stdio: 'inherit', timeout: 15 * 60_000 });
   writeState('noto', { dataDir });
   console.log(`state/noto.json ditulis: ${dataDir}`);
+  // The gateways only know the contracts and groups listed in data.json: write the new ones in.
+  writeFileSync(BI_DATA_FILE, syncNoto(readFileSync(BI_DATA_FILE, 'utf8'), latestContractData(dataDir)!, previous?.restrictedAtomFactoryAddress));
+  console.log(`${BI_DATA_FILE} diperbarui (kontrak Noto, grup Pente, pabrik atom). Wajib di-commit, lalu BI menerbitkan ulang kebijakan di Lensa; sebelum itu semua transaksi Noto ditolak gateway.`);
 }
