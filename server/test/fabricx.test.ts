@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { awardOf, createFabricxAdapter, exclusive, type Exec } from '../src/adapters/fabricx.ts';
+import { awardOf, createFabricxAdapter, exclusive, fabricxUsage, fxGateway, gwRequest, type Exec, type GwCall } from '../src/adapters/fabricx.ts';
 import { PRICE_PER_UNIT, type FlowRequest, type PartyId } from '../src/domain.ts';
 import { CANCELLED, type StepEvent } from '../src/adapter.ts';
 
@@ -467,5 +467,63 @@ describe('kubectl() error text', () => {
       await kubectl({ kubeconfig: '', namespace: 'x' })(['get', 'pods']).catch(() => {});
       expect(String(log.mock.calls.at(-1)?.[0])).toBe('[fabricx] kubectl gagal (kode 1): error: boom');
     } finally { log.mockRestore(); vi.doUnmock('node:child_process'); vi.resetModules(); }
+  });
+});
+
+// Through the OPA gateways (LENSA_FABRICX_GW=1): the same driver commands become fxapi requests to the initiator's fx-gw-N.
+describe('fabricx gateway transport', () => {
+  it('maps every driver command to its gateway request, initiator and counterparties', () => {
+    const uuid = expect.stringMatching(/^[0-9a-f-]{36}$/);
+    expect(gwRequest(['issue', 'bank2', 'RD', '10'])).toEqual({ party: 'BI', body: { op: 'issue', to: 'bank2', type: 'RD', amount: '10' }, others: ['A'] });
+    expect(gwRequest(['award', 'bank4', '1', '1000000'])).toEqual({ party: 'BI', body: { op: 'award', id: uuid, to: 'bank4', dfabi: '1', rd: '1000000' }, others: ['C'] });
+    expect(gwRequest(['transfer', 'bank2', 'bank3', 'RD', '12'])).toEqual({ party: 'A', body: { op: 'transfer', from: 'bank2', to: 'bank3', type: 'RD', amount: '12' }, others: ['B'] });
+    expect(gwRequest(['swap', 'bank3', 'bank4', 'DFABI-2027A', '7', 'RD', '7000000'])).toEqual({ party: 'B', others: ['C'],
+      body: { op: 'swap', id: uuid, from: 'bank3', to: 'bank4', give: { type: 'DFABI-2027A', amount: '7' }, get: { type: 'RD', amount: '7000000' } } });
+    expect(gwRequest(['balance', 'issuer', 'RD'])).toEqual({ party: 'BI', body: { op: 'balance', type: 'RD' }, others: [] });
+    expect(gwRequest(['records', 'bank4', TX])).toEqual({ party: 'C', body: { op: 'records', txid: TX }, others: [] });
+    expect(gwRequest(['history', 'bank3', '50'])).toEqual({ party: 'B', body: { op: 'history', limit: 50 }, others: [] });
+    expect(() => gwRequest(['setup-pp'])).toThrow('Perintah tidak dikenal');
+    expect(() => gwRequest(['balance', '', 'RD'])).toThrow('Node tidak dikenal');
+  });
+
+  it('a run goes to the initiator gateway, the counterparty gateway confirms finality (in the final step), the ledger is read as before', async () => {
+    const f = fake();
+    const sent: [PartyId, Record<string, unknown>][] = [];
+    const gw: GwCall = async (party, body) => {
+      sent.push([party, body]);
+      if (body.op === 'finality') { await new Promise((r) => setTimeout(r, 20)); return { txId: TX, final: true }; }
+      return { report: 'recorded', steps: [{ name: 'submit', ms: 1500 }, { name: 'final', ms: 2000 }, { name: 'report', ms: 30 }], txId: TX };
+    };
+    const seen: StepEvent[] = [];
+    const r = await createFabricxAdapter(f.exec, gw).run(req('dvp', 'A', 'B', '7'), 7n, (s) => seen.push(s));
+    expect(sent.map(([p, b]) => [p, b.op])).toEqual([['A', 'swap'], ['B', 'finality']]);
+    expect(sent[1]![1]).toEqual({ op: 'finality', txid: TX });
+    expect(seen[1]!.ms).toBeGreaterThanOrEqual(2015);
+    expect(f.calls).toEqual([]); // no driver exec; the ledger read still uses kubectl
+    expect(r).toMatchObject({ txHash: TX, block: 0x6f });
+  });
+
+  it('fxGateway: party N on 127.0.0.1:39440+N; an OPA deny (403, empty body) and a failed view read as Indonesian errors', async () => {
+    const answers: [number, string][] = [[200, '{"amount":"5"}'], [403, ''], [403, 'precheck denied at bank3: 403'], [502, 'FAIL bank2.transfer: insufficient funds'], [500, 'boom']];
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => { urls.push(url); const [s, b] = answers.shift()!; return new Response(b, { status: s }); });
+    vi.stubEnv('LENSA_GW_MTLS_DIR', '');
+    try {
+      expect(await fxGateway('A', { op: 'balance', type: 'RD' })).toEqual({ amount: '5' });
+      await expect(fxGateway('A', { op: 'transfer' })).rejects.toThrow(/^Ditolak kebijakan di gateway Bank Mandala$/);
+      await expect(fxGateway('A', { op: 'swap' })).rejects.toThrow('Ditolak kebijakan di gateway Bank Mandala: precheck denied at bank3');
+      await expect(fxGateway('A', { op: 'transfer' })).rejects.toThrow(/^bank2\.transfer: insufficient funds$/);
+      await expect(fxGateway('C', { op: 'balance' })).rejects.toThrow('Gateway Bank Sejahtera gagal (HTTP 500)');
+      expect(urls).toEqual(['http://127.0.0.1:39442/', 'http://127.0.0.1:39442/', 'http://127.0.0.1:39442/', 'http://127.0.0.1:39442/', 'http://127.0.0.1:39444/']);
+    } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
+  });
+
+  it('usage: today from 00:00 WIB per token from the bank gateway, limits passed through', async () => {
+    const sent: Record<string, unknown>[] = [];
+    const gw: GwCall = async (_p, body) => { sent.push(body); return { amount: body.type === 'RD' ? '900' : '0' }; };
+    // 2026-11-05 01:00 WIB is 2026-11-04T18:00Z: the day began 2026-11-04T17:00Z
+    const u = await fabricxUsage('A', { RD: 1000 }, gw, new Date('2026-11-04T18:00:00Z'));
+    expect(u).toEqual({ RD: { used: 900, limit: 1000 }, DFABI: { used: 0, limit: null } });
+    expect(sent).toEqual([{ op: 'usage', type: 'RD', since: '2026-11-04T17:00:00Z' }, { op: 'usage', type: 'DFABI-2027A', since: '2026-11-04T17:00:00Z' }]);
   });
 });

@@ -1,16 +1,20 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import { promisify } from 'node:util';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, StepEvent, Verdict } from '../adapter.ts';
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
+import { gwFetch, gwUrl } from '../gateway.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
 
-// Fabric-X + Panurus ZKAT-DLOG, no auditor. Every operation goes through one CLI in the cluster:
+// Fabric-X + Panurus ZKAT-DLOG, no auditor. Every operation goes to the initiating party's OPA gateway fx-gw-N
+// (fabric-x/opa/DESIGN.md: Envoy mTLS + OPA + `rdbi-driver serve` holding only that party's key), forwarded by
+// lensa-pf@fabricx-gw-N to 127.0.0.1:39440+N, when LENSA_FABRICX_GW=1. Without it (before the cut-over, or to roll back):
 //   kubectl exec deploy/rdbi-driver -- rdbi-driver api <command...>   (stdout = one JSON line, stderr = logs)
-// and the public ledger is BI's committer DB. No port-forward, no SDK.
+// The public ledger is BI's committer DB, read with kubectl exec either way. No SDK.
 export interface FabricxState { kubeconfig: string; namespace: string; funded?: boolean } // funded false while bootstrap runs: load() ignores it
 
 export type Exec = (args: string[]) => Promise<string>; // kubectl arguments after --kubeconfig/-n; resolves with stdout
@@ -87,6 +91,49 @@ export const kubectl = (s: FabricxState): Exec => async (args) => {
   }
 };
 
+// One JSON request to party's gateway (fxapi ops, serve.go). A deny by OPA is a 403 with an empty body; fxapi's own refusals and
+// view failures come as text ("FAIL ..." for a failed view).
+export type GwCall = (party: PartyId, body: Record<string, unknown>) => Promise<unknown>;
+export const fxGateway: GwCall = async (party, body) => {
+  const name = PARTIES[party].name;
+  const res = await gwFetch(gwUrl(`http://127.0.0.1:${39440 + PARTIES[party].node}/`), {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(CALL_MS),
+  });
+  const text = (await res.text()).trim();
+  if (res.status === 403) throw new Error(`Ditolak kebijakan di gateway ${name}${text ? `: ${text.slice(0, 300)}` : ''}`);
+  if (!res.ok) throw new Error(text.startsWith('FAIL ') ? text.slice(5, 305) : `Gateway ${name} gagal (HTTP ${res.status})`);
+  return JSON.parse(text);
+};
+
+// A driver command as a request to the initiator's gateway; `others` are the counterparties, whose gateways confirm finality
+// (the exec driver waited for them itself). A swap/award carries an id: the buyer's gateway prechecks its leg under it.
+export function gwRequest(cmd: string[]): { party: PartyId; body: Record<string, unknown>; others: PartyId[] } {
+  const [op, a = '', b = '', c = '', d = '', e = '', f = ''] = cmd;
+  const p = (n: string): PartyId => { const id = PARTY_OF_NODE[n]; if (!n || !id) throw new Error(`Node tidak dikenal: ${n}`); return id; };
+  switch (op) {
+    case 'issue': return { party: 'BI', body: { op, to: a, type: b, amount: c }, others: [p(a)] };
+    case 'award': return { party: 'BI', body: { op, id: randomUUID(), to: a, dfabi: b, rd: c }, others: [p(a)] };
+    case 'transfer': return { party: p(a), body: { op, from: a, to: b, type: c, amount: d }, others: [p(b)] };
+    case 'swap': return { party: p(a), body: { op, id: randomUUID(), from: a, to: b, give: { type: c, amount: d }, get: { type: e, amount: f } }, others: [p(b)] };
+    case 'balance': return { party: p(a), body: { op, type: b }, others: [] };
+    case 'records': return { party: p(a), body: { op, txid: b }, others: [] };
+    case 'history': return { party: p(a), body: { op, limit: Number(b) }, others: [] };
+  }
+  throw new Error(`Perintah tidak dikenal: ${op}`);
+}
+
+// Today's outflow per token for the Kebijakan screen: the same fxapi `usage` the bank rule reads (bank.platform.fabricx), through
+// the bank's gateway. Today starts at 00:00 WIB, written as UTC (as policy/usage.ts). Values <= 10^15 are exact in a double.
+export async function fabricxUsage(
+  party: PartyId, limits: Partial<Record<'RD' | 'DFABI', number>> = {}, gw: GwCall = fxGateway, now = new Date(),
+): Promise<Record<'RD' | 'DFABI', { used: number; limit: number | null }>> {
+  const day = 86_400_000, wib = 7 * 3_600_000;
+  const since = new Date(Math.floor((now.getTime() + wib) / day) * day - wib).toISOString().replace('.000Z', 'Z');
+  const used = async (t: 'RD' | 'DFABI') => Number(BigInt((await gw(party, { op: 'usage', type: TOKEN[t], since }) as { amount: string }).amount));
+  const [rd, dfabi] = await Promise.all([used('RD'), used('DFABI')]);
+  return { RD: { used: rd, limit: limits.RD ?? null }, DFABI: { used: dfabi, limit: limits.DFABI ?? null } };
+}
+
 interface TxOut { txId: string; report: string; steps: { name: string; ms: number }[] }
 interface Move { sender: PartyId | null; recipient: PartyId | null; amount: bigint }
 
@@ -103,9 +150,19 @@ export function awardOf(rows: { sender: string; recipient: string; token: string
 }
 interface Ctx { report: string; onChain: { label: string; value: string }[] }
 
-export function createFabricxAdapter(exec: Exec) {
-  const api = async <T>(cmd: string[]): Promise<T> =>
-    JSON.parse(await exec(['exec', 'deploy/rdbi-driver', '-c', 'driver', '--', 'rdbi-driver', 'api', ...cmd])) as T;
+export function createFabricxAdapter(exec: Exec, gw?: GwCall) {
+  const api = async <T>(cmd: string[]): Promise<T> => {
+    if (!gw) return JSON.parse(await exec(['exec', 'deploy/rdbi-driver', '-c', 'driver', '--', 'rdbi-driver', 'api', ...cmd])) as T;
+    const { party, body, others } = gwRequest(cmd);
+    const out = await gw(party, body) as T & Partial<TxOut>;
+    if (out.txId && others.length) { // the counterparties' finality belongs to the 'final' step, as with the exec driver
+      const t = Date.now();
+      for (const o of others) await gw(o, { op: 'finality', txid: out.txId });
+      const fin = out.steps?.find((s) => s.name === 'final');
+      if (fin) fin.ms += Date.now() - t;
+    }
+    return out;
+  };
 
   // The public ledger as BI's committer DB holds it: the token request, the output commitments, the block.
   // wait: how long a fresh tx may take to reach the committer DB (a receipt read of a listed tx does not wait)
@@ -382,5 +439,8 @@ export function createFabricxAdapter(exec: Exec) {
 
 export async function load(stateDir?: string): Promise<ModelAdapter | null> {
   const s = readState<FabricxState>('fabricx', stateDir);
-  return s && s.funded !== false ? createFabricxAdapter(kubectl({ ...s, kubeconfig: process.env.FABRICX_KUBECONFIG ?? s.kubeconfig })) : null;
+  return s && s.funded !== false ? createFabricxAdapter(kubectl({ ...s, kubeconfig: process.env.FABRICX_KUBECONFIG ?? s.kubeconfig }), transport()) : null;
 }
+
+// LENSA_FABRICX_GW=1: through the OPA gateways (the only path once rdbi-driver is scaled to 0); unset: the exec driver.
+export const transport = (): GwCall | undefined => (process.env.LENSA_FABRICX_GW === '1' ? fxGateway : undefined);

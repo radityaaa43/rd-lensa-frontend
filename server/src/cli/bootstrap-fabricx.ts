@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { BANKS } from '../domain.ts';
-import { createFabricxAdapter, kubectl, type FabricxState } from '../adapters/fabricx.ts';
+import { createFabricxAdapter, kubectl, transport, type FabricxState } from '../adapters/fabricx.ts';
 import { writeState } from '../state.ts';
 
 const RD_OPENING = 10n ** 13n;
@@ -11,7 +11,7 @@ const DFABI_OPENING = 1000n;
 export async function bootstrap(): Promise<void> {
   const state: FabricxState = { kubeconfig: process.env.FABRICX_KUBECONFIG ?? fileURLToPath(new URL('../../../../alibaba.yaml', import.meta.url)), namespace: 'fabricx', funded: false };
   writeState('fabricx', state);
-  const adapter = createFabricxAdapter(kubectl(state));
+  const adapter = createFabricxAdapter(kubectl(state), transport());
   const health = await adapter.health();
   if (!health.ready) throw new Error(health.detail);
   for (const b of BANKS) { // sequential: BI issues one token at a time
