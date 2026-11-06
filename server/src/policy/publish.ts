@@ -74,8 +74,10 @@ export class Publisher {
     const targets = owner === 'bi' ? NODES : NODES.filter((x) => BANK_BUNDLE_OF_NODE[x] === owner);
     const failed: Node[] = [];
     const lost: string[] = [];
-    for (const node of targets) {
-      const r = await this.publishNode(node, { owner, n });
+    // In parallel: each gateway waits for the kubelet's ConfigMap refresh (about a minute), so one by one a BI publish took ~5 min.
+    const results = await Promise.all(targets.map((node) => this.publishNode(node, { owner, n })));
+    for (const [i, r] of results.entries()) {
+      const node = targets[i];
       if (r === 'ok' || r === 'skipped') continue;
       failed.push(node);
       if (r !== 'restored') lost.push(`gateway ${node}: ${r}`);
