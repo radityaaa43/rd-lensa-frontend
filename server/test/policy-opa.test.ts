@@ -64,8 +64,8 @@ test.skipIf(need)('assemble keeps git participants and overlays editable keys', 
   expect(data.participants).toEqual(git.participants);
   expect(data.nodes).toEqual(git.nodes);
   expect(data.zeto.contracts).toEqual(git.zeto.contracts);
-  expect(data.zeto.max_per_tx).toEqual(bi.max_per_tx);
-  expect(data.zeto.max_mint_per_tx).toEqual(bi.max_mint_per_tx);
+  expect(data.max_per_tx).toEqual(bi.max_per_tx);
+  expect(data.max_mint_per_tx).toEqual(bi.max_mint_per_tx);
   expect(data.hours).toEqual(bi.hours);
   expect(data.holidays).toEqual(bi.holidays);
   expect(data.frozen).toEqual(['bankB@node3']);

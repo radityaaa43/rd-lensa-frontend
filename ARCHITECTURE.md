@@ -624,9 +624,9 @@ Reads: BI reads every owner, a bank reads BI's and its own. Writes: only the par
   It is an audit label, not authentication (spec §9).
 - **Identities** in documents are node-scoped: exactly one `@`, both parts non-empty; a bank is its node, so frozen
   and counterparty entries are compared by their node part.
-- **Daily limit.** `usage.ts` asks the bank's own node `ptx_queryTransactionsFull` (domain `zeto`, `created` after today 00:00 WIB written as UTC,
-  no `from` filter, page 1000), sums `transfer` and `createLock` amounts per token contract, and throws on a full page
-  (the route then answers 502). It is the same query and sum as the gateway's Rego (spec §6.3).
+- **Daily limit.** `usage.ts` asks the bank's own node `ptx_queryTransactionsFull` twice (domain `zeto` and `noto`, `created` after today 00:00 WIB written as UTC,
+  no `from` filter, page 1000), and sums per token across both rails: Zeto `transfer` and `createLock`, Noto `transfer` and
+  `prepareUnlock` (not a rollback to the sender). It throws on a full page (the route then answers 502). One combined limit per token. It is the same query and sum as the gateway's Rego (spec §6.3).
 
 ### 8.3 State and publishing
 
@@ -653,7 +653,7 @@ calls `republish`. At startup `recoverInterrupted()` turns a `publishing` left b
 `shared.tsx`). Route `/besu/zeto/kebijakan`; `Screen` gains `kebijakan` (`route.ts`), in the sidebar "Alat" group
 (`Sidebar.tsx`). `reasonOf` disables it with a reason: `Belum tersedia di platform ini` on Fabric-X and Iroha 3,
 `Kebijakan saat ini hanya untuk Zeto dan Noto` on Stealth. `usePoll` keys: `${party}|kebijakan`,
-`${party}|${rail}|kebijakan-pemakaian` (usage per rail, `/api/policy/usage?model=zeto|noto`), `${owner}|${party}|riwayat-kebijakan|${n}`. `keepLast` keeps the last data when a reload
+`${party}|kebijakan-pemakaian` (combined usage, `/api/policy/usage?pihak=`), `${owner}|${party}|riwayat-kebijakan|${n}`. `keepLast` keeps the last data when a reload
 fails. A 501 from `/api/policy` shows `NotAvailable` with the server's reason. The name in "Masuk sebagai" is kept per
 browser in `localStorage` (`lensa.policy.by`, access guarded). Publishing to the live cluster has not been done; it needs the
 user's approval of the node2 dry-run (`besu/opa/README.md`).

@@ -97,7 +97,7 @@ function Loaded({ meta, route, data, reload, loadError, onHold }: { meta: Meta; 
       </div>
 
       <div role="tabpanel" id="pol-panel" aria-labelledby={`tab-${tab}`}>
-        {tab === 'policy' ? <PolicyView party={party} data={data} rail={route.model === 'noto' ? 'noto' : 'zeto'} />
+        {tab === 'policy' ? <PolicyView party={party} data={data} />
           : tab === 'draft' ? <DraftForm key={acting.current.n} party={party} owner={owner} acting={acting} bi={data.network.current.doc as BiPolicy} by={by} act={act} busy={busy} onSubmitted={() => setToApprove(true)} onDirty={setDirty} />
           : tab === 'approve' ? <Approval party={party} owner={owner} acting={acting} by={by} act={act} busy={busy} />
           : <VersionHistory party={party} owner={owner} acting={acting} by={by} act={act} busy={busy} onRestored={() => setToApprove(true)} />}

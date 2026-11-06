@@ -26,11 +26,12 @@ export class Opa {
     cpSync(join(this.opaRoot, 'bundles/bi'), join(outDir, 'bi'), { recursive: true });
     cpSync(join(this.opaRoot, 'bundles/bank'), join(outDir, 'bank'), { recursive: true });
 
-    // Rego reads the two limits under zeto; hours, holidays and frozen sit at the top. Write mint cap and frozen
+    // Rego reads the limits, hours, holidays and frozen from the top of data.bi.config. Write mint cap and frozen
     // always: mint fails closed without the cap, a missing frozen key fails open.
     const biFile = join(outDir, 'bi/bi/config/data.json');
     const data = JSON.parse(readFileSync(biFile, 'utf8'));
-    data.zeto = { ...data.zeto, max_per_tx: bi.max_per_tx, max_mint_per_tx: bi.max_mint_per_tx };
+    data.max_per_tx = bi.max_per_tx;
+    data.max_mint_per_tx = bi.max_mint_per_tx;
     data.hours = bi.hours;
     data.holidays = bi.holidays;
     data.frozen = bi.frozen;

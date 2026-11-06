@@ -32,10 +32,8 @@ function HoursTile({ token, hours, holidays, bi }: { token: Token; hours: Hours 
 
 const cpText = (ids: string[]) => (ids.length === PARTICIPANTS.length - 1 ? 'Semua peserta' : ids.length ? ids.map(nameOfId).join(', ') : 'Tidak ada');
 
-type Rail = 'zeto' | 'noto';
-
-function Usage({ party, doc, rail }: { party: PartyId; doc: BankPolicy; rail: Rail }) {
-  const usage = usePoll<PolicyUsage>(`${party}|${rail}|kebijakan-pemakaian`, () => getPolicyUsage(party, rail));
+function Usage({ party, doc }: { party: PartyId; doc: BankPolicy }) {
+  const usage = usePoll<PolicyUsage>(`${party}|kebijakan-pemakaian`, () => getPolicyUsage(party));
   return (
     <Section title="Limit per token" who="Diatur bank ini · hanya untuk bank ini">
       <div className="tablewrap"><table className="poltbl">
@@ -61,18 +59,18 @@ function Usage({ party, doc, rail }: { party: PartyId; doc: BankPolicy; rail: Ra
           })}
         </tbody>
       </table></div>
-      <p className="hint">Nilai bank tidak boleh lebih longgar dari batas BI. &quot;Terpakai hari ini&quot; dihitung gateway dari node Paladin bank ini sendiri dan direset 00:00 WIB.</p>
+      <p className="hint">Nilai bank tidak boleh lebih longgar dari batas BI. &quot;Terpakai hari ini&quot; dihitung gateway dari node Paladin bank ini sendiri (Zeto dan Noto digabung) dan direset 00:00 WIB.</p>
     </Section>
   );
 }
 
-function BankView({ party, data, rail }: { party: PartyId; data: PolicyData; rail: Rail }) {
+function BankView({ party, data }: { party: PartyId; data: PolicyData }) {
   const bi = data.network.current.doc as BiPolicy;
   const doc = data.own!.current.doc as BankPolicy;
   const self = idOf(party);
   return (
     <>
-      <Usage party={party} doc={doc} rail={rail} />
+      <Usage party={party} doc={doc} />
       <Section title="Counterparty yang diizinkan" who="Diatur bank ini">
         <ul className="polcp">
           {PARTICIPANTS.filter((x) => x.id !== self).map((x) => (
@@ -164,12 +162,12 @@ function BiView({ data }: { data: PolicyData }) {
 }
 
 // "Kebijakan berlaku": what the gateways enforce now. BI reads the banks' documents here, read-only.
-export function PolicyView({ party, data, rail }: { party: PartyId; data: PolicyData; rail: Rail }) {
+export function PolicyView({ party, data }: { party: PartyId; data: PolicyData }) {
   const acting = party === 'BI' ? data.network : data.own!;
   return (
     <div className="polstack">
       {notYetPublished(acting.pending) && <p className="hint">Versi v{acting.current.n} sudah disetujui tetapi belum terbit ke semua gateway. Sebagian gateway mungkin masih memakai versi sebelumnya.</p>}
-      {party === 'BI' ? <BiView data={data} /> : <BankView party={party} data={data} rail={rail} />}
+      {party === 'BI' ? <BiView data={data} /> : <BankView party={party} data={data} />}
     </div>
   );
 }
