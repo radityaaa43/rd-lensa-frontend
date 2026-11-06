@@ -4,7 +4,7 @@ import type { BiPolicy } from '../../../server/src/policy/types.ts';
 import { getPolicy, type PolicyView as PolicyData } from '../api.ts';
 import type { Route } from '../app/route.ts';
 import { usePoll } from '../app/usePoll.ts';
-import { keepLast } from '../policy/keep.ts';
+import { keepLast, shownData, startRefresh } from '../policy/keep.ts';
 import { Approval } from '../policy/Approval.tsx';
 import { DraftForm } from '../policy/DraftForm.tsx';
 import { PolicyView } from '../policy/PolicyView.tsx';
@@ -19,6 +19,7 @@ type ModelRoute = Extract<Route, { page: 'model' }>;
 type Tab = 'policy' | 'draft' | 'approve' | 'history';
 const TABS: [Tab, string][] = [['policy', 'Kebijakan berlaku'], ['draft', 'Ubah kebijakan'], ['approve', 'Persetujuan'], ['history', 'Riwayat versi']];
 const BY_KEY = 'lensa.policy.by';
+const REFRESH_MS = 15_000;
 
 const SHIELD = 'M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3zM9 12l2 2 4-4';
 const SERVER = 'M4 5h16v6H4zM4 13h16v6H4zM8 8h.01M8 16h.01';
@@ -30,13 +31,16 @@ function useBy() {
   return [by, (v: string) => { set(v); try { localStorage.setItem(BY_KEY, v); } catch { /* the name just is not remembered */ } }] as const;
 }
 
-function Loaded({ meta, route, data, reload, loadError }: { meta: Meta; route: ModelRoute; data: PolicyData; reload(): void; loadError: string | null }) {
+function Loaded({ meta, route, data, reload, loadError, onHold }: { meta: Meta; route: ModelRoute; data: PolicyData; reload(): void; loadError: string | null; onHold(held: boolean): void }) {
   const { party } = route;
   const owner = OWNER_OF_PARTY[party];
   const acting = party === 'BI' ? data.network : data.own!;
   const [by, setBy] = useBy();
   const [tab, setTab] = useState<Tab>('policy');
   const [busy, setBusy] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  // the periodic refresh must not replace the screen under an action in flight or a draft with unsaved input
+  useEffect(() => onHold(busy || dirty), [busy, dirty]); // eslint-disable-line react-hooks/exhaustive-deps -- onHold is a state setter
   const [problem, setProblem] = useState<{ reason: string; errors: string[] } | null>(null);
 
   // a failed call can still have changed the server (a 502 after approve leaves "publish-failed"), so the data reloads either way;
@@ -94,7 +98,7 @@ function Loaded({ meta, route, data, reload, loadError }: { meta: Meta; route: M
 
       <div role="tabpanel" id="pol-panel" aria-labelledby={`tab-${tab}`}>
         {tab === 'policy' ? <PolicyView party={party} data={data} />
-          : tab === 'draft' ? <DraftForm key={acting.current.n} party={party} owner={owner} acting={acting} bi={data.network.current.doc as BiPolicy} by={by} act={act} busy={busy} onSubmitted={() => setToApprove(true)} />
+          : tab === 'draft' ? <DraftForm key={acting.current.n} party={party} owner={owner} acting={acting} bi={data.network.current.doc as BiPolicy} by={by} act={act} busy={busy} onSubmitted={() => setToApprove(true)} onDirty={setDirty} />
           : tab === 'approve' ? <Approval party={party} owner={owner} acting={acting} by={by} act={act} busy={busy} />
           : <VersionHistory party={party} owner={owner} acting={acting} by={by} act={act} busy={busy} onRestored={() => setToApprove(true)} />}
       </div>
@@ -108,8 +112,16 @@ const STATE_SUB = { publishing: 'Sedang diterbitkan ke gateway', 'publish-failed
 export function Policy({ meta, route }: { meta: Meta; route: ModelRoute }) {
   const policy = usePoll(`${route.party}|kebijakan`, () => getPolicy(route.party));
   const last = useRef<PolicyData>();
-  if (policy.data !== undefined) last.current = policy.data;
-  const { shown, loadError, fatal } = keepLast(policy.data, policy.error, last.current);
+  const [held, setHeld] = useState(false);
+  const heldRef = useRef(held);
+  heldRef.current = held;
+  const reloadRef = useRef(policy.reload);
+  reloadRef.current = policy.reload;
+  // other people's changes show up without a reload: every 15 s and when the window regains focus
+  useEffect(() => startRefresh(() => reloadRef.current(), () => heldRef.current, REFRESH_MS, window), []);
+  const fresh = shownData(policy.data, last.current, held);
+  if (fresh !== undefined) last.current = fresh;
+  const { shown, loadError, fatal } = keepLast(fresh, policy.error, last.current);
   if (fatal) {
     return policy.status === 501 ? <NotAvailable reason={policy.error!} /> : (
       <div className="state error" role="alert">
@@ -120,5 +132,5 @@ export function Policy({ meta, route }: { meta: Meta; route: ModelRoute }) {
     );
   }
   if (shown === undefined) return <Loading rows={4} />;
-  return <Loaded meta={meta} route={route} data={shown} reload={policy.reload} loadError={loadError} />;
+  return <Loaded meta={meta} route={route} data={shown} reload={policy.reload} loadError={loadError} onHold={setHeld} />;
 }

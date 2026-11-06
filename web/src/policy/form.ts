@@ -6,10 +6,10 @@ const TOKENS: Token[] = ['RD', 'DFABI'];
 const MAX = 10 ** 15;
 const nf = new Intl.NumberFormat(ID, { maximumFractionDigits: 0 });
 
-// Whole positive number as typed: plain digits, or "." thousand groups of 3. Returns the number or an Indonesian error.
+// Whole positive number as typed: plain digits without leading zeros, or "." thousand groups of 3. Returns the number or an Indonesian error.
 export function parseAmount(s: string): number | string {
   const t = s.trim();
-  if (!/^(\d+|\d{1,3}(\.\d{3})+)$/.test(t)) return 'Isi dengan angka bulat positif';
+  if (!/^(0|[1-9]\d*|[1-9]\d{0,2}(\.\d{3})+)$/.test(t)) return 'Isi dengan angka bulat positif';
   const n = Number(t.replaceAll('.', ''));
   if (n === 0) return 'Isi dengan angka bulat positif';
   return n > MAX ? 'Maksimal 1.000.000.000.000.000' : n;
@@ -69,8 +69,13 @@ export function diffDocs(a: PolicyDoc, b: PolicyDoc): Change[] {
     const delta = [...kb.filter((k) => !ka.includes(k)).map((k) => `+${date(k)}`), ...ka.filter((k) => !kb.includes(k)).map((k) => `−${date(k)}`)];
     if (delta.length) out.push({ label: 'Hari libur', from: `${ka.length} tanggal`, to: `${kb.length} tanggal (${delta.join(', ')})` });
   }
-  if (x.frozen || y.frozen) add('Pembekuan', names(x.frozen), names(y.frozen));
-  if (x.counterparties || y.counterparties) add('Counterparty', names(x.counterparties), names(y.counterparties));
+  // lists of banks are sets: a different order is no change
+  const sameSet = (p: string[] = [], q: string[] = []) => new Set(p).size === new Set(q).size && p.every((i) => q.includes(i));
+  const addSet = (label: string, p: string[] | undefined, q: string[] | undefined) => {
+    if (!sameSet(p, q)) out.push({ label, from: names(p), to: names(q) });
+  };
+  if (x.frozen || y.frozen) addSet('Pembekuan', x.frozen, y.frozen);
+  if (x.counterparties || y.counterparties) addSet('Counterparty', x.counterparties, y.counterparties);
   return out;
 }
 

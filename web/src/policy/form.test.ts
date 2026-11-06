@@ -13,10 +13,25 @@ test('parseAmount accepts plain digits and dotted thousands', () => {
 });
 
 test.each([
-  ['', POS], ['0', POS], ['-1', POS], ['2,5', POS], ['2.5', POS], ['1e3', POS], ['1.00', POS], ['abc', POS],
+  ['', POS], ['0', POS], ['007', POS], ['00', POS], ['01.000', POS], ['0.000', POS], ['-1', POS], ['2,5', POS], ['2.5', POS], ['1e3', POS], ['1.00', POS], ['abc', POS],
   ['1.000.000.000.000.001', MAX], ['99999999999999999999', MAX],
 ])('parseAmount(%j) is the error %s', (s, msg) => {
   expect(parseAmount(s)).toBe(msg);
+});
+
+test('diffDocs compares Pembekuan and Counterparty as sets: reordering is no change', () => {
+  const b = bi();
+  b.frozen = ['bankC@node4', 'bankB@node3'];
+  const b2 = bi();
+  b2.frozen = ['bankB@node3', 'bankC@node4'];
+  expect(diffDocs(b, b2)).toEqual([]);
+  b2.frozen = ['bankB@node3'];
+  expect(diffDocs(b, b2).map((d) => d.label)).toEqual(['Pembekuan']);
+  const k = bank();
+  const k2 = bank();
+  k.counterparties = ['bankA@node2', 'bankB@node3'];
+  k2.counterparties = ['bankB@node3', 'bankA@node2'];
+  expect(diffDocs(k, k2)).toEqual([]);
 });
 
 test('formatAmount', () => {

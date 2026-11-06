@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { PartyId } from '../../../server/src/domain.ts';
 import type { BankPolicy, BiPolicy, Hours, Owner, Token } from '../../../server/src/policy/types.ts';
 import { submitPolicy, type VersionView } from '../api.ts';
@@ -152,12 +152,16 @@ function useBankForm(bank: BankPolicy, bi: BiPolicy, self: string) {
   return { doc, fields };
 }
 
-interface Props { party: PartyId; owner: Owner; acting: VersionView; bi: BiPolicy; by: string; act: Act; busy: boolean; onSubmitted(): void }
+interface Props { party: PartyId; owner: Owner; acting: VersionView; bi: BiPolicy; by: string; act: Act; busy: boolean; onSubmitted(): void; onDirty(dirty: boolean): void }
 
 // Shared frame: steps, fields, reason, and the one button. Name and reason are checked by the server, whose answer is shown as is.
-function Frame({ party, owner, by, act, busy, onSubmitted, title, doc, fields }: Omit<Props, 'acting' | 'bi'> & { title: string; doc(): BiPolicy | BankPolicy | null; fields: ReactNode }) {
+function Frame({ party, owner, by, act, busy, onSubmitted, onDirty, title, doc, fields }: Omit<Props, 'acting' | 'bi'> & { title: string; doc(): BiPolicy | BankPolicy | null; fields: ReactNode }) {
   const [reason, setReason] = useState('');
   const valid = doc() !== null;
+  // unsaved input = any field differs from the first render's, or a reason is typed; the screen then stops refreshing
+  const start = useRef(JSON.stringify(doc()));
+  const dirty = reason !== '' || JSON.stringify(doc()) !== start.current;
+  useEffect(() => { onDirty(dirty); return () => onDirty(false); }, [dirty]); // eslint-disable-line react-hooks/exhaustive-deps -- onDirty is a state setter
   return (
     <form className="polform" onSubmit={(e) => {
       e.preventDefault();
