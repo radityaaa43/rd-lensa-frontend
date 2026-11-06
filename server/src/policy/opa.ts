@@ -31,6 +31,7 @@ export class Opa {
     const biFile = join(outDir, 'bi/bi/config/data.json');
     const data = JSON.parse(readFileSync(biFile, 'utf8'));
     data.zeto = { ...data.zeto, max_per_tx: bi.max_per_tx, max_mint_per_tx: bi.max_mint_per_tx };
+    data.noto = { ...data.noto, max_balance: bi.max_balance, min_balance: bi.min_balance, max_supply: bi.max_supply }; // optional: undefined is not written
     data.hours = bi.hours;
     data.holidays = bi.holidays;
     data.frozen = bi.frozen;

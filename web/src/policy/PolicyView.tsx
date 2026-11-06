@@ -96,7 +96,7 @@ function BankView({ party, data, rail }: { party: PartyId; data: PolicyData; rai
   );
 }
 
-function BiView({ data }: { data: PolicyData }) {
+function BiView({ data, rail }: { data: PolicyData; rail: Rail }) {
   const bi = data.network.current.doc as BiPolicy;
   return (
     <>
@@ -153,12 +153,30 @@ function BiView({ data }: { data: PolicyData }) {
           </tbody>
         </table></div>
       </Section>
-      <Section title="Belum tersedia di Zeto (off-chain)" who="Menunggu fase on-chain">
-        <div className="polna">
-          <div className="polrow"><span>Saldo maksimal dan minimal peserta</span><span className="badge off">Saldo pihak lain tersegel</span></div>
-          <div className="polrow"><span>Limit total sirkulasi</span><span className="badge off">Total suplai tersegel</span></div>
-        </div>
-      </Section>
+      {rail === 'zeto' ? (
+        <Section title="Belum tersedia di Zeto (off-chain)" who="Menunggu fase on-chain">
+          <div className="polna">
+            <div className="polrow"><span>Saldo maksimal dan minimal peserta</span><span className="badge off">Saldo pihak lain tersegel</span></div>
+            <div className="polrow"><span>Limit total sirkulasi</span><span className="badge off">Total suplai tersegel</span></div>
+          </div>
+        </Section>
+      ) : (
+        <Section title="Saldo dan suplai" who="Diatur BI · hanya untuk Noto">
+          <div className="tablewrap"><table className="poltbl">
+            <caption className="vh">Batas saldo dan suplai BI per token</caption>
+            <thead><tr><th scope="col">Token</th><th scope="col" className="num">Saldo maksimal peserta</th><th scope="col" className="num">Saldo minimal pengirim</th><th scope="col" className="num">Suplai maksimal</th></tr></thead>
+            <tbody>
+              {TOKENS.map((t) => (
+                <tr key={t}>
+                  <th scope="row">{t} <span className="muted">· {ASSET[t]}</span></th>
+                  {([bi.max_balance, bi.min_balance, bi.max_supply] as const).map((c, i) => <td className="num" key={i}>{c?.[t] === undefined ? 'Tanpa batas' : formatAmount(c[t]!, t)}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+          <p className="hint">BI sebagai notaris Noto melihat saldo semua peserta, jadi gateway menanyakannya ke node BI. Penerbitan dan transfer tidak boleh membuat saldo penerima melewati batas atas atau suplai melewati batas suplai; transfer dan DvP tidak boleh menurunkan saldo pengirim di bawah batas bawah. Pembatalan DvP (kunci kembali ke pemiliknya) tidak diperiksa. Transaksi yang masih berjalan belum dihitung.</p>
+        </Section>
+      )}
     </>
   );
 }
@@ -169,7 +187,7 @@ export function PolicyView({ party, data, rail }: { party: PartyId; data: Policy
   return (
     <div className="polstack">
       {notYetPublished(acting.pending) && <p className="hint">Versi v{acting.current.n} sudah disetujui tetapi belum terbit ke semua gateway. Sebagian gateway mungkin masih memakai versi sebelumnya.</p>}
-      {party === 'BI' ? <BiView data={data} /> : <BankView party={party} data={data} rail={rail} />}
+      {party === 'BI' ? <BiView data={data} rail={rail} /> : <BankView party={party} data={data} rail={rail} />}
     </div>
   );
 }

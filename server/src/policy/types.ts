@@ -4,6 +4,8 @@ export interface Hours { days: number[]; open: string; close: string }
 export interface BiPolicy {
   max_per_tx: Record<Token, number>; max_mint_per_tx: Record<Token, number>;
   hours: Record<Token, Hours>; holidays: { date: string; name: string }[]; frozen: string[];
+  // Noto only (BI's node is the notary and sees balances); a missing token = no check
+  max_balance?: Partial<Record<Token, number>>; min_balance?: Partial<Record<Token, number>>; max_supply?: Partial<Record<Token, number>>;
 }
 export interface BankPolicy {
   counterparties: string[]; max_per_tx?: Partial<Record<Token, number>>;

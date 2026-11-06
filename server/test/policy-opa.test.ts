@@ -32,6 +32,17 @@ test.skipIf(need)('check of a bank doc sees BI limits', async () => {
     .toContain('Limit per transaksi RD: tidak boleh lebih longgar dari batas BI');
 });
 
+test.skipIf(need)('check returns the Indonesian errors for Noto balance controls', async () => {
+  const bi: BiPolicy = { ...seed<BiPolicy>('bi'), max_balance: { RD: 0 }, min_balance: { DFABI: 50 }, max_supply: { RD: 10 ** 16 } };
+  bi.max_balance!.DFABI = 50;
+  expect(await opa.check('bi', bi, bi)).toEqual(expect.arrayContaining([
+    'Saldo maksimal RD: harus bilangan bulat positif',
+    'Saldo minimal DFABI: harus lebih kecil dari saldo maksimal',
+    'Suplai maksimal RD: melebihi 1.000.000.000.000.000',
+  ]));
+  expect(await opa.check('bi', { ...bi, max_balance: { RD: 5 }, min_balance: { RD: 1 }, max_supply: { RD: 9 } }, bi)).toEqual([]);
+});
+
 test.skipIf(need)('check throws when the validator package is gone (fail closed)', async () => {
   // a copy of besu/opa whose bank check package was renamed: the eval result is undefined, not []
   const root = tmp();
@@ -73,6 +84,17 @@ test.skipIf(need)('assemble keeps git participants and overlays editable keys', 
   expect(existsSync(join(out, 'bank/bank/paladin/paladin.rego'))).toBe(true);
   // git source untouched
   expect(JSON.parse(readFileSync(join(OPA_ROOT, 'bundles/bi/bi/config/data.json'), 'utf8'))).toEqual(git);
+});
+
+test.skipIf(need)('assemble writes the Noto balance controls only when BI sets them', () => {
+  const [plain, capped] = [tmp(), tmp()];
+  const bank: BankPolicy = { counterparties: ['bi@node1'] };
+  opa.assemble(2, seed<BiPolicy>('bi'), bank, plain);
+  const none = JSON.parse(readFileSync(join(plain, 'bi/bi/config/data.json'), 'utf8')).noto;
+  expect(Object.keys(none)).toEqual(['contracts']);
+  opa.assemble(2, { ...seed<BiPolicy>('bi'), max_balance: { RD: 100 }, max_supply: { DFABI: 7 } }, bank, capped);
+  const noto = JSON.parse(readFileSync(join(capped, 'bi/bi/config/data.json'), 'utf8')).noto;
+  expect(noto).toEqual({ contracts: none.contracts, max_balance: { RD: 100 }, max_supply: { DFABI: 7 } });
 });
 
 test.skipIf(need)('build writes a bundle tarball', async () => {

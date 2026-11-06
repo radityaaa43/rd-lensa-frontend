@@ -89,18 +89,37 @@ function Holidays({ value, onChange }: { value: BiPolicy['holidays']; onChange(h
   );
 }
 
-// BI's form: limits, hours, holidays and freezes of the network document.
-function useBiForm(bi: BiPolicy) {
+type Optional = Partial<Record<Token, number>>;
+const CONTROLS = ['max_balance', 'min_balance', 'max_supply'] as const;
+
+// BI's form: limits, hours, holidays and freezes of the network document. The Noto balance controls are shown on the
+// Noto rail only; on the Zeto rail they stay in the document as they are.
+function useBiForm(bi: BiPolicy, noto: boolean) {
   const [tx, setTx] = useState<Amounts>({ RD: text(bi.max_per_tx.RD), DFABI: text(bi.max_per_tx.DFABI) });
   const [mint, setMint] = useState<Amounts>({ RD: text(bi.max_mint_per_tx.RD), DFABI: text(bi.max_mint_per_tx.DFABI) });
   const [hours, setHours] = useState<Record<Token, Hours>>(bi.hours);
   const [holidays, setHolidays] = useState(bi.holidays);
   const [frozen, setFrozen] = useState(bi.frozen);
+  const [ctl, setCtl] = useState<Record<(typeof CONTROLS)[number], Amounts>>({
+    max_balance: { RD: text(bi.max_balance?.RD), DFABI: text(bi.max_balance?.DFABI) },
+    min_balance: { RD: text(bi.min_balance?.RD), DFABI: text(bi.min_balance?.DFABI) },
+    max_supply: { RD: text(bi.max_supply?.RD), DFABI: text(bi.max_supply?.DFABI) },
+  });
   const doc = (): BiPolicy | null => {
     const num = (a: Amounts) => ({ RD: parse(a.RD, false).value, DFABI: parse(a.DFABI, false).value });
     const [t, m] = [num(tx), num(mint)];
     if (t.RD === undefined || t.DFABI === undefined || m.RD === undefined || m.DFABI === undefined || TOKENS.some((k) => hoursError(hours[k]))) return null;
-    return { max_per_tx: { RD: t.RD, DFABI: t.DFABI }, max_mint_per_tx: { RD: m.RD, DFABI: m.DFABI }, hours, holidays, frozen };
+    const out: BiPolicy = { max_per_tx: { RD: t.RD, DFABI: t.DFABI }, max_mint_per_tx: { RD: m.RD, DFABI: m.DFABI }, hours, holidays, frozen };
+    for (const c of CONTROLS) {
+      const v: Optional = {};
+      for (const k of TOKENS) {
+        const p = parse(ctl[c][k], true);
+        if (p.error) return null;
+        if (p.value !== undefined) v[k] = p.value;
+      }
+      if (Object.keys(v).length) out[c] = v; // a document without the control stays without it
+    }
+    return out;
   };
   const fields = (
     <>
@@ -108,6 +127,16 @@ function useBiForm(bi: BiPolicy) {
         {TOKENS.map((k) => <AmountField key={`t${k}`} id={`tx-${k}`} label={`Maks. transfer ${k} per transaksi (${UNIT[k]})`} value={tx[k]} onChange={(v) => setTx({ ...tx, [k]: v })} />)}
         {TOKENS.map((k) => <AmountField key={`m${k}`} id={`mint-${k}`} label={`Maks. penerbitan ${k} per transaksi (${UNIT[k]})`} value={mint[k]} onChange={(v) => setMint({ ...mint, [k]: v })} />)}
       </div>
+      {noto && (
+        <>
+          <div className="polfields">
+            {TOKENS.map((k) => <AmountField key={`xb${k}`} id={`maxbal-${k}`} label={`Saldo maksimal ${k} per peserta (${UNIT[k]})`} value={ctl.max_balance[k]} optional hint="Kosongkan bila tidak dibatasi" onChange={(v) => setCtl({ ...ctl, max_balance: { ...ctl.max_balance, [k]: v } })} />)}
+            {TOKENS.map((k) => <AmountField key={`nb${k}`} id={`minbal-${k}`} label={`Saldo minimal ${k} pengirim (${UNIT[k]})`} value={ctl.min_balance[k]} optional hint="Kosongkan bila tidak dibatasi" onChange={(v) => setCtl({ ...ctl, min_balance: { ...ctl.min_balance, [k]: v } })} />)}
+            {TOKENS.map((k) => <AmountField key={`ms${k}`} id={`supply-${k}`} label={`Suplai maksimal ${k} (${UNIT[k]})`} value={ctl.max_supply[k]} optional hint="Kosongkan bila tidak dibatasi" onChange={(v) => setCtl({ ...ctl, max_supply: { ...ctl.max_supply, [k]: v } })} />)}
+          </div>
+          <p className="hint">Hanya untuk Noto, karena BI sebagai notaris melihat saldo semua peserta. Dicek gateway ke node BI saat transaksi diajukan; transaksi yang masih berjalan belum dihitung. Saldo minimal tidak berlaku untuk penerbitan dan pembatalan DvP.</p>
+        </>
+      )}
       {TOKENS.map((k) => <HoursField key={k} token={k} value={hours[k]} onChange={(h) => setHours({ ...hours, [k]: h })} />)}
       <Holidays value={holidays} onChange={setHolidays} />
       <Checks title="Pembekuan peserta" ids={PARTICIPANTS.filter((x) => x.party !== 'BI').map((x) => x.id)} value={frozen} onChange={setFrozen} label={(_, n) => `${n} dibekukan`} />
@@ -152,7 +181,7 @@ function useBankForm(bank: BankPolicy, bi: BiPolicy, self: string) {
   return { doc, fields };
 }
 
-interface Props { party: PartyId; owner: Owner; acting: VersionView; bi: BiPolicy; by: string; act: Act; busy: boolean; onSubmitted(): void; onDirty(dirty: boolean): void }
+interface Props { party: PartyId; rail: 'zeto' | 'noto'; owner: Owner; acting: VersionView; bi: BiPolicy; by: string; act: Act; busy: boolean; onSubmitted(): void; onDirty(dirty: boolean): void }
 
 // Shared frame: steps, fields, reason, and the one button. Name and reason are checked by the server, whose answer is shown as is.
 function Frame({ party, owner, by, act, busy, onSubmitted, onDirty, title, doc, fields }: Omit<Props, 'acting' | 'bi'> & { title: string; doc(): BiPolicy | BankPolicy | null; fields: ReactNode }) {
@@ -183,7 +212,7 @@ function Frame({ party, owner, by, act, busy, onSubmitted, onDirty, title, doc, 
   );
 }
 
-const BiForm = (p: Props) => { const f = useBiForm(p.acting.current.doc as BiPolicy); return <Frame {...p} title="Draf perubahan · Kebijakan jaringan" doc={f.doc} fields={f.fields} />; };
+const BiForm = (p: Props) => { const f = useBiForm(p.acting.current.doc as BiPolicy, p.rail === 'noto'); return <Frame {...p} title="Draf perubahan · Kebijakan jaringan" doc={f.doc} fields={f.fields} />; };
 const BankForm = (p: Props) => { const f = useBankForm(p.acting.current.doc as BankPolicy, p.bi, idOf(p.party)); return <Frame {...p} title="Draf perubahan · Kebijakan bank" doc={f.doc} fields={f.fields} />; };
 
 // "Ubah kebijakan": one form for the acting party's own document, started from its current version.
