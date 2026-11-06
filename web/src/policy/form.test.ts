@@ -145,3 +145,16 @@ test('openNow: nothing within 14 days is just closed', () => {
   const hol = Array.from({ length: 15 }, (_, i) => ({ date: new Date(Date.UTC(2026, 10, 5 + i)).toISOString().slice(0, 10) }));
   expect(openNow(WEEK, hol, at('2026-11-05T03:00:00Z'))).toEqual({ open: false, label: 'Tutup' });
 });
+
+test('diffDocs names the Noto balance controls; a missing one reads "Tanpa batas"', () => {
+  const b = bi();
+  b.max_balance = { RD: 5_000_000_000 };
+  b.max_supply = { DFABI: 100_000 };
+  expect(diffDocs(bi(), b)).toEqual([
+    { label: 'Saldo maksimal RD', from: 'Tanpa batas', to: 'Rp 5.000.000.000' },
+    { label: 'Suplai maksimal DFABI', from: 'Tanpa batas', to: '100.000 unit' },
+  ]);
+  const c = { ...b, min_balance: { DFABI: 10 } };
+  expect(diffDocs(b, c)).toEqual([{ label: 'Saldo minimal DFABI', from: 'Tanpa batas', to: '10 unit' }]);
+  expect(diffDocs(c, bi()).map((d) => d.to)).toEqual(['Tanpa batas', 'Tanpa batas', 'Tanpa batas']);
+});

@@ -33,6 +33,7 @@ function useBy() {
 
 function Loaded({ meta, route, data, reload, loadError, onHold }: { meta: Meta; route: ModelRoute; data: PolicyData; reload(): void; loadError: string | null; onHold(held: boolean): void }) {
   const { party } = route;
+  const rail = route.model === 'noto' ? 'noto' : 'zeto';
   const owner = OWNER_OF_PARTY[party];
   const acting = party === 'BI' ? data.network : data.own!;
   const [by, setBy] = useBy();
@@ -97,8 +98,8 @@ function Loaded({ meta, route, data, reload, loadError, onHold }: { meta: Meta; 
       </div>
 
       <div role="tabpanel" id="pol-panel" aria-labelledby={`tab-${tab}`}>
-        {tab === 'policy' ? <PolicyView party={party} data={data} />
-          : tab === 'draft' ? <DraftForm key={acting.current.n} party={party} owner={owner} acting={acting} bi={data.network.current.doc as BiPolicy} by={by} act={act} busy={busy} onSubmitted={() => setToApprove(true)} onDirty={setDirty} />
+        {tab === 'policy' ? <PolicyView party={party} data={data} rail={rail} />
+          : tab === 'draft' ? <DraftForm key={acting.current.n} party={party} rail={rail} owner={owner} acting={acting} bi={data.network.current.doc as BiPolicy} by={by} act={act} busy={busy} onSubmitted={() => setToApprove(true)} onDirty={setDirty} />
           : tab === 'approve' ? <Approval party={party} owner={owner} acting={acting} by={by} act={act} busy={busy} />
           : <VersionHistory party={party} owner={owner} acting={acting} by={by} act={act} busy={busy} onRestored={() => setToApprove(true)} />}
       </div>
