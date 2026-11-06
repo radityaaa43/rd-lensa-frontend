@@ -13,7 +13,8 @@ import { joinInFlight } from './besu-network.ts';
 import { scrub } from './besu-trace.ts';
 import { decodeBox, type Decoded, type NoritoCtx } from './iroha3-norito.ts';
 
-// Iroha 3 (071e281e), public lane, no APS yet: RD and DFABI are plain assets, DvP is the native DvpIsi.
+// Iroha 3 (071e281e): 3-lane NPoS network with APS enabled, frontend flows still on the public lane until the APS helper exists.
+// RD and DFABI are plain assets on lane 0, DvP is the native DvpIsi.
 // Every call goes through the official `iroha` CLI in state/iroha3/bin with one party's client config; each party talks
 // to its own validator's Torii (port-forward 127.0.0.1:38080..38083). RD, DFABI, the party accounts and their fee
 // balances come from genesis (iroha3 repo, network/genesis-rd-dfabi.jq).
@@ -33,6 +34,8 @@ const SUBMIT = ['--machine', '--fee-payer', 'authority'];
 const CALL_MS = 180_000;
 const DEADLINE = 120_000;
 const READ_WAIT_MS = 20_000;
+const APS_ACTIVATION_HEIGHT = 11; // [nexus.atomic_private_settlement] activation_height in iroha3/network/nexus.toml
+type Lane = { alias: string; visibility: string };
 const BI_BATCH = 1000n; // smallest DFABI top-up BI mints to its own stock
 const FLOW_IDS = Object.keys(FLOWS) as FlowId[];
 const INTENT_PY = fileURLToPath(new URL('./iroha3-intent.py', import.meta.url));
@@ -459,8 +462,11 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
       try {
         const h = await http(new URL('health', s.torii[p]), { headers: { Accept: 'text/plain' }, signal }); // /health answers text/plain only
         if (!h.ok) return { ...node, status: 'down', detail: `/health HTTP ${h.status}` };
-        const st = await http(new URL('status', s.torii[p]), { headers: { Accept: 'application/json' }, signal }).then((r) => r.json() as Promise<{ blocks: number }>).catch(() => null);
-        return { ...node, status: 'up', detail: st ? `blok ${st.blocks}` : 'sehat' };
+        const getJson = <T>(path: string) => http(new URL(path, s.torii[p]), { headers: { Accept: 'application/json' }, signal }).then((r) => r.json() as Promise<T>).catch(() => null);
+        const [st, lc] = await Promise.all([getJson<{ blocks: number }>('status'), getJson<{ lanes?: Lane[] }>('v1/nexus/lifecycle')]);
+        const lanes = lc?.lanes?.length ? `${lc.lanes.length} lane: ${lc.lanes.map((l) => `${l.alias} ${l.visibility === 'public' ? 'publik' : 'terbatas'}`).join(', ')}` : '';
+        const aps = st ? (st.blocks >= APS_ACTIVATION_HEIGHT ? `APS aktif sejak blok ${APS_ACTIVATION_HEIGHT}` : `APS aktif mulai blok ${APS_ACTIVATION_HEIGHT}`) : '';
+        return { ...node, status: 'up', detail: st ? [`blok ${st.blocks}`, lanes, aps, 'alur frontend: lane 0 (transparan)'].filter(Boolean).join(' | ') : 'sehat' };
       } catch (e) { return { ...node, status: 'down', detail: errMsg(e) }; }
     }));
     const links = nodes.flatMap((a, i) => nodes.slice(i + 1).map((b) => ({ from: a.id, to: b.id }))); // full mesh of the four validators
