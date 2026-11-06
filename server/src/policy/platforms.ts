@@ -29,7 +29,7 @@ export const REGISTRY: Record<Platform, PlatformInfo> = {
   noto: { label: 'Noto', gateways: BANK_GATEWAYS, enforced: true, usage: (party, limits) => usage(party, limits, 'noto') },
   // fx-gw-N (fabric-x/opa/DESIGN.md); usage through the bank's gateway, so only once Lensa uses them (LENSA_FABRICX_GW=1)
   fabricx: {
-    label: 'Fabric-X', gateways: ['fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4'], enforced: false,
+    label: 'Fabric-X', gateways: ['fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4'], enforced: true,
     ...(transport() ? { usage: (party: Exclude<PartyId, 'BI'>, limits: Partial<Record<Token, number>> | undefined) => fabricxUsage(party, limits) } : {}),
   },
   iroha3: { label: 'Iroha 3', gateways: [], enforced: false },
