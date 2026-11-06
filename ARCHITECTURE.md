@@ -652,8 +652,8 @@ calls `republish`. At startup `recoverInterrupted()` turns a `publishing` left b
 `screens/Policy.tsx` plus `web/src/policy/` (`PolicyView`, `DraftForm`, `Approval`, `VersionHistory`, `form.ts`, `keep.ts`,
 `shared.tsx`). Route `/besu/zeto/kebijakan`; `Screen` gains `kebijakan` (`route.ts`), in the sidebar "Alat" group
 (`Sidebar.tsx`). `reasonOf` disables it with a reason: `Belum tersedia di platform ini` on Fabric-X and Iroha 3,
-`Kebijakan saat ini hanya untuk Zeto` on Noto and Stealth. `usePoll` keys: `${party}|kebijakan`,
-`${party}|kebijakan-pemakaian`, `${owner}|${party}|riwayat-kebijakan|${n}`. `keepLast` keeps the last data when a reload
+`Kebijakan saat ini hanya untuk Zeto dan Noto` on Stealth. `usePoll` keys: `${party}|kebijakan`,
+`${party}|${rail}|kebijakan-pemakaian` (usage per rail, `/api/policy/usage?model=zeto|noto`), `${owner}|${party}|riwayat-kebijakan|${n}`. `keepLast` keeps the last data when a reload
 fails. A 501 from `/api/policy` shows `NotAvailable` with the server's reason. The name in "Masuk sebagai" is kept per
 browser in `localStorage` (`lensa.policy.by`, access guarded). Publishing to the live cluster has not been done; it needs the
 user's approval of the node2 dry-run (`besu/opa/README.md`).

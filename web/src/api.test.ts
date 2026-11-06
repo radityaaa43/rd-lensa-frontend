@@ -63,10 +63,10 @@ test('a 422 reply keeps the server errors list', async () => {
 test('policy calls hit the owner routes', async () => {
   const fetchMock = vi.fn().mockResolvedValue({ ok: true, headers: new Headers(), json: async () => ({}) });
   vi.stubGlobal('fetch', fetchMock);
-  await getPolicy('A'); await getPolicyHistory('bank-a', 'A'); await getPolicyUsage('B');
+  await getPolicy('A'); await getPolicyHistory('bank-a', 'A'); await getPolicyUsage('B', 'zeto');
   await approvePolicy('bi', { pihak: 'A', by: 'x', note: '' });
   expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
-    '/api/policy?pihak=A', '/api/policy/bank-a/history?pihak=A', '/api/policy/usage?pihak=B', '/api/policy/bi/approve',
+    '/api/policy?pihak=A', '/api/policy/bank-a/history?pihak=A', '/api/policy/usage?pihak=B&model=zeto', '/api/policy/bi/approve',
   ]);
   expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'POST', body: JSON.stringify({ pihak: 'A', by: 'x', note: '' }) });
 });

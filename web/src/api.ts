@@ -64,7 +64,7 @@ export interface PolicyView { network: VersionView; own: VersionView | null; ban
 export type PolicyUsage = Record<Token, { used: number; limit: number | null }>;
 export const getPolicy = (party: PartyId) => call<PolicyView>(`/api/policy?pihak=${party}`);
 export const getPolicyHistory = (owner: Owner, party: PartyId) => call<Version[]>(`/api/policy/${owner}/history?pihak=${party}`);
-export const getPolicyUsage = (party: PartyId) => call<PolicyUsage>(`/api/policy/usage?pihak=${party}`);
+export const getPolicyUsage = (party: PartyId, model: 'zeto' | 'noto') => call<PolicyUsage>(`/api/policy/usage?pihak=${party}&model=${model}`);
 export const submitPolicy = (owner: Owner, body: { pihak: PartyId; by: string; reason: string; doc: PolicyDoc }) => post<Pending>(`/api/policy/${owner}/drafts`, body);
 export const approvePolicy = (owner: Owner, body: { pihak: PartyId; by: string; note: string }) => post<Version>(`/api/policy/${owner}/approve`, body);
 export const rejectPolicy = (owner: Owner, body: { pihak: PartyId; by: string; note: string }) => post<{ ok: true }>(`/api/policy/${owner}/reject`, body);

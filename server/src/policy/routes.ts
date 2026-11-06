@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { PartyId } from '../domain.ts';
 import type { PolicyStore } from './store.ts';
+import type { Rail } from './usage.ts';
 import type { PolicyWorkflow } from './workflow.ts';
 import { OWNER_OF_PARTY, PolicyError } from './types.ts';
 import type { GatewayStatus, Owner, Pending, PolicyDoc, Token, Version } from './types.ts';
@@ -9,7 +10,7 @@ export type PolicyDeps = {
   store: PolicyStore;
   workflow: PolicyWorkflow;
   status: () => Promise<GatewayStatus[]>;
-  usage?: (party: 'A' | 'B' | 'C') => Promise<Record<Token, { used: number; limit: number | null }>>;
+  usage?: (party: 'A' | 'B' | 'C', rail: Rail) => Promise<Record<Token, { used: number; limit: number | null }>>;
 };
 export interface VersionView { owner: Owner; current: Version; pending: Pending | null }
 
@@ -22,6 +23,7 @@ const owner = { type: 'object', required: ['owner'], properties: { owner: { enum
 const by = { type: 'string', maxLength: 60 } as const;
 const text = { type: 'string', maxLength: 500 } as const;
 const query = { type: 'object', additionalProperties: false, required: ['pihak'], properties: { pihak } } as const;
+const usageQuery = { type: 'object', additionalProperties: false, required: ['pihak'], properties: { pihak, model: { enum: ['zeto', 'noto'] } } } as const;
 const body = (props: Record<string, unknown>) =>
   ({ type: 'object', additionalProperties: false, required: ['pihak', 'by', ...Object.keys(props)], properties: { pihak, by, ...props } }) as const;
 const draftBody = body({ reason: text, doc: { type: 'object' } });
@@ -60,11 +62,11 @@ export function registerPolicyRoutes(app: FastifyInstance, deps: PolicyDeps): vo
   });
 
   // what the bank's own node shows it sent today, for "Terpakai hari ini"; BI has no daily limit
-  app.get<{ Querystring: { pihak: PartyId } }>('/api/policy/usage', { schema: { querystring: query } }, async (req, reply) => {
+  app.get<{ Querystring: { pihak: PartyId; model?: Rail } }>('/api/policy/usage', { schema: { querystring: usageQuery } }, async (req, reply) => {
     const p = req.query.pihak;
     if (p === 'BI') return denied(reply);
     try {
-      return await deps.usage!(p);
+      return await deps.usage!(p, req.query.model ?? 'zeto');
     } catch (e) {
       console.error(`Pemakaian harian ${p} gagal dibaca:`, e);
       return reply.code(502).send({ reason: 'Gagal membaca pemakaian hari ini' });

@@ -32,8 +32,10 @@ function HoursTile({ token, hours, holidays, bi }: { token: Token; hours: Hours 
 
 const cpText = (ids: string[]) => (ids.length === PARTICIPANTS.length - 1 ? 'Semua peserta' : ids.length ? ids.map(nameOfId).join(', ') : 'Tidak ada');
 
-function Usage({ party, doc }: { party: PartyId; doc: BankPolicy }) {
-  const usage = usePoll<PolicyUsage>(`${party}|kebijakan-pemakaian`, () => getPolicyUsage(party));
+type Rail = 'zeto' | 'noto';
+
+function Usage({ party, doc, rail }: { party: PartyId; doc: BankPolicy; rail: Rail }) {
+  const usage = usePoll<PolicyUsage>(`${party}|${rail}|kebijakan-pemakaian`, () => getPolicyUsage(party, rail));
   return (
     <Section title="Limit per token" who="Diatur bank ini · hanya untuk bank ini">
       <div className="tablewrap"><table className="poltbl">
@@ -64,13 +66,13 @@ function Usage({ party, doc }: { party: PartyId; doc: BankPolicy }) {
   );
 }
 
-function BankView({ party, data }: { party: PartyId; data: PolicyData }) {
+function BankView({ party, data, rail }: { party: PartyId; data: PolicyData; rail: Rail }) {
   const bi = data.network.current.doc as BiPolicy;
   const doc = data.own!.current.doc as BankPolicy;
   const self = idOf(party);
   return (
     <>
-      <Usage party={party} doc={doc} />
+      <Usage party={party} doc={doc} rail={rail} />
       <Section title="Counterparty yang diizinkan" who="Diatur bank ini">
         <ul className="polcp">
           {PARTICIPANTS.filter((x) => x.id !== self).map((x) => (
@@ -162,12 +164,12 @@ function BiView({ data }: { data: PolicyData }) {
 }
 
 // "Kebijakan berlaku": what the gateways enforce now. BI reads the banks' documents here, read-only.
-export function PolicyView({ party, data }: { party: PartyId; data: PolicyData }) {
+export function PolicyView({ party, data, rail }: { party: PartyId; data: PolicyData; rail: Rail }) {
   const acting = party === 'BI' ? data.network : data.own!;
   return (
     <div className="polstack">
       {notYetPublished(acting.pending) && <p className="hint">Versi v{acting.current.n} sudah disetujui tetapi belum terbit ke semua gateway. Sebagian gateway mungkin masih memakai versi sebelumnya.</p>}
-      {party === 'BI' ? <BiView data={data} /> : <BankView party={party} data={data} />}
+      {party === 'BI' ? <BiView data={data} /> : <BankView party={party} data={data} rail={rail} />}
     </div>
   );
 }

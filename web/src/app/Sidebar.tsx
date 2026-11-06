@@ -22,7 +22,7 @@ const LABEL: Record<Screen, string> = {
 
 // why a screen cannot be used by this party on this model; undefined = usable (DESIGN.md §10, UX journey (e))
 export function reasonOf(meta: Meta, r: ModelRoute, s: Screen): string | undefined {
-  if (s === 'kebijakan') return PLATFORM_OF[r.model] !== 'besu' ? 'Belum tersedia di platform ini' : r.model !== 'zeto' ? 'Kebijakan saat ini hanya untuk Zeto' : undefined;
+  if (s === 'kebijakan') return PLATFORM_OF[r.model] !== 'besu' ? 'Belum tersedia di platform ini' : !['zeto', 'noto'].includes(r.model) ? 'Kebijakan saat ini hanya untuk Zeto dan Noto' : undefined;
   const caps = meta.models[r.model].capabilities;
   const allOff = (flows: FlowId[]) => {
     const c = caps[flows[0]];

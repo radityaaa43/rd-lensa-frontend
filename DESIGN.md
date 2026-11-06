@@ -358,12 +358,12 @@ Per platform/model, ?pihak=BI|A|B|C on every URL:
   /transfer   Transfer: form (7.9) → progress → lens
   /dvp        DvP (bank) or Penjualan perdana (BI)
   /lensa/:tx  Lensa (7.10)
-  /kebijakan  Kebijakan (7.14), Besu Zeto only
+  /kebijakan  Kebijakan (7.14), Besu Zeto and Noto
   /laporan    Laporan ke BI (7.11), Zeto + Fabric-X
   /tps        Stress test TPS: config · live line chart · bar chart (7.8)
 ```
 
-Sidebar items in order: "Dasbor", "Riwayat", "Transfer", "DvP", then under "Alat": "Lensa", "Kebijakan", "Laporan ke BI", "Stress test TPS". Footer: "Ganti platform". Disabled items stay in the nav with their reason, never hidden ("Laporan ke BI" for a bank: "Hanya BI yang menerima laporan"; hidden on Iroha 3; "Kebijakan" off Zeto: "Belum tersedia di platform ini" on Fabric-X and Iroha 3, "Kebijakan saat ini hanya untuk Zeto" on Noto and Stealth).
+Sidebar items in order: "Dasbor", "Riwayat", "Transfer", "DvP", then under "Alat": "Lensa", "Kebijakan", "Laporan ke BI", "Stress test TPS". Footer: "Ganti platform". Disabled items stay in the nav with their reason, never hidden ("Laporan ke BI" for a bank: "Hanya BI yang menerima laporan"; hidden on Iroha 3; "Kebijakan" off Zeto: "Belum tersedia di platform ini" on Fabric-X and Iroha 3, "Kebijakan saat ini hanya untuk Zeto dan Noto" on Stealth).
 
 Data per screen is as in ARCHITECTURE.md §3.3; this restyle adds no route and no request, except the Kebijakan screen and its `/api/policy` requests (ARCHITECTURE.md §8).
 

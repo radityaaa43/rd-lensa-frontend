@@ -7,11 +7,12 @@ type ModelRoute = Extract<Route, { page: 'model' }>;
 const meta = {} as Meta; // the kebijakan reasons do not read capabilities
 const r = (model: ModelRoute['model']): ModelRoute => ({ page: 'model', model, screen: 'kebijakan', party: 'BI' });
 
-test('kebijakan is usable on Besu Zeto', () => {
+test('kebijakan is usable on Besu Zeto and Noto', () => {
   expect(reasonOf(meta, r('zeto'), 'kebijakan')).toBeUndefined();
+  expect(reasonOf(meta, r('noto'), 'kebijakan')).toBeUndefined();
 });
 test('kebijakan reason on another Besu model', () => {
-  expect(reasonOf(meta, r('noto'), 'kebijakan')).toBe('Kebijakan saat ini hanya untuk Zeto');
+  expect(reasonOf(meta, r('stealth'), 'kebijakan')).toBe('Kebijakan saat ini hanya untuk Zeto dan Noto');
 });
 test('kebijakan reason on other platforms', () => {
   expect(reasonOf(meta, r('fabricx'), 'kebijakan')).toBe('Belum tersedia di platform ini');

@@ -30,7 +30,7 @@ export function bootPolicy(env: NodeJS.ProcessEnv, parts: BootParts = {}): Polic
       throw new PolicyError(502, 'Gagal terbit ke gateway');
     });
     return { store, workflow: new PolicyWorkflow(store, opa, publish), status: () => publisher.status(),
-      usage: (p) => usage(p, (store.current(OWNER_OF_PARTY[p]).doc as BankPolicy).daily_limit) };
+      usage: (p, rail) => usage(p, (store.current(OWNER_OF_PARTY[p]).doc as BankPolicy).daily_limit, rail) };
   } catch (e) {
     console.error('Kebijakan dinonaktifkan, gagal dimulai:', e);
     return undefined;
