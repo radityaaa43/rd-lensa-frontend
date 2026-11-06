@@ -13,8 +13,10 @@ import { joinInFlight } from './besu-network.ts';
 import { scrub } from './besu-trace.ts';
 import { decodeBox, type Decoded, type NoritoCtx } from './iroha3-norito.ts';
 
-// Iroha 3 (071e281e): 3-lane NPoS network with APS enabled, frontend flows still on the public lane until the APS helper exists.
-// RD and DFABI are plain assets on lane 0, DvP is the native DvpIsi.
+// Iroha 3 (071e281e): 3-lane NPoS network with APS enabled; the frontend flows run on lane 1 (restricted dataspace ds-rd).
+// RD and DFABI are DataspaceRestricted assets with one shared home dataspace, ds-rd (id 1): a DvpIsi whose legs sit in two
+// different restricted dataspaces cannot execute (iroha core isi/settlement.rs dvp_rejects_counterparty_consent_outside_execution_dataspace).
+// DvP is the native DvpIsi; its payment leg is consented with the exact dataspace balance (core settlement.rs resolve_authorized_settlement_leg_asset_ids).
 // Every call goes through the official `iroha` CLI in state/iroha3/bin with one party's client config; each party talks
 // to its own validator's Torii (port-forward 127.0.0.1:38080..38083). RD, DFABI, the party accounts and their fee
 // balances come from genesis (iroha3 repo, network/genesis-rd-dfabi.jq).
@@ -35,6 +37,7 @@ const CALL_MS = 180_000;
 const DEADLINE = 120_000;
 const READ_WAIT_MS = 20_000;
 const APS_ACTIVATION_HEIGHT = 11; // [nexus.atomic_private_settlement] activation_height in iroha3/network/nexus.toml
+const HOME_DATASPACE = 1; // id of ds-rd in iroha3/network/nexus.toml, the home of RD and DFABI (generate.sh HOME_DS)
 type Lane = { alias: string; visibility: string };
 const BI_BATCH = 1000n; // smallest DFABI top-up BI mints to its own stock
 const FLOW_IDS = Object.keys(FLOWS) as FlowId[];
@@ -118,11 +121,12 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
   const op = (p: PartyId) => `op-${CONFIG[p]}`; // node operator account on p's own validator (CanReadAllLedgerData)
 
   // In the party's lane with the history scan: a Torii answers one query at a time, a balance read racing a scan got HTTP 429.
+  // Read as the party's node operator: bank C has no CanReadRestrictedDataspace grant, so its own account is refused (HTTP 403) on ds-rd.
   async function balanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
     // A history scan can hold the lane for seconds: the wait has a deadline, so run()'s balance check and loadCapacity never hang on it.
     return withDeadline(inLane(party, async () => {
       try {
-        const { value } = await json<{ value: string }>(CONFIG[party], ['--machine', 'ledger', 'asset', 'get', '--definition', s.assets[asset], '--account', acct[party]]);
+        const { value } = await json<{ value: string }>(op(party), ['--machine', 'ledger', 'asset', 'get', '--definition', s.assets[asset], '--account', acct[party], '--scope', `dataspace:${HOME_DATASPACE}`]);
         return BigInt(value);
       } catch (e) {
         if (/HTTP 404/.test(rawMsg(e))) return 0n; // no balance record yet
@@ -199,10 +203,11 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
       if (stock < amount) await mint(req.from, 'DFABI', amount - stock > BI_BATCH ? amount - stock : BI_BATCH);
     }
     if (dvp) {
-      // The buyer consents to exactly this DvP: CanExecuteSettlement on its RD balance, bound to the settlement id and the
-      // intent hash of the whole instruction (core isi/settlement.rs:563-627). Keys in canonical (sorted) order.
+      // The buyer consents to exactly this DvP: CanExecuteSettlement on its RD balance in ds-rd (a restricted asset needs the exact
+      // dataspace balance, `#dataspace:<id>`), bound to the settlement id and the intent hash of the whole instruction
+      // (core isi/settlement.rs:563-627). Keys in canonical (sorted) order.
       const intent = await intentHash(JSON.stringify([await render(p.signer, p.args)]));
-      const consent = JSON.stringify({ name: 'CanExecuteSettlement', payload: { debited_asset: `${s.assets.RD}#${acct[req.to]}`, intent_hash: intent, settlement_id: sid } });
+      const consent = JSON.stringify({ name: 'CanExecuteSettlement', payload: { debited_asset: `${s.assets.RD}#${acct[req.to]}#dataspace:${HOME_DATASPACE}`, intent_hash: intent, settlement_id: sid } });
       await cli(CONFIG[req.to], [...SUBMIT, 'ledger', 'account', 'permission', 'grant', '--id', acct[req.from]], consent); // waits until applied
       emit(0, Date.now() - t0);
       // `app settlement dvp` has no --no-wait: it returns once applied, so lane and block share one boundary.
@@ -458,7 +463,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
         const [st, lc] = await Promise.all([getJson<{ blocks: number }>('status'), getJson<{ lanes?: Lane[] }>('v1/nexus/lifecycle')]);
         const lanes = lc?.lanes?.length ? `${lc.lanes.length} lane: ${lc.lanes.map((l) => `${l.alias} ${l.visibility === 'public' ? 'publik' : 'terbatas'}`).join(', ')}` : '';
         const aps = st ? (st.blocks >= APS_ACTIVATION_HEIGHT ? `APS aktif sejak blok ${APS_ACTIVATION_HEIGHT}` : `APS aktif mulai blok ${APS_ACTIVATION_HEIGHT}`) : '';
-        return { ...node, status: 'up', detail: st ? [`blok ${st.blocks}`, lanes, aps, 'alur frontend: lane 0 (transparan)'].filter(Boolean).join(' | ') : 'sehat' };
+        return { ...node, status: 'up', detail: st ? [`blok ${st.blocks}`, lanes, aps, 'alur frontend: lane 1 (ds-rd, terbatas)'].filter(Boolean).join(' | ') : 'sehat' };
       } catch (e) { return { ...node, status: 'down', detail: errMsg(e) }; }
     }));
     const links = nodes.flatMap((a, i) => nodes.slice(i + 1).map((b) => ({ from: a.id, to: b.id }))); // full mesh of the four validators

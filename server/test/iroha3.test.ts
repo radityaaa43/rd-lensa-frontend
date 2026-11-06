@@ -52,12 +52,12 @@ describe('iroha3 intent hash', () => {
   });
 });
 
-describe('iroha3 BI balance', () => {
-  it('reads BI\'s own account on BI\'s own node', async () => {
+describe('iroha3 balance', () => {
+  it('reads the account\'s ds-rd balance as the operator of the party\'s own node (bank C has no restricted-read grant)', async () => {
     const f = fake({ balance: '42' });
-    expect(await createIroha3Adapter(state, f.cli).balanceOf('BI', 'RD')).toBe(42n);
-    expect(f.calls.at(-1)).toMatchObject({ config: 'bi' });
-    expect(f.calls.at(-1)!.args).toEqual(expect.arrayContaining(['--definition', 'RD-ID', '--account', 'acct-BI']));
+    expect(await createIroha3Adapter(state, f.cli).balanceOf('C', 'RD')).toBe(42n);
+    expect(f.calls.at(-1)).toMatchObject({ config: 'op-bank-c' });
+    expect(f.calls.at(-1)!.args).toEqual(expect.arrayContaining(['--definition', 'RD-ID', '--account', 'acct-C', '--scope', 'dataspace:1']));
   });
 });
 
@@ -80,7 +80,7 @@ describe('iroha3 run', () => {
     expect(grant!.config).toBe('bank-b');
     expect(grant!.args.slice(3)).toEqual(['ledger', 'account', 'permission', 'grant', '--id', 'acct-A']);
     const sid = (r.context as { sid: string }).sid;
-    expect(grant!.stdin).toBe(JSON.stringify({ name: 'CanExecuteSettlement', payload: { debited_asset: 'RD-ID#acct-B', intent_hash: DVP_INTENT, settlement_id: sid } }));
+    expect(grant!.stdin).toBe(JSON.stringify({ name: 'CanExecuteSettlement', payload: { debited_asset: 'RD-ID#acct-B#dataspace:1', intent_hash: DVP_INTENT, settlement_id: sid } }));
     expect(settle!.config).toBe('bank-a');
     expect(settle!.args.slice(3)).toEqual(['app', 'settlement', 'dvp', '--settlement-id', sid,
       '--delivery-asset', 'DFABI-ID', '--delivery-quantity', '2', '--delivery-from', 'acct-A', '--delivery-to', 'acct-B',
@@ -97,7 +97,7 @@ describe('iroha3 run', () => {
     expect(grant!.config).toBe('bank-a');
     expect(grant!.args.slice(3)).toEqual(['ledger', 'account', 'permission', 'grant', '--id', 'acct-BI']);
     const sid = (r.context as { sid: string }).sid;
-    expect(JSON.parse(grant!.stdin!)).toEqual({ name: 'CanExecuteSettlement', payload: { debited_asset: 'RD-ID#acct-A', intent_hash: DVP_INTENT, settlement_id: sid } });
+    expect(JSON.parse(grant!.stdin!)).toEqual({ name: 'CanExecuteSettlement', payload: { debited_asset: 'RD-ID#acct-A#dataspace:1', intent_hash: DVP_INTENT, settlement_id: sid } });
     expect(settle!.config).toBe('bi');
     expect(settle!.args.slice(3)).toEqual(['app', 'settlement', 'dvp', '--settlement-id', sid,
       '--delivery-asset', 'DFABI-ID', '--delivery-quantity', '2', '--delivery-from', 'acct-BI', '--delivery-to', 'acct-A',

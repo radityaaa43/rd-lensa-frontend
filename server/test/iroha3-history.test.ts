@@ -260,7 +260,7 @@ describe('iroha3 network', () => {
     expect(n.nodes.map((x) => [x.id, x.kind, x.owner, x.status])).toEqual([
       ['iroha-bi', 'iroha-peer', 'BI', 'up'], ['iroha-a', 'iroha-peer', 'A', 'up'], ['iroha-b', 'iroha-peer', 'B', 'down'], ['iroha-c', 'iroha-peer', 'C', 'up'],
     ]);
-    expect(n.nodes[0]!.detail).toBe('blok 127 | 3 lane: universal publik, ds-rd terbatas, ds-dfabi terbatas | APS aktif sejak blok 11 | alur frontend: lane 0 (transparan)');
+    expect(n.nodes[0]!.detail).toBe('blok 127 | 3 lane: universal publik, ds-rd terbatas, ds-dfabi terbatas | APS aktif sejak blok 11 | alur frontend: lane 1 (ds-rd, terbatas)');
     expect(n.nodes[2]!.detail).toMatch(/ECONNREFUSED/);
     expect(n.links).toHaveLength(6); // full mesh of 4
     expect(calls.find((c) => c.url.pathname === '/health')!.headers.Accept).toBe('text/plain');
