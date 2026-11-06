@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { PartyId } from '../../../server/src/domain.ts';
-import type { Owner } from '../../../server/src/policy/types.ts';
+import type { Owner, Platform } from '../../../server/src/policy/types.ts';
 import { approvePolicy, cancelPolicy, rejectPolicy, republishPolicy, type VersionView } from '../api.ts';
 import { Empty } from '../ui/States.tsx';
 import { diffDocs } from './form.ts';
@@ -9,15 +9,15 @@ import { Steps, wib, type Act } from './shared.tsx';
 const STATE = { waiting: 'Menunggu persetujuan', publishing: 'Sedang diterbitkan', 'publish-failed': 'Gagal diterbitkan' } as const;
 
 // "Persetujuan": the pending change of the acting party's document, what it changes, and the second person's decision.
-export function Approval({ party, owner, acting, by, act, busy }: {
-  party: PartyId; owner: Owner; acting: VersionView; by: string; act: Act; busy: boolean;
+export function Approval({ party, platform, owner, acting, by, act, busy }: {
+  party: PartyId; platform: Platform; owner: Owner; acting: VersionView; by: string; act: Act; busy: boolean;
 }) {
   const [note, setNote] = useState('');
   const p = acting.pending;
   if (!p) return <Empty title="Tidak ada perubahan yang menunggu persetujuan"><p>Perubahan baru dibuat dari tab Ubah kebijakan.</p></Empty>;
 
   const diff = diffDocs(acting.current.doc, p.doc);
-  const who = { pihak: party, by };
+  const who = { pihak: party, model: platform, by };
   const { passed, total } = p.checks.tests;
   return (
     <section className="polcard" aria-labelledby="h-approve">

@@ -11,7 +11,7 @@ const card = (page: Page, name: string) => page.getByRole('region', { name, exac
 test('BI: Rina drafts, cannot approve her own change, Dimas publishes v2 to the gateway', async ({ page }) => {
   await page.goto('/besu/zeto/kebijakan?pihak=BI');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Kebijakan · Bank Indonesia');
-  await expect(card(page, 'Versi berlaku')).toContainText('v1');
+  await expect(card(page, 'Versi berlaku Zeto')).toContainText('v1');
   await expect(card(page, 'Gateway memakai versi ini')).toContainText('0 dari 1');
   await expect(page.getByRole('heading', { name: 'Belum tersedia di Zeto (off-chain)' })).toBeVisible();
 
@@ -35,11 +35,11 @@ test('BI: Rina drafts, cannot approve her own change, Dimas publishes v2 to the 
   await as(page, 'rina');
   await page.getByRole('button', { name: 'Setujui dan terbitkan' }).click();
   await expect(page.getByRole('alert')).toContainText('Pembuat tidak dapat menyetujui perubahannya sendiri');
-  await expect(card(page, 'Versi berlaku')).toContainText('v1');
+  await expect(card(page, 'Versi berlaku Zeto')).toContainText('v1');
 
   await as(page, 'Dimas');
   await page.getByRole('button', { name: 'Setujui dan terbitkan' }).click();
-  await expect(card(page, 'Versi berlaku')).toContainText('v2');
+  await expect(card(page, 'Versi berlaku Zeto')).toContainText('v2');
   await expect(card(page, 'Gateway memakai versi ini')).toContainText('1 dari 1');
   await expect(card(page, 'Menunggu persetujuan')).toContainText('Tidak ada');
 
@@ -60,7 +60,7 @@ test('Bank Nusantara has no gateway yet; Bank Mandala never sees its values, BI 
   await page.getByRole('button', { name: 'Ajukan untuk persetujuan' }).click();
   await as(page, 'Budi');
   await page.getByRole('button', { name: 'Setujui dan terbitkan' }).click();
-  await expect(card(page, 'Versi berlaku')).toContainText('v2');
+  await expect(card(page, 'Versi berlaku Zeto')).toContainText('v2');
   await tab(page, 'Kebijakan berlaku').click();
   await expect(page.getByText('Rp 1.555.400.000 · 20%')).toBeVisible();
   await expect(page.locator('.bar')).toHaveCount(1); // DFABI has no daily limit, so no bar
@@ -85,13 +85,13 @@ test('a failed publish offers "Terbitkan ulang"; a failed reload keeps the typed
   await tab(page, 'Ubah kebijakan').click();
 
   // the reload after a failed call fails too: the form stays mounted with what was typed, both errors show
-  await page.route(/\/api\/policy\?pihak=C$/, (route) => route.fulfill({ status: 500, json: { reason: 'Server menjawab 500' } }));
+  await page.route(/\/api\/policy\?pihak=C&model=zeto$/, (route) => route.fulfill({ status: 500, json: { reason: 'Server menjawab 500' } }));
   await page.getByLabel('Limit harian RD (Rp)').fill('3.000.000.000');
   await page.getByRole('button', { name: 'Ajukan untuk persetujuan' }).click();
   await expect(page.getByRole('alert')).toContainText('Alasan perubahan wajib diisi');
   await expect(page.getByRole('alert')).toContainText('Tidak dapat memuat ulang kebijakan');
   await expect(page.getByLabel('Limit harian RD (Rp)')).toHaveValue('3.000.000.000');
-  await page.unroute(/\/api\/policy\?pihak=C$/);
+  await page.unroute(/\/api\/policy\?pihak=C&model=zeto$/);
 
   // after submit the Persetujuan tab never shows the empty state, not even for a moment
   await page.evaluate(() => {
@@ -114,7 +114,7 @@ test('a failed publish offers "Terbitkan ulang"; a failed reload keeps the typed
   await expect(page.getByRole('button', { name: 'Setujui dan terbitkan' })).toHaveCount(0);
   await expect(card(page, 'Menunggu persetujuan')).toContainText('1 perubahan');
   // v2 is saved but not on every gateway: it is "Disetujui", not "Berlaku"
-  await expect(card(page, 'Versi berlaku')).toContainText('Disetujui, belum terbit ke semua gateway');
+  await expect(card(page, 'Versi berlaku Zeto')).toContainText('Disetujui, belum terbit ke semua gateway');
   await tab(page, 'Riwayat versi').click();
   const v2 = page.getByRole('row').filter({ has: page.getByRole('rowheader', { name: 'v2' }) });
   await expect(v2).toContainText('Disetujui');
@@ -122,6 +122,6 @@ test('a failed publish offers "Terbitkan ulang"; a failed reload keeps the typed
   await tab(page, 'Persetujuan').click();
   await page.getByRole('button', { name: 'Terbitkan ulang' }).click();
   await expect(card(page, 'Menunggu persetujuan')).toContainText('Tidak ada');
-  await expect(card(page, 'Versi berlaku')).toContainText('v2');
-  await expect(card(page, 'Versi berlaku')).toContainText('Terbit');
+  await expect(card(page, 'Versi berlaku Zeto')).toContainText('v2');
+  await expect(card(page, 'Versi berlaku Zeto')).toContainText('Terbit');
 });

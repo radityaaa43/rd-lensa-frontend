@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { OWNER_OF_PARTY } from '../../../server/src/policy/types.ts';
-import type { BiPolicy } from '../../../server/src/policy/types.ts';
+import type { BiPolicy, Platform } from '../../../server/src/policy/types.ts';
 import { getPolicy, type PolicyView as PolicyData } from '../api.ts';
 import type { Route } from '../app/route.ts';
 import { usePoll } from '../app/usePoll.ts';
@@ -19,6 +19,7 @@ type ModelRoute = Extract<Route, { page: 'model' }>;
 type Tab = 'policy' | 'draft' | 'approve' | 'history';
 const TABS: [Tab, string][] = [['policy', 'Kebijakan berlaku'], ['draft', 'Ubah kebijakan'], ['approve', 'Persetujuan'], ['history', 'Riwayat versi']];
 const BY_KEY = 'lensa.policy.by';
+const NAME: Record<Platform, string> = { zeto: 'Zeto', noto: 'Noto' };
 const REFRESH_MS = 15_000;
 
 const SHIELD = 'M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3zM9 12l2 2 4-4';
@@ -33,7 +34,7 @@ function useBy() {
 
 function Loaded({ meta, route, data, reload, loadError, onHold }: { meta: Meta; route: ModelRoute; data: PolicyData; reload(): void; loadError: string | null; onHold(held: boolean): void }) {
   const { party } = route;
-  const rail = route.model === 'noto' ? 'noto' : 'zeto';
+  const platform: Platform = route.model === 'noto' ? 'noto' : 'zeto';
   const owner = OWNER_OF_PARTY[party];
   const acting = party === 'BI' ? data.network : data.own!;
   const [by, setBy] = useBy();
@@ -60,16 +61,17 @@ function Loaded({ meta, route, data, reload, loadError, onHold }: { meta: Meta; 
   const pending = acting.pending;
   useEffect(() => { if (toApprove && pending) { setTab('approve'); setToApprove(false); } }, [toApprove, pending]);
 
-  // gateways that run this document: BI's goes to every gateway, a bank's to the gateway of its own node
+  // gateways that run this document: BI's goes to every gateway, a bank's to the gateway of its own node.
+  // A gateway reports a version per platform; this screen compares the one of its platform.
   const mine = data.gateways.filter((g) => g.deployed && (party === 'BI' || g.node === meta.parties[party].node));
-  const onCurrent = mine.filter((g) => (party === 'BI' ? g.bi : g.bank) === acting.current.n).length;
+  const onCurrent = mine.filter((g) => (party === 'BI' ? g.bi : g.bank)[platform] === acting.current.n).length;
   const p = acting.pending;
   const count = p ? 1 : 0;
 
   return (
     <div className="pol">
       <div className="stats">
-        <StatCard tone="blue" icon={SHIELD} label="Versi berlaku" figure={`v${acting.current.n}`} sub={currentSub(p, wib(acting.current.approvedAt))} />
+        <StatCard tone="blue" icon={SHIELD} label={`Versi berlaku ${NAME[platform]}`} figure={`v${acting.current.n}`} sub={currentSub(p, wib(acting.current.approvedAt))} />
         <StatCard tone="green" icon={SERVER} label="Gateway memakai versi ini"
           figure={mine.length === 0 ? <span className="figerr">Belum diterapkan: gateway belum terpasang</span> : `${onCurrent} dari ${mine.length}`}
           sub={party === 'BI' ? 'Dilaporkan status OPA tiap gateway' : `bank-gw-${meta.parties[party].node}`} />
@@ -98,10 +100,10 @@ function Loaded({ meta, route, data, reload, loadError, onHold }: { meta: Meta; 
       </div>
 
       <div role="tabpanel" id="pol-panel" aria-labelledby={`tab-${tab}`}>
-        {tab === 'policy' ? <PolicyView party={party} data={data} rail={rail} />
-          : tab === 'draft' ? <DraftForm key={acting.current.n} party={party} rail={rail} owner={owner} acting={acting} bi={data.network.current.doc as BiPolicy} by={by} act={act} busy={busy} onSubmitted={() => setToApprove(true)} onDirty={setDirty} />
-          : tab === 'approve' ? <Approval party={party} owner={owner} acting={acting} by={by} act={act} busy={busy} />
-          : <VersionHistory party={party} owner={owner} acting={acting} by={by} act={act} busy={busy} onRestored={() => setToApprove(true)} />}
+        {tab === 'policy' ? <PolicyView party={party} platform={platform} data={data} />
+          : tab === 'draft' ? <DraftForm key={`${platform}|${acting.current.n}`} party={party} platform={platform} owner={owner} acting={acting} bi={data.network.current.doc as BiPolicy} by={by} act={act} busy={busy} onSubmitted={() => setToApprove(true)} onDirty={setDirty} />
+          : tab === 'approve' ? <Approval party={party} platform={platform} owner={owner} acting={acting} by={by} act={act} busy={busy} />
+          : <VersionHistory party={party} platform={platform} owner={owner} acting={acting} by={by} act={act} busy={busy} onRestored={() => setToApprove(true)} />}
       </div>
     </div>
   );
@@ -109,9 +111,11 @@ function Loaded({ meta, route, data, reload, loadError, onHold }: { meta: Meta; 
 
 const STATE_SUB = { publishing: 'Sedang diterbitkan ke gateway', 'publish-failed': 'Gagal diterbitkan ke gateway' } as const;
 
-// Halaman Kebijakan (spec 7.4). App keys this on the party, so tabs and drafts start fresh for each party.
+// Halaman Kebijakan (spec 7.4): the documents of the platform in the URL (Zeto or Noto). App keys this on the party and platform,
+// so tabs and drafts start fresh for each.
 export function Policy({ meta, route }: { meta: Meta; route: ModelRoute }) {
-  const policy = usePoll(`${route.party}|kebijakan`, () => getPolicy(route.party));
+  const platform: Platform = route.model === 'noto' ? 'noto' : 'zeto';
+  const policy = usePoll(`${route.party}|${platform}|kebijakan`, () => getPolicy(route.party, platform));
   const last = useRef<PolicyData>();
   const [held, setHeld] = useState(false);
   const heldRef = useRef(held);

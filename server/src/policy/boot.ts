@@ -4,7 +4,7 @@ import { Publisher } from './publish.ts';
 import type { PolicyDeps } from './routes.ts';
 import { OPA_ROOT, PolicyStore, POLICY_STATE_DIR, SEEDS_DIR } from './store.ts';
 import { OWNER_OF_PARTY, PolicyError } from './types.ts';
-import type { BankPolicy } from './types.ts';
+import type { BankPolicy, Platform } from './types.ts';
 import { usage } from './usage.ts';
 import { PolicyWorkflow } from './workflow.ts';
 
@@ -23,16 +23,17 @@ export function bootPolicy(env: NodeJS.ProcessEnv, parts: BootParts = {}): Polic
     if (!env.OPA_KEYS_DIR) throw new Error('OPA_KEYS_DIR belum diatur');
     const store = parts.makeStore?.() ?? new PolicyStore(POLICY_STATE_DIR, SEEDS_DIR);
     const opa = new Opa(env.OPA_BIN, OPA_ROOT, env.OPA_KEYS_DIR);
+    store.migrate();
     const publisher = parts.makePublisher?.(store, opa) ?? new Publisher(kubectlKube(env), opa, store);
     publisher.recoverInterrupted();
     // a failure that is not already a PolicyError came from publishing: say so, keep the original in the server log
-    const publish = (o: Parameters<Publisher['publish']>[0], n: number) => publisher.publish(o, n).catch((e) => {
+    const publish = (o: Parameters<Publisher['publish']>[0], m: Platform, n: number) => publisher.publish(o, m, n).catch((e) => {
       if (e instanceof PolicyError) throw e;
-      console.error(`Terbit kebijakan ${o} v${n} gagal:`, e);
+      console.error(`Terbit kebijakan ${o} ${m} v${n} gagal:`, e);
       throw new PolicyError(502, 'Gagal terbit ke gateway');
     });
     return { store, workflow: new PolicyWorkflow(store, opa, publish), status: () => publisher.status(),
-      usage: (p) => usage(p, (store.current(OWNER_OF_PARTY[p]).doc as BankPolicy).daily_limit) };
+      usage: (p, m) => usage(p, (store.current(OWNER_OF_PARTY[p], m).doc as BankPolicy).daily_limit, m) };
   } catch (e) {
     console.error('Kebijakan dinonaktifkan, gagal dimulai:', e);
     return undefined;

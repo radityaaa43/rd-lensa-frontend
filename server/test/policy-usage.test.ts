@@ -18,52 +18,47 @@ const rows = [
   { function: 'spendLock(bytes32,string,bytes)', to: RD, data: { lockId: '0x01' } },
   { function: 'mint((string,uint256,bytes)[])', to: RD, data: { mints: [{ to: 'bankA@node2', amount: '7000000000' }] } },
 ];
-// Answers each domain query with its own rows (no noto rows unless given).
-const fakeRpc = (zeto: unknown, noto: unknown = []) =>
-  vi.fn(async (_url: string, _method: string, params: [{ eq: [{ value: string }] }]) => (params[0].eq[0].value === 'zeto' ? zeto : noto)) as unknown as JsonRpc & ReturnType<typeof vi.fn>;
+const fakeRpc = (result: unknown) => vi.fn(async () => result) as unknown as JsonRpc & ReturnType<typeof vi.fn>;
 
-test('usage sums Zeto transfer and createLock only', async () => {
+test('usage sums transfer and createLock only', async () => {
   const rpc = fakeRpc(rows);
-  const res = await usage('A', { RD: 5_000_000_000 }, rpc, contracts, now);
+  const res = await usage('A', { RD: 5_000_000_000 }, 'zeto', rpc, contracts, now);
   expect(res.RD).toEqual({ used: 4_500_000_000, limit: 5_000_000_000 });
   expect(res.DFABI).toEqual({ used: 900, limit: null });
-  expect(rpc).toHaveBeenCalledTimes(2);
-  for (const domain of ['zeto', 'noto']) {
-    expect(rpc).toHaveBeenCalledWith('http://127.0.0.1:31648', 'ptx_queryTransactionsFull', [{
-      limit: 1000, eq: [{ field: 'domain', value: domain }], greaterThan: [{ field: 'created', value: '2026-11-04T17:00:00Z' }],
-    }]);
-  }
+  expect(rpc).toHaveBeenCalledOnce();
+  expect(rpc).toHaveBeenCalledWith('http://127.0.0.1:31648', 'ptx_queryTransactionsFull', [{
+    limit: 1000, eq: [{ field: 'domain', value: 'zeto' }], greaterThan: [{ field: 'created', value: '2026-11-04T17:00:00Z' }],
+  }]);
 });
 
 test('usage ignores the other token\'s contract', async () => {
-  const res = await usage('B', { DFABI: 1000 }, fakeRpc([rows[2], { function: xfer, to: '0x0000000000000000000000000000000000000001', data: { transfers: [{ to: 'x@node2', amount: '5' }] } }]), contracts, now);
+  const res = await usage('B', { DFABI: 1000 }, 'zeto', fakeRpc([rows[2], { function: xfer, to: '0x0000000000000000000000000000000000000001', data: { transfers: [{ to: 'x@node2', amount: '5' }] } }]), contracts, now);
   expect(res).toEqual({ RD: { used: 0, limit: null }, DFABI: { used: 900, limit: 1000 } });
 });
 
 test('day starts at 00:00 WIB: 20:00Z is already tomorrow in WIB', async () => {
   const rpc = fakeRpc([]);
-  await usage('C', {}, rpc, contracts, new Date('2026-11-05T20:00:00Z'));
+  await usage('C', {}, 'zeto', rpc, contracts, new Date('2026-11-05T20:00:00Z'));
   expect(rpc.mock.calls[0]![2]).toMatchObject([{ greaterThan: [{ value: '2026-11-05T17:00:00Z' }] }]);
 });
 
-test('a full page on either domain is refused, not undercounted', async () => {
-  const full = Array.from({ length: 1000 }, () => rows[0]);
-  await expect(usage('A', {}, fakeRpc([], full), contracts, now)).rejects.toThrow();
-  await expect(usage('A', {}, fakeRpc(Array.from({ length: 1000 }, () => rows[0])), contracts, now)).rejects.toThrow();
+test('a full page is refused, not undercounted', async () => {
+  await expect(usage('A', {}, 'zeto', fakeRpc(Array.from({ length: 1000 }, () => rows[0])), contracts, now)).rejects.toThrow();
 });
 
-test('Noto adds to Zeto per token: transfer and prepareUnlock count, a rollback to the owner does not', async () => {
+test('noto rail: transfer and prepareUnlock count, a rollback to the owner does not', async () => {
   const NRD = '0xf4571ab32cbd61a7cfbf1d1647a39ec8744a7681';
   const prep = 'prepareUnlock(bytes32,string,(string,uint256)[],bytes,bytes)';
-  const rpc = fakeRpc([rows[0]], [
+  const rpc = fakeRpc([
     { function: 'transfer(string,uint256,bytes)', to: NRD, data: { to: 'bankB@node3', amount: '200', data: '0x' } },
     { function: prep, to: NRD, data: { from: 'bankA@node2', recipients: [{ to: 'bankB@node3', amount: '100' }] } },
     { function: prep, to: NRD, data: { from: 'bankA@node2', recipients: [{ to: 'bankA@node2', amount: '900' }] } },
     { function: 'lock(uint256,bytes)', to: NRD, data: { amount: '900' } },
     { function: 'mint(string,uint256,bytes)', to: NRD, data: { to: 'bankA@node2', amount: '900' } },
   ]);
-  const res = await usage('A', { RD: 5_000_000_000 }, rpc, { ...contracts, [NRD]: 'RD' }, now);
-  expect(res.RD).toEqual({ used: 4_000_000_300, limit: 5_000_000_000 });
+  const res = await usage('A', { RD: 400 }, 'noto', rpc, { [NRD]: 'RD' }, now);
+  expect(res.RD).toEqual({ used: 300, limit: 400 });
+  expect(rpc.mock.calls[0]![2]).toMatchObject([{ eq: [{ field: 'domain', value: 'noto' }] }]);
 });
 
 function setup(fn: PolicyDeps['usage']) {
@@ -96,11 +91,12 @@ test('usage route answers for a bank and 502 when the read fails', async () => {
   await app.close();
 });
 
-test('usage route takes only the party', async () => {
+test('usage route passes the rail, zeto by default, and refuses an unknown one', async () => {
   const fn = vi.fn(async () => ({ RD: { used: 0, limit: null }, DFABI: { used: 0, limit: null } }));
   app = setup(fn);
   await app.inject('/api/policy/usage?pihak=A');
-  expect(fn.mock.calls).toEqual([['A']]);
-  expect((await app.inject('/api/policy/usage?pihak=A&model=noto')).statusCode).toBe(400);
+  await app.inject('/api/policy/usage?pihak=A&model=noto');
+  expect(fn.mock.calls).toEqual([['A', 'zeto'], ['A', 'noto']]);
+  expect((await app.inject('/api/policy/usage?pihak=A&model=fabricx')).statusCode).toBe(400);
   await app.close();
 });

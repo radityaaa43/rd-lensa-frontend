@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { PartyId } from '../../../server/src/domain.ts';
-import type { BankPolicy, BiPolicy, Hours, Owner, Token } from '../../../server/src/policy/types.ts';
+import type { BankPolicy, BiPolicy, Hours, Owner, Platform, Token } from '../../../server/src/policy/types.ts';
 import { submitPolicy, type VersionView } from '../api.ts';
 import { parseAmount } from './form.ts';
 import { DAYS, PARTICIPANTS, Steps, idOf, type Act } from './shared.tsx';
 
 const TOKENS: Token[] = ['RD', 'DFABI'];
+const NAME: Record<Platform, string> = { zeto: 'Zeto', noto: 'Noto' };
 const UNIT: Record<Token, string> = { RD: 'Rp', DFABI: 'unit' };
 const text = (n: number | undefined) => (n === undefined ? '' : n.toLocaleString('id-ID'));
 const timeOk = (s: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(s) || s === '24:00';
@@ -92,8 +93,8 @@ function Holidays({ value, onChange }: { value: BiPolicy['holidays']; onChange(h
 type Optional = Partial<Record<Token, number>>;
 const CONTROLS = ['max_balance', 'min_balance', 'max_supply'] as const;
 
-// BI's form: limits, hours, holidays and freezes of the network document. The Noto balance controls are shown on the
-// Noto rail only; on the Zeto rail they stay in the document as they are.
+// BI's form: limits, hours, holidays and freezes of the network document of this platform. The Noto balance controls are
+// shown for Noto only; the Zeto document does not carry them.
 function useBiForm(bi: BiPolicy, noto: boolean) {
   const [tx, setTx] = useState<Amounts>({ RD: text(bi.max_per_tx.RD), DFABI: text(bi.max_per_tx.DFABI) });
   const [mint, setMint] = useState<Amounts>({ RD: text(bi.max_mint_per_tx.RD), DFABI: text(bi.max_mint_per_tx.DFABI) });
@@ -181,10 +182,10 @@ function useBankForm(bank: BankPolicy, bi: BiPolicy, self: string) {
   return { doc, fields };
 }
 
-interface Props { party: PartyId; rail: 'zeto' | 'noto'; owner: Owner; acting: VersionView; bi: BiPolicy; by: string; act: Act; busy: boolean; onSubmitted(): void; onDirty(dirty: boolean): void }
+interface Props { party: PartyId; platform: Platform; owner: Owner; acting: VersionView; bi: BiPolicy; by: string; act: Act; busy: boolean; onSubmitted(): void; onDirty(dirty: boolean): void }
 
 // Shared frame: steps, fields, reason, and the one button. Name and reason are checked by the server, whose answer is shown as is.
-function Frame({ party, owner, by, act, busy, onSubmitted, onDirty, title, doc, fields }: Omit<Props, 'acting' | 'bi'> & { title: string; doc(): BiPolicy | BankPolicy | null; fields: ReactNode }) {
+function Frame({ party, platform, owner, by, act, busy, onSubmitted, onDirty, title, doc, fields }: Omit<Props, 'acting' | 'bi'> & { title: string; doc(): BiPolicy | BankPolicy | null; fields: ReactNode }) {
   const [reason, setReason] = useState('');
   const valid = doc() !== null;
   // unsaved input = any field differs from the first render's, or a reason is typed; the screen then stops refreshing
@@ -195,7 +196,7 @@ function Frame({ party, owner, by, act, busy, onSubmitted, onDirty, title, doc, 
     <form className="polform" onSubmit={(e) => {
       e.preventDefault();
       const d = doc();
-      if (d) act(() => submitPolicy(owner, { pihak: party, by, reason, doc: d }), onSubmitted);
+      if (d) act(() => submitPolicy(owner, { pihak: party, model: platform, by, reason, doc: d }), onSubmitted);
     }}>
       <Steps state={undefined} />
       <div className="polsechead"><h3>{title}</h3></div>
@@ -212,8 +213,8 @@ function Frame({ party, owner, by, act, busy, onSubmitted, onDirty, title, doc, 
   );
 }
 
-const BiForm = (p: Props) => { const f = useBiForm(p.acting.current.doc as BiPolicy, p.rail === 'noto'); return <Frame {...p} title="Draf perubahan · Kebijakan jaringan" doc={f.doc} fields={f.fields} />; };
-const BankForm = (p: Props) => { const f = useBankForm(p.acting.current.doc as BankPolicy, p.bi, idOf(p.party)); return <Frame {...p} title="Draf perubahan · Kebijakan bank" doc={f.doc} fields={f.fields} />; };
+const BiForm = (p: Props) => { const f = useBiForm(p.acting.current.doc as BiPolicy, p.platform === 'noto'); return <Frame {...p} title={`Draf perubahan · Kebijakan jaringan ${NAME[p.platform]}`} doc={f.doc} fields={f.fields} />; };
+const BankForm = (p: Props) => { const f = useBankForm(p.acting.current.doc as BankPolicy, p.bi, idOf(p.party)); return <Frame {...p} title={`Draf perubahan · Kebijakan bank ${NAME[p.platform]}`} doc={f.doc} fields={f.fields} />; };
 
 // "Ubah kebijakan": one form for the acting party's own document, started from its current version.
 // App keys this on the current version, so a publish resets the fields.

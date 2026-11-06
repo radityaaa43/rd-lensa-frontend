@@ -55,7 +55,7 @@ test('a 422 reply keeps the server errors list', async () => {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
     ok: false, status: 422, headers: new Headers(), json: async () => ({ reason: 'Dokumen ditolak', errors: ['jam salah'] }),
   }));
-  expect(await submitPolicy('bi', { pihak: 'BI', by: 'a', reason: 'r', doc: {} as never })).toEqual({
+  expect(await submitPolicy('bi', { pihak: 'BI', model: 'zeto', by: 'a', reason: 'r', doc: {} as never })).toEqual({
     ok: false, status: 422, reason: 'Dokumen ditolak', errors: ['jam salah'],
   });
 });
@@ -63,10 +63,11 @@ test('a 422 reply keeps the server errors list', async () => {
 test('policy calls hit the owner routes', async () => {
   const fetchMock = vi.fn().mockResolvedValue({ ok: true, headers: new Headers(), json: async () => ({}) });
   vi.stubGlobal('fetch', fetchMock);
-  await getPolicy('A'); await getPolicyHistory('bank-a', 'A'); await getPolicyUsage('B');
-  await approvePolicy('bi', { pihak: 'A', by: 'x', note: '' });
+  await getPolicy('A', 'zeto'); await getPolicyHistory('bank-a', 'A', 'noto'); await getPolicyUsage('B', 'noto');
+  await approvePolicy('bi', { pihak: 'A', model: 'noto', by: 'x', note: '' });
   expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
-    '/api/policy?pihak=A', '/api/policy/bank-a/history?pihak=A', '/api/policy/usage?pihak=B', '/api/policy/bi/approve',
+    '/api/policy?pihak=A&model=zeto', '/api/policy/bank-a/history?pihak=A&model=noto', '/api/policy/usage?pihak=B&model=noto', '/api/policy/bi/approve',
   ]);
-  expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'POST', body: JSON.stringify({ pihak: 'A', by: 'x', note: '' }) });
+  // a write names its platform in the body
+  expect(fetchMock.mock.calls[3][1]).toMatchObject({ method: 'POST', body: JSON.stringify({ pihak: 'A', model: 'noto', by: 'x', note: '' }) });
 });

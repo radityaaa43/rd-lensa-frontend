@@ -1,6 +1,6 @@
 import type { Capability, HistoryItem, Network, Receipt, Trace } from '../../server/src/adapter.ts';
 import type { FlowId, FlowRequest, ModelId, PartyId } from '../../server/src/domain.ts';
-import type { GatewayStatus, Owner, Pending, PolicyDoc, Token, Version } from '../../server/src/policy/types.ts';
+import type { GatewayStatus, Owner, Pending, Platform, PolicyDoc, Token, Version } from '../../server/src/policy/types.ts';
 import type { StressConfig, StressSnapshot } from '../../server/src/stress.ts';
 import type { TxResult } from './demo/demoState.ts';
 
@@ -59,17 +59,18 @@ export const getStress = () => call<StressSnapshot | null>('/api/stress'); // bo
 export const postStress = (cfg: StressConfig) => post<StressSnapshot>('/api/stress', cfg);
 export const stopStress = () => post<StressSnapshot>('/api/stress/stop');
 
-export interface VersionView { owner: Owner; current: Version; pending: Pending | null }
+export interface VersionView { owner: Owner; platform: Platform; current: Version; pending: Pending | null }
 export interface PolicyView { network: VersionView; own: VersionView | null; banks: VersionView[] | null; gateways: GatewayStatus[] }
 export type PolicyUsage = Record<Token, { used: number; limit: number | null }>;
-export const getPolicy = (party: PartyId) => call<PolicyView>(`/api/policy?pihak=${party}`);
-export const getPolicyHistory = (owner: Owner, party: PartyId) => call<Version[]>(`/api/policy/${owner}/history?pihak=${party}`);
-export const getPolicyUsage = (party: PartyId) => call<PolicyUsage>(`/api/policy/usage?pihak=${party}`);
-export const submitPolicy = (owner: Owner, body: { pihak: PartyId; by: string; reason: string; doc: PolicyDoc }) => post<Pending>(`/api/policy/${owner}/drafts`, body);
-export const approvePolicy = (owner: Owner, body: { pihak: PartyId; by: string; note: string }) => post<Version>(`/api/policy/${owner}/approve`, body);
-export const rejectPolicy = (owner: Owner, body: { pihak: PartyId; by: string; note: string }) => post<{ ok: true }>(`/api/policy/${owner}/reject`, body);
-export const cancelPolicy = (owner: Owner, body: { pihak: PartyId; by: string }) => post<{ ok: true }>(`/api/policy/${owner}/cancel`, body);
-export const republishPolicy = (owner: Owner, body: { pihak: PartyId; by: string }) => post<{ ok: true }>(`/api/policy/${owner}/republish`, body);
+// every policy call names the platform: Zeto and Noto each have their own documents
+export const getPolicy = (party: PartyId, model: Platform) => call<PolicyView>(`/api/policy?pihak=${party}&model=${model}`);
+export const getPolicyHistory = (owner: Owner, party: PartyId, model: Platform) => call<Version[]>(`/api/policy/${owner}/history?pihak=${party}&model=${model}`);
+export const getPolicyUsage = (party: PartyId, model: Platform) => call<PolicyUsage>(`/api/policy/usage?pihak=${party}&model=${model}`);
+export const submitPolicy = (owner: Owner, body: { pihak: PartyId; model: Platform; by: string; reason: string; doc: PolicyDoc }) => post<Pending>(`/api/policy/${owner}/drafts`, body);
+export const approvePolicy = (owner: Owner, body: { pihak: PartyId; model: Platform; by: string; note: string }) => post<Version>(`/api/policy/${owner}/approve`, body);
+export const rejectPolicy = (owner: Owner, body: { pihak: PartyId; model: Platform; by: string; note: string }) => post<{ ok: true }>(`/api/policy/${owner}/reject`, body);
+export const cancelPolicy = (owner: Owner, body: { pihak: PartyId; model: Platform; by: string }) => post<{ ok: true }>(`/api/policy/${owner}/cancel`, body);
+export const republishPolicy = (owner: Owner, body: { pihak: PartyId; model: Platform; by: string }) => post<{ ok: true }>(`/api/policy/${owner}/republish`, body);
 export const CSV_URL = '/api/stress/csv';
 
 // EventSource reconnects by itself after the server closes the stream, so every terminal event must close it.

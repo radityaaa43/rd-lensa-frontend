@@ -1,12 +1,10 @@
 import type { PartyId } from '../../../server/src/domain.ts';
-import type { BankPolicy, BiPolicy, Hours, Token } from '../../../server/src/policy/types.ts';
+import type { BankPolicy, BiPolicy, Hours, Platform, Token } from '../../../server/src/policy/types.ts';
 import { getPolicyUsage, type PolicyView as PolicyData, type PolicyUsage } from '../api.ts';
 import { usePoll } from '../app/usePoll.ts';
 import { formatAmount, openNow } from './form.ts';
 import { notYetPublished } from './status.ts';
 import { DAYS, PARTICIPANTS, Section, idOf, nameOfId } from './shared.tsx';
-
-type Rail = 'zeto' | 'noto';
 
 const TOKENS: Token[] = ['RD', 'DFABI'];
 const ASSET: Record<Token, string> = { RD: 'Rupiah Digital', DFABI: 'obligasi' };
@@ -34,8 +32,8 @@ function HoursTile({ token, hours, holidays, bi }: { token: Token; hours: Hours 
 
 const cpText = (ids: string[]) => (ids.length === PARTICIPANTS.length - 1 ? 'Semua peserta' : ids.length ? ids.map(nameOfId).join(', ') : 'Tidak ada');
 
-function Usage({ party, doc }: { party: PartyId; doc: BankPolicy }) {
-  const usage = usePoll<PolicyUsage>(`${party}|kebijakan-pemakaian`, () => getPolicyUsage(party));
+function Usage({ party, platform, doc }: { party: PartyId; platform: Platform; doc: BankPolicy }) {
+  const usage = usePoll<PolicyUsage>(`${party}|${platform}|kebijakan-pemakaian`, () => getPolicyUsage(party, platform));
   return (
     <Section title="Limit per token" who="Diatur bank ini · hanya untuk bank ini">
       <div className="tablewrap"><table className="poltbl">
@@ -61,18 +59,18 @@ function Usage({ party, doc }: { party: PartyId; doc: BankPolicy }) {
           })}
         </tbody>
       </table></div>
-      <p className="hint">Nilai bank tidak boleh lebih longgar dari batas BI. &quot;Terpakai hari ini&quot; dihitung gateway dari node Paladin bank ini sendiri (Zeto dan Noto digabung) dan direset 00:00 WIB.</p>
+      <p className="hint">Nilai bank tidak boleh lebih longgar dari batas BI. &quot;Terpakai hari ini&quot; dihitung gateway dari node Paladin bank ini sendiri, untuk transaksi {platform === 'noto' ? 'Noto' : 'Zeto'} saja, dan direset 00:00 WIB.</p>
     </Section>
   );
 }
 
-function BankView({ party, data }: { party: PartyId; data: PolicyData }) {
+function BankView({ party, platform, data }: { party: PartyId; platform: Platform; data: PolicyData }) {
   const bi = data.network.current.doc as BiPolicy;
   const doc = data.own!.current.doc as BankPolicy;
   const self = idOf(party);
   return (
     <>
-      <Usage party={party} doc={doc} />
+      <Usage party={party} platform={platform} doc={doc} />
       <Section title="Counterparty yang diizinkan" who="Diatur bank ini">
         <ul className="polcp">
           {PARTICIPANTS.filter((x) => x.id !== self).map((x) => (
@@ -96,7 +94,7 @@ function BankView({ party, data }: { party: PartyId; data: PolicyData }) {
   );
 }
 
-function BiView({ data, rail }: { data: PolicyData; rail: Rail }) {
+function BiView({ data, platform }: { data: PolicyData; platform: Platform }) {
   const bi = data.network.current.doc as BiPolicy;
   return (
     <>
@@ -153,7 +151,7 @@ function BiView({ data, rail }: { data: PolicyData; rail: Rail }) {
           </tbody>
         </table></div>
       </Section>
-      {rail === 'zeto' ? (
+      {platform === 'zeto' ? (
         <Section title="Belum tersedia di Zeto (off-chain)" who="Menunggu fase on-chain">
           <div className="polna">
             <div className="polrow"><span>Saldo maksimal dan minimal peserta</span><span className="badge off">Saldo pihak lain tersegel</span></div>
@@ -182,12 +180,12 @@ function BiView({ data, rail }: { data: PolicyData; rail: Rail }) {
 }
 
 // "Kebijakan berlaku": what the gateways enforce now. BI reads the banks' documents here, read-only.
-export function PolicyView({ party, data, rail }: { party: PartyId; data: PolicyData; rail: Rail }) {
+export function PolicyView({ party, platform, data }: { party: PartyId; platform: Platform; data: PolicyData }) {
   const acting = party === 'BI' ? data.network : data.own!;
   return (
     <div className="polstack">
       {notYetPublished(acting.pending) && <p className="hint">Versi v{acting.current.n} sudah disetujui tetapi belum terbit ke semua gateway. Sebagian gateway mungkin masih memakai versi sebelumnya.</p>}
-      {party === 'BI' ? <BiView data={data} rail={rail} /> : <BankView party={party} data={data} />}
+      {party === 'BI' ? <BiView data={data} platform={platform} /> : <BankView party={party} platform={platform} data={data} />}
     </div>
   );
 }

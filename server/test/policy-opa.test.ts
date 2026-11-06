@@ -6,41 +6,48 @@ import { join } from 'node:path';
 import { afterAll, expect, test } from 'vitest';
 import { Opa } from '../src/policy/opa.ts';
 import { OPA_ROOT, SEEDS_DIR } from '../src/policy/store.ts';
-import type { BankPolicy, BiPolicy } from '../src/policy/types.ts';
+import type { BankPolicy, BiPolicy, ByPlatform } from '../src/policy/types.ts';
 
-const seed = <T>(name: string) => JSON.parse(readFileSync(join(SEEDS_DIR, `${name}.json`), 'utf8')) as T;
+// A seed file is { zeto, noto }
+const seed = <T>(name: string) => JSON.parse(readFileSync(join(SEEDS_DIR, `${name}.json`), 'utf8')) as ByPlatform<T>;
 const need = !process.env.OPA_BIN;
 const opa = new Opa(process.env.OPA_BIN ?? 'opa', OPA_ROOT);
 const tmps: string[] = [];
 const tmp = () => { const d = mkdtempSync(join(tmpdir(), 'lensa-opa-test-')); tmps.push(d); return d; };
 afterAll(() => tmps.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
-test.skipIf(need)('check returns no errors for the seed', async () => {
-  expect(await opa.check('bi', seed<BiPolicy>('bi'), seed<BiPolicy>('bi'))).toEqual([]);
-  expect(await opa.check('bank-a', seed<BankPolicy>('bank-a'), seed<BiPolicy>('bi'))).toEqual([]);
+test.skipIf(need)('check returns no errors for the seeds', async () => {
+  expect(await opa.check('bi', seed<BiPolicy>('bi'), seed<BankPolicy>('bank-a'))).toEqual([]);
+  expect(await opa.check('bank-a', seed<BiPolicy>('bi'), seed<BankPolicy>('bank-a'))).toEqual([]);
 });
 
-test.skipIf(need)('check returns the Indonesian error for bad hours', async () => {
+test.skipIf(need)('check returns the Indonesian error for bad hours, in either platform', async () => {
+  for (const platform of ['zeto', 'noto'] as const) {
+    const bi = seed<BiPolicy>('bi');
+    bi[platform].hours.RD.open = '25:00';
+    expect(await opa.check('bi', bi, seed<BankPolicy>('bank-a'))).toEqual(expect.arrayContaining([expect.stringContaining('Jam RD: format harus JJ:MM')]));
+  }
+});
+
+test.skipIf(need)('check of a bank doc sees the BI limits of the same platform', async () => {
+  const bank = seed<BankPolicy>('bank-a');
+  bank.noto = { ...bank.noto, max_per_tx: { RD: 2_000_000_000 } };
   const bi = seed<BiPolicy>('bi');
-  bi.hours.RD.open = '25:00';
-  expect(await opa.check('bi', bi, bi)).toContain('Jam RD: format harus JJ:MM');
-});
-
-test.skipIf(need)('check of a bank doc sees BI limits', async () => {
-  const bank: BankPolicy = { ...seed<BankPolicy>('bank-a'), max_per_tx: { RD: 2_000_000_000 } };
-  expect(await opa.check('bank-a', bank, seed<BiPolicy>('bi')))
-    .toContain('Limit per transaksi RD: tidak boleh lebih longgar dari batas BI');
+  bi.noto.max_per_tx.RD = 1_000_000_000;
+  expect(await opa.check('bank-a', bi, bank)).toEqual(expect.arrayContaining([expect.stringContaining('Limit per transaksi RD: tidak boleh lebih longgar dari batas BI')]));
 });
 
 test.skipIf(need)('check returns the Indonesian errors for Noto balance controls', async () => {
-  const bi: BiPolicy = { ...seed<BiPolicy>('bi'), max_balance: { RD: 0 }, min_balance: { DFABI: 50 }, max_supply: { RD: 10 ** 16 } };
-  bi.max_balance!.DFABI = 50;
-  expect(await opa.check('bi', bi, bi)).toEqual(expect.arrayContaining([
-    'Saldo maksimal RD: harus bilangan bulat positif',
-    'Saldo minimal DFABI: harus lebih kecil dari saldo maksimal',
-    'Suplai maksimal RD: melebihi 1.000.000.000.000.000',
+  const bank = seed<BankPolicy>('bank-a');
+  const bi = seed<BiPolicy>('bi');
+  bi.noto = { ...bi.noto, max_balance: { RD: 0, DFABI: 50 }, min_balance: { DFABI: 50 }, max_supply: { RD: 10 ** 16 } };
+  expect(await opa.check('bi', bi, bank)).toEqual(expect.arrayContaining([
+    expect.stringContaining('Saldo maksimal RD: harus bilangan bulat positif'),
+    expect.stringContaining('Saldo minimal DFABI: harus lebih kecil dari saldo maksimal'),
+    expect.stringContaining('Suplai maksimal RD: melebihi 1.000.000.000.000.000'),
   ]));
-  expect(await opa.check('bi', { ...bi, max_balance: { RD: 5 }, min_balance: { RD: 1 }, max_supply: { RD: 9 } }, bi)).toEqual([]);
+  bi.noto = { ...bi.noto, max_balance: { RD: 5 }, min_balance: { RD: 1 }, max_supply: { RD: 9 } };
+  expect(await opa.check('bi', bi, bank)).toEqual([]);
 });
 
 test.skipIf(need)('check throws when the validator package is gone (fail closed)', async () => {
@@ -51,7 +58,7 @@ test.skipIf(need)('check throws when the validator package is gone (fail closed)
   const src = readFileSync(f, 'utf8');
   expect(src).toContain('package bank.check');
   writeFileSync(f, src.replace('package bank.check', 'package bank.gone'));
-  await expect(new Opa(process.env.OPA_BIN!, root).check('bank-a', seed<BankPolicy>('bank-a'), seed<BiPolicy>('bi')))
+  await expect(new Opa(process.env.OPA_BIN!, root).check('bank-a', seed<BiPolicy>('bi'), seed<BankPolicy>('bank-a')))
     .rejects.toThrow('validator tidak menghasilkan daftar kesalahan');
 });
 
@@ -61,26 +68,27 @@ test.skipIf(need)('test reports no failures', async () => {
   expect(r.passed).toBe(r.total);
 });
 
-test.skipIf(need)('assemble keeps git participants and overlays editable keys', () => {
+test.skipIf(need)('assemble keeps git participants and puts one document per platform under policy', () => {
   const git = JSON.parse(readFileSync(join(OPA_ROOT, 'bundles/bi/bi/config/data.json'), 'utf8'));
   const bi = seed<BiPolicy>('bi');
-  bi.max_per_tx.RD = 5;
-  bi.max_mint_per_tx.DFABI = 7;
-  bi.frozen = ['bankB@node3'];
-  bi.holidays = [{ date: '2026-12-25', name: 'Natal' }];
-  const bank: BankPolicy = { counterparties: ['bi@node1'], daily_limit: { RD: 9 } };
+  bi.zeto.max_per_tx.RD = 5;
+  bi.noto.max_mint_per_tx.DFABI = 7;
+  bi.zeto.frozen = ['bankB@node3'];
+  bi.noto.holidays = [{ date: '2026-12-25', name: 'Natal' }];
+  const bank: ByPlatform<BankPolicy> = { zeto: { counterparties: ['bi@node1'], daily_limit: { RD: 9 } }, noto: { counterparties: ['bi@node1', 'bankB@node3'] } };
   const out = tmp();
   opa.assemble(2, bi, bank, out);
   const data = JSON.parse(readFileSync(join(out, 'bi/bi/config/data.json'), 'utf8'));
   expect(data.participants).toEqual(git.participants);
   expect(data.nodes).toEqual(git.nodes);
   expect(data.zeto.contracts).toEqual(git.zeto.contracts);
-  expect(data.max_per_tx).toEqual(bi.max_per_tx);
-  expect(data.max_mint_per_tx).toEqual(bi.max_mint_per_tx);
-  expect(data.hours).toEqual(bi.hours);
-  expect(data.holidays).toEqual(bi.holidays);
-  expect(data.frozen).toEqual(['bankB@node3']);
-  expect(JSON.parse(readFileSync(join(out, 'bank/bank/config/data.json'), 'utf8'))).toEqual(bank);
+  expect(data.policy).toEqual(bi);
+  expect(data.policy.zeto.frozen).toEqual(['bankB@node3']);
+  expect(data.policy.noto.frozen).toEqual(bi.noto.frozen);
+  // the limits no longer sit at the top of the config
+  for (const k of ['max_per_tx', 'max_mint_per_tx', 'hours', 'holidays', 'frozen']) expect(data).not.toHaveProperty(k);
+  expect(data.noto).toEqual(git.noto);
+  expect(JSON.parse(readFileSync(join(out, 'bank/bank/config/data.json'), 'utf8'))).toEqual({ policy: bank });
   expect(existsSync(join(out, 'bank/bank/paladin/paladin.rego'))).toBe(true);
   // git source untouched
   expect(JSON.parse(readFileSync(join(OPA_ROOT, 'bundles/bi/bi/config/data.json'), 'utf8'))).toEqual(git);
@@ -88,20 +96,22 @@ test.skipIf(need)('assemble keeps git participants and overlays editable keys', 
 
 test.skipIf(need)('assemble writes the Noto balance controls only when BI sets them', () => {
   const [plain, capped] = [tmp(), tmp()];
-  const bank: BankPolicy = { counterparties: ['bi@node1'] };
-  opa.assemble(2, seed<BiPolicy>('bi'), bank, plain);
-  const none = JSON.parse(readFileSync(join(plain, 'bi/bi/config/data.json'), 'utf8')).noto;
-  expect(Object.keys(none)).toEqual(['contracts']);
-  opa.assemble(2, { ...seed<BiPolicy>('bi'), max_balance: { RD: 100 }, max_supply: { DFABI: 7 } }, bank, capped);
-  const noto = JSON.parse(readFileSync(join(capped, 'bi/bi/config/data.json'), 'utf8')).noto;
-  expect(noto).toEqual({ contracts: none.contracts, max_balance: { RD: 100 }, max_supply: { DFABI: 7 } });
+  const bank = seed<BankPolicy>('bank-a');
+  const bi = seed<BiPolicy>('bi');
+  opa.assemble(2, bi, bank, plain);
+  const none = JSON.parse(readFileSync(join(plain, 'bi/bi/config/data.json'), 'utf8')).policy.noto;
+  for (const k of ['max_balance', 'min_balance', 'max_supply']) expect(none).not.toHaveProperty(k);
+  opa.assemble(2, { ...bi, noto: { ...bi.noto, max_balance: { RD: 100 }, max_supply: { DFABI: 7 } } }, bank, capped);
+  const noto = JSON.parse(readFileSync(join(capped, 'bi/bi/config/data.json'), 'utf8')).policy.noto;
+  expect(noto).toMatchObject({ max_balance: { RD: 100 }, max_supply: { DFABI: 7 } });
+  expect(noto).not.toHaveProperty('min_balance');
 });
 
 test.skipIf(need)('build writes a bundle tarball', async () => {
   const out = tmp();
   opa.assemble(1, seed<BiPolicy>('bi'), seed<BankPolicy>('bank-bi'), out);
-  await opa.build(join(out, 'bi'), 'bi-v1', join(out, 'bi.tar.gz'));
-  await opa.build(join(out, 'bank'), 'bank-bi-v1', join(out, 'bank.tar.gz'));
+  await opa.build(join(out, 'bi'), 'bi-z1-n1', join(out, 'bi.tar.gz'));
+  await opa.build(join(out, 'bank'), 'bank-bi-z1-n1', join(out, 'bank.tar.gz'));
   expect(existsSync(join(out, 'bi.tar.gz'))).toBe(true);
   expect(existsSync(join(out, 'bank.tar.gz'))).toBe(true);
 });
@@ -115,12 +125,12 @@ test.skipIf(need)('build signs with the key of the named owner; unsigned without
   opa.assemble(2, seed<BiPolicy>('bi'), seed<BankPolicy>('bank-a'), out);
   const signed = new Opa(process.env.OPA_BIN!, OPA_ROOT, keys);
   const list = (f: string) => execFileSync('tar', ['tzf', f]).toString();
-  await signed.build(join(out, 'bank'), 'bank-a-v1', join(out, 'bank.tar.gz'), 'bank-a');
+  await signed.build(join(out, 'bank'), 'bank-a-z1-n1', join(out, 'bank.tar.gz'), 'bank-a');
   expect(list(join(out, 'bank.tar.gz'))).toContain('.signatures.json');
   // the JWT header names the key id the gateway pins
   const sig = JSON.parse(execFileSync('tar', ['xzOf', join(out, 'bank.tar.gz'), '/.signatures.json']).toString()).signatures[0] as string;
   expect(JSON.parse(Buffer.from(sig.split('.')[0]!, 'base64url').toString())).toMatchObject({ alg: 'RS256', kid: 'bank-a' });
-  await opa.build(join(out, 'bi'), 'bi-v1', join(out, 'bi.tar.gz'), 'bi');
+  await opa.build(join(out, 'bi'), 'bi-z1-n1', join(out, 'bi.tar.gz'), 'bi');
   expect(list(join(out, 'bi.tar.gz'))).not.toContain('.signatures.json');
   await expect(signed.build(join(out, 'bank'), 'x', join(out, 'x.tar.gz'), 'bank-zzz')).rejects.toThrow(/opa build gagal/);
 });

@@ -12,7 +12,7 @@ import { Publisher } from './policy/publish.ts';
 import type { PolicyDeps } from './policy/routes.ts';
 import { OPA_ROOT, PolicyStore, SEEDS_DIR } from './policy/store.ts';
 import { OWNER_OF_PARTY, PolicyError } from './policy/types.ts';
-import type { BankPolicy } from './policy/types.ts';
+import type { BankPolicy, Platform } from './policy/types.ts';
 import { PolicyWorkflow } from './policy/workflow.ts';
 
 // Stealth amounts are public on chain, so the outsider sees the amount but not the parties.
@@ -32,9 +32,9 @@ const revisionOf = (b: Buffer): string | null => {
 // Halaman Kebijakan: the real store, workflow and publisher over an in-memory cluster where only gateway 2 exists and
 // every rollout succeeds. Without OPA_BIN, a stub reports no errors and no tests so the screen still works.
 class MockKube implements Kube {
-  // gateway 2 starts on version 1 of both bundles
+  // gateway 2 starts on version 1 of both bundles (both platforms)
   private readonly maps = new Map<string, Record<string, Buffer>>([['bank-gw-2-bundles', {
-    'bi.tar.gz': Buffer.from('{"revision":"bi-v1"}'), 'bank.tar.gz': Buffer.from('{"revision":"bank-a-v1"}'),
+    'bi.tar.gz': Buffer.from('{"revision":"bi-z1-n1"}'), 'bank.tar.gz': Buffer.from('{"revision":"bank-a-z1-n1"}'),
   }]]);
   deploymentExists = async (name: string) => name === 'bank-gw-2';
   getConfigMap = async (name: string) => this.maps.get(name) ?? null;
@@ -61,18 +61,18 @@ function mockPolicy(): PolicyDeps {
   const publisher = new Publisher(new MockKube(), opa, store);
   // Playwright's publish-failure path: a version whose reason says "uji gagal terbit" fails its first publish (502), the retry succeeds
   const failed = new Set<string>();
-  const publish = async (o: Parameters<Publisher['publish']>[0], n: number) => {
-    const key = `${o}:${n}`;
-    if (!failed.has(key) && store.history(o).find((v) => v.n === n)?.reason.includes('uji gagal terbit')) {
+  const publish = async (o: Parameters<Publisher['publish']>[0], m: Platform, n: number) => {
+    const key = `${o}:${m}:${n}`;
+    if (!failed.has(key) && store.history(o, m).find((v) => v.n === n)?.reason.includes('uji gagal terbit')) {
       failed.add(key);
       throw new PolicyError(502, 'Gagal terbit ke gateway (simulasi)');
     }
-    return publisher.publish(o, n);
+    return publisher.publish(o, m, n);
   };
   return {
     store, workflow: new PolicyWorkflow(store, opa, publish), status: () => publisher.status(),
-    usage: async (p) => {
-      const limit = (store.current(OWNER_OF_PARTY[p]).doc as BankPolicy).daily_limit;
+    usage: async (p, m) => {
+      const limit = (store.current(OWNER_OF_PARTY[p], m).doc as BankPolicy).daily_limit;
       return { RD: { used: USED[p].RD, limit: limit?.RD ?? null }, DFABI: { used: USED[p].DFABI, limit: limit?.DFABI ?? null } };
     },
   };
