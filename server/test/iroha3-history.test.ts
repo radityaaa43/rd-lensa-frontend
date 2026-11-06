@@ -58,6 +58,7 @@ function setup(opts: { box?: Record<string, string>; fetchFail?: (url: URL) => R
     try { if (list) await wait(); } finally { if (list) track.fetch--; }
     if (url.pathname === '/health') return new Response('Healthy', { status: 200 });
     if (url.pathname === '/status') return Response.json({ blocks: 127 });
+    if (url.pathname === '/v1/nexus/lifecycle') return Response.json({ lane_count: 3, lanes: [{ alias: 'universal', visibility: 'public' }, { alias: 'ds-rd', visibility: 'restricted' }, { alias: 'ds-dfabi', visibility: 'restricted' }] });
     const account = decodeURIComponent(url.pathname.split('/')[3]!);
     const all = (opts.lists ?? LISTS)[account] ?? [];
     const offset = Number(url.searchParams.get('offset') ?? 0);
@@ -259,7 +260,7 @@ describe('iroha3 network', () => {
     expect(n.nodes.map((x) => [x.id, x.kind, x.owner, x.status])).toEqual([
       ['iroha-bi', 'iroha-peer', 'BI', 'up'], ['iroha-a', 'iroha-peer', 'A', 'up'], ['iroha-b', 'iroha-peer', 'B', 'down'], ['iroha-c', 'iroha-peer', 'C', 'up'],
     ]);
-    expect(n.nodes[0]!.detail).toBe('blok 127');
+    expect(n.nodes[0]!.detail).toBe('blok 127 | 3 lane: universal publik, ds-rd terbatas, ds-dfabi terbatas | APS aktif sejak blok 11 | alur frontend: lane 0 (transparan)');
     expect(n.nodes[2]!.detail).toMatch(/ECONNREFUSED/);
     expect(n.links).toHaveLength(6); // full mesh of 4
     expect(calls.find((c) => c.url.pathname === '/health')!.headers.Accept).toBe('text/plain');
