@@ -16,7 +16,8 @@ function run(bin: string, args: string[], allowFail = false): Promise<string> {
 
 // Drives the pinned `opa` binary over besu/opa. Lensa owns only the editable keys; everything else stays as in git.
 export class Opa {
-  constructor(private readonly bin: string, private readonly opaRoot: string) {}
+  // keysDir holds <keyId>.pem, the owners' private signing keys (outside the repo); without it bundles are built unsigned.
+  constructor(private readonly bin: string, private readonly opaRoot: string, private readonly keysDir?: string) {}
 
   // Copies both bundles into outDir (bi/, bank/) and overlays the editable keys. The bank document belongs to
   // `node` and is chosen by the caller (node 1 always gets seeds/bank-bi.json), so `node` does not alter the output.
@@ -67,7 +68,11 @@ export class Opa {
     return { passed: results.filter((t) => !t.fail && !t.error && !t.skip).length, total: results.length };
   }
 
-  async build(bundleDir: string, revision: string, outFile: string): Promise<void> {
-    await run(this.bin, ['build', '-b', bundleDir, '--revision', revision, '-o', outFile]);
+  // keyId names the owner's key: the gateway pins it per bundle (`signing.keyid`), so a bundle signed with another key is refused.
+  async build(bundleDir: string, revision: string, outFile: string, keyId?: string): Promise<void> {
+    const sign = this.keysDir && keyId
+      ? ['--signing-key', join(this.keysDir, `${keyId}.pem`), '--signing-alg', 'RS256', '--verification-key-id', keyId]
+      : [];
+    await run(this.bin, ['build', '-b', bundleDir, '--revision', revision, ...sign, '-o', outFile]);
   }
 }

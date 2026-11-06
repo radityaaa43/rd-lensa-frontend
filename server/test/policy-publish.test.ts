@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, vi } from 'vitest';
-import type { Kube } from '../src/policy/kube.ts';
+import type { GatewayBundles, Kube } from '../src/policy/kube.ts';
 import type { Opa } from '../src/policy/opa.ts';
 import { Publisher } from '../src/policy/publish.ts';
 import { PolicyStore, SEEDS_DIR } from '../src/policy/store.ts';
@@ -25,25 +25,28 @@ const fakeOpa = {
       writeFileSync(join(dir, name, 'doc.json'), JSON.stringify(doc));
     }
   },
-  build: async (dir: string, revision: string, out: string) => {
-    writeFileSync(out, JSON.stringify({ revision, doc: JSON.parse(readFileSync(join(dir, 'doc.json'), 'utf8')) }));
+  build: async (dir: string, revision: string, out: string, keyId?: string) => {
+    writeFileSync(out, JSON.stringify({ revision, keyId, doc: JSON.parse(readFileSync(join(dir, 'doc.json'), 'utf8')) }));
   },
 } as unknown as Opa;
 
+// The "gateway" of MemKube loads a ConfigMap's bundles on `sync(node)` and then reports their revisions, like the sink does.
+// `autoSync` = the gateway polls by itself right after an apply; `refuse` = it rejects the bundle (bad signature) and keeps the old one.
 class MemKube implements Kube {
   deployed = new Set<string>();
   cms = new Map<string, Record<string, Buffer>>();
-  ann = new Map<string, Record<string, string>>();
-  ready = new Map<string, Record<string, string>>();
-  failRollout = new Set<string>();
+  active = new Map<string, { bi: string; bank: string }>();
+  age = new Map<string, number>();
+  refuse = new Set<string>();
   failApply = new Set<string>();
   calls: string[] = [];
+  statusCalls = 0;
+  lagCalls = 0;
   constructor(...nodes: number[]) {
     for (const n of nodes) {
       this.deployed.add(`bank-gw-${n}`);
       this.cms.set(`bank-gw-${n}-bundles`, { 'bi.tar.gz': Buffer.from('old-bi'), 'bank.tar.gz': Buffer.from('old-bank') });
-      this.ann.set(`bank-gw-${n}`, { 'policy.lensa/bi': '1', 'policy.lensa/bank': '1', other: 'keep' });
-      this.ready.set(`bank-gw-${n}`, { 'policy.lensa/bi': '1', 'policy.lensa/bank': '1' });
+      this.active.set(`bank-gw-${n}`, { bi: 'bi-v1', bank: 'bank-x-v1' });
     }
   }
   async deploymentExists(name: string) { return this.deployed.has(name); }
@@ -54,15 +57,18 @@ class MemKube implements Kube {
     if (wasFirst) throw new Error('apply boom');
     this.cms.set(name, files);
   }
-  async templateAnnotations(d: string) { return { ...this.ann.get(d) }; }
-  async setTemplateAnnotations(d: string, a: Record<string, string>) { this.calls.push(`annotate ${d}`); this.ann.set(d, { ...a }); }
-  async waitRollout(d: string) {
-    if (this.failRollout.delete(d)) return false;
-    const { other: _o, ...policy } = this.ann.get(d) ?? {};
-    this.ready.set(d, policy);
-    return true;
+  async bundleStatus(): Promise<Record<string, GatewayBundles>> {
+    this.statusCalls++;
+    const out: Record<string, GatewayBundles> = {};
+    for (const [gw, rev] of this.active) {
+      const cm = this.cms.get(`${gw}-bundles`)!;
+      const parse = (f: string) => { try { return (JSON.parse(cm[f]!.toString()) as { revision: string }).revision; } catch { return null; } };
+      // a bundle the gateway refuses keeps the old revision; the sink would show the error in code/message
+      if (!this.refuse.has(gw) && this.statusCalls > this.lagCalls) { rev.bi = parse('bi.tar.gz') ?? rev.bi; rev.bank = parse('bank.tar.gz') ?? rev.bank; }
+      out[gw] = { age_s: this.age.get(gw) ?? 1, bundles: { bi: { revision: rev.bi, code: null, message: null }, bank: { revision: rev.bank, code: null, message: null } } };
+    }
+    return out;
   }
-  async readyPodAnnotations(d: string) { return this.ready.get(d) ?? null; }
 }
 
 function setup(kube: MemKube) {
@@ -72,25 +78,26 @@ function setup(kube: MemKube) {
   writeFileSync(join(seeds, 'bi.json'), JSON.stringify(biSeed));
   for (const b of ['bank-a', 'bank-b', 'bank-c']) writeFileSync(join(seeds, `${b}.json`), JSON.stringify(bankSeed));
   const store = new PolicyStore(join(root, 'policy'), seeds);
-  return { store, pub: new Publisher(kube, fakeOpa, store) };
+  return { store, pub: new Publisher(kube, fakeOpa, store, { waitMs: 60, pollMs: 5 }) };
 }
 const tar = (kube: MemKube, node: number, which: 'bi' | 'bank') =>
-  JSON.parse(kube.cms.get(`bank-gw-${node}-bundles`)![`${which}.tar.gz`]!.toString()) as { revision: string; doc: unknown };
+  JSON.parse(kube.cms.get(`bank-gw-${node}-bundles`)![`${which}.tar.gz`]!.toString()) as { revision: string; keyId?: string; doc: unknown };
 const saveV2 = (store: PolicyStore, owner: 'bi' | 'bank-a', doc: BiPolicy | BankPolicy) =>
   store.saveVersion({ owner, n: 2, doc, maker: 'm', checker: 'c', reason: 'r', note: '', submittedAt: 'x', approvedAt: 'x' });
 
-test('bi change goes to every deployed gateway', async () => {
+test('bi change goes to every deployed gateway, signed with the owner keys, and no Deployment is touched', async () => {
   const kube = new MemKube(1, 2, 3, 4);
   const { store, pub } = setup(kube);
   const doc = { ...biSeed, frozen: ['X'] };
   saveV2(store, 'bi', doc);
   await pub.publish('bi', 2);
-  for (const node of [1, 2, 3, 4]) {
-    expect(tar(kube, node, 'bi')).toEqual({ revision: 'bi-v2', doc });
-    expect(kube.ann.get(`bank-gw-${node}`)).toMatchObject({ 'policy.lensa/bi': '2', 'policy.lensa/bank': '1', other: 'keep' });
-  }
-  expect(tar(kube, 1, 'bank')).toEqual({ revision: 'bank-bi-v1', doc: JSON.parse(readFileSync(join(SEEDS_DIR, 'bank-bi.json'), 'utf8')) });
-  expect(tar(kube, 3, 'bank').revision).toBe('bank-b-v1');
+  for (const node of [1, 2, 3, 4]) expect(tar(kube, node, 'bi')).toEqual({ revision: 'bi-v2', keyId: 'bi', doc });
+  // BI's own node-1 bank bundle is signed by BI, every bank's by that bank
+  expect(tar(kube, 1, 'bank')).toEqual({ revision: 'bank-bi-v1', keyId: 'bi', doc: JSON.parse(readFileSync(join(SEEDS_DIR, 'bank-bi.json'), 'utf8')) });
+  expect(['bank-a-v1:bank-a', 'bank-b-v1:bank-b', 'bank-c-v1:bank-c']).toEqual([2, 3, 4].map((n) => `${tar(kube, n, 'bank').revision}:${tar(kube, n, 'bank').keyId}`));
+  // the only writes are the four ConfigMaps: no annotation patch, no rollout (Lensa's port-forward stays up)
+  expect(kube.calls).toEqual([1, 2, 3, 4].map((n) => `apply bank-gw-${n}-bundles`));
+  expect((await pub.status()).map((g) => [g.bi, g.bank, g.ready])).toEqual([[2, 1, true], [2, 1, true], [2, 1, true], [2, 1, true]]);
 });
 
 test('bank change goes to its gateway only', async () => {
@@ -99,29 +106,60 @@ test('bank change goes to its gateway only', async () => {
   const doc: BankPolicy = { counterparties: ['bi@node1', 'bankB@node3'] };
   saveV2(store, 'bank-a', doc);
   await pub.publish('bank-a', 2);
-  expect(tar(kube, 2, 'bank')).toEqual({ revision: 'bank-a-v2', doc });
-  expect(tar(kube, 2, 'bi')).toEqual({ revision: 'bi-v1', doc: biSeed });
-  expect(kube.ann.get('bank-gw-2')).toMatchObject({ 'policy.lensa/bi': '1', 'policy.lensa/bank': '2' });
-  expect(kube.calls).toEqual(['apply bank-gw-2-bundles', 'annotate bank-gw-2']);
+  expect(tar(kube, 2, 'bank')).toEqual({ revision: 'bank-a-v2', keyId: 'bank-a', doc });
+  expect(tar(kube, 2, 'bi')).toEqual({ revision: 'bi-v1', keyId: 'bi', doc: biSeed });
+  expect(kube.calls).toEqual(['apply bank-gw-2-bundles']);
+  expect((await pub.status())[1]).toEqual({ node: 2, deployed: true, bi: 1, bank: 2, ready: true });
 });
 
-test('failed rollout restores previous configmap and annotations', async () => {
+test('waits until the gateway reports the new revisions', async () => {
+  const kube = new MemKube(2);
+  kube.lagCalls = 3; // the gateway needs a few polls (kubelet ConfigMap refresh, bundle poll) before it reports the new revision
+  const { store, pub } = setup(kube);
+  saveV2(store, 'bank-a', { counterparties: ['bi@node1', 'bankB@node3'] });
+  await pub.publish('bank-a', 2);
+  expect(kube.statusCalls).toBeGreaterThan(3);
+  expect(kube.calls).toEqual(['apply bank-gw-2-bundles']);
+});
+
+test('a gateway that never reports the new revision (bundle refused, e.g. bad signature): ConfigMap restored, 502, the others keep the new version', async () => {
   const kube = new MemKube(1, 2, 3, 4);
-  kube.failRollout.add('bank-gw-2');
+  kube.refuse.add('bank-gw-2');
   const { store, pub } = setup(kube);
   saveV2(store, 'bi', { ...biSeed, frozen: ['X'] });
   const e = await pub.publish('bi', 2).then(() => null, (x) => x);
   expect(e).toBeInstanceOf(PolicyError);
   expect(e).toMatchObject({ status: 502, message: 'Gagal terbit ke gateway 2' });
   expect(kube.cms.get('bank-gw-2-bundles')).toEqual({ 'bi.tar.gz': Buffer.from('old-bi'), 'bank.tar.gz': Buffer.from('old-bank') });
-  expect(kube.ann.get('bank-gw-2')).toEqual({ 'policy.lensa/bi': '1', 'policy.lensa/bank': '1', other: 'keep' });
-  // the other gateways still got the new version
   for (const node of [1, 3, 4]) expect(tar(kube, node, 'bi').revision).toBe('bi-v2');
+});
+
+test('an old revision keeps the publish waiting for the whole window', async () => {
+  const kube = new MemKube(2);
+  kube.refuse.add('bank-gw-2');
+  const { store, pub } = setup(kube);
+  saveV2(store, 'bank-a', { counterparties: ['bi@node1'] });
+  const t0 = Date.now();
+  await expect(pub.publish('bank-a', 2)).rejects.toMatchObject({ status: 502 });
+  expect(Date.now() - t0).toBeGreaterThanOrEqual(55); // waited the whole window, polled more than once
+  expect(kube.statusCalls).toBeGreaterThan(2);
+});
+
+test('an unreadable sink counts as not confirmed (fail closed) and the ConfigMap is restored', async () => {
+  const kube = new MemKube(2);
+  kube.bundleStatus = async () => { throw new Error('kubectl get gagal: sink down'); };
+  const { store, pub } = setup(kube);
+  saveV2(store, 'bank-a', { counterparties: ['bi@node1'] });
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  await expect(pub.publish('bank-a', 2)).rejects.toMatchObject({ status: 502, message: 'Gagal terbit ke gateway 2' });
+  expect(err).toHaveBeenCalledWith(expect.stringContaining('sink down'));
+  err.mockRestore();
+  expect(kube.cms.get('bank-gw-2-bundles')).toEqual({ 'bi.tar.gz': Buffer.from('old-bi'), 'bank.tar.gz': Buffer.from('old-bank') });
 });
 
 test('failed restore is named in the message but the error stays a 502', async () => {
   const kube = new MemKube(2);
-  kube.failRollout.add('bank-gw-2');
+  kube.refuse.add('bank-gw-2');
   const { store, pub } = setup(kube);
   saveV2(store, 'bi', { ...biSeed, frozen: ['X'] });
   const orig = kube.applyConfigMap.bind(kube);
@@ -137,7 +175,7 @@ test('missing gateway reported not deployed', async () => {
   const { store, pub } = setup(kube);
   saveV2(store, 'bi', { ...biSeed, frozen: ['X'] });
   await pub.publish('bi', 2); // gateways 1, 2, 4 are absent: skipped, not a failure
-  expect(kube.calls).toEqual(['apply bank-gw-3-bundles', 'annotate bank-gw-3']);
+  expect(kube.calls).toEqual(['apply bank-gw-3-bundles']);
   expect(await pub.status()).toEqual([
     { node: 1, deployed: false, bi: null, bank: null, ready: false },
     { node: 2, deployed: false, bi: null, bank: null, ready: false },
@@ -146,14 +184,20 @@ test('missing gateway reported not deployed', async () => {
   ]);
 });
 
-test('status reads ready pod annotations', async () => {
-  const kube = new MemKube(1, 2);
-  kube.ready.set('bank-gw-1', { 'policy.lensa/bi': '3', 'policy.lensa/bank': '2' });
-  kube.ready.delete('bank-gw-2'); // deployed, no ready pod
+test('status: fresh report gives versions, stale or missing report gives not ready, unreadable sink does not throw', async () => {
+  const kube = new MemKube(1, 2, 3);
+  kube.active.set('bank-gw-1', { bi: 'bi-v3', bank: 'bank-bi-v2' });
+  kube.age.set('bank-gw-2', 61); // gateway gone quiet
+  kube.active.delete('bank-gw-3'); // deployed, never reported
   const { pub } = setup(kube);
   const s = await pub.status();
   expect(s[0]).toEqual({ node: 1, deployed: true, bi: 3, bank: 2, ready: true });
   expect(s[1]).toEqual({ node: 2, deployed: true, bi: null, bank: null, ready: false });
+  expect(s[2]).toEqual({ node: 3, deployed: true, bi: null, bank: null, ready: false });
+  kube.bundleStatus = async () => { throw new Error('sink down'); };
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  expect((await pub.status()).map((g) => g.ready)).toEqual([false, false, false, false]);
+  err.mockRestore();
 });
 
 test('restart marks interrupted publish failed', () => {

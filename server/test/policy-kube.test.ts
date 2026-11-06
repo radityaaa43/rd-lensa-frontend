@@ -23,29 +23,30 @@ test('applyConfigMap rejects (no crash) when kubectl exits without reading stdin
   await expect(kube.applyConfigMap('bank-gw-2-bundles', big)).rejects.toThrow(/boom/);
 });
 
-test('argument vectors: apply and rollout', async () => {
-  const { kube, log } = stub(`printf "%s\\n" "$*" >> "$0.args"; cat >> "$0.in"; exit 0`);
+test('argument vectors: apply, and the sink status read through the service proxy (no rollout, no patch, no exec)', async () => {
+  const { kube, log } = stub(`printf "%s\\n" "$*" >> "$0.args"; case "$*" in *--raw*) echo '{"bank-gw-2":{"age_s":3,"bundles":{}}}';; *) cat >> "$0.in";; esac; exit 0`);
   await kube.applyConfigMap('bank-gw-2-bundles', { 'bi.tar.gz': Buffer.from('x') });
-  expect(await kube.waitRollout('bank-gw-2', 120)).toBe(true);
+  expect(await kube.bundleStatus()).toEqual({ 'bank-gw-2': { age_s: 3, bundles: {} } });
   const dir = log.replace(/\/log$/, '');
   expect(readFileSync(join(dir, 'kubectl.args'), 'utf8').trim().split('\n')).toEqual([
     '-n paladin apply -f -',
-    '-n paladin rollout status deploy/bank-gw-2 --timeout=120s',
+    '-n paladin get --raw /api/v1/namespaces/paladin/services/bundle-server:sink/proxy/status',
   ]);
   expect(JSON.parse(readFileSync(join(dir, 'kubectl.in'), 'utf8'))).toMatchObject({
     kind: 'ConfigMap', metadata: { name: 'bank-gw-2-bundles', namespace: 'paladin' }, binaryData: { 'bi.tar.gz': 'eA==' },
   });
 });
 
+test('bundleStatus rejects when kubectl fails or answers non-JSON', async () => {
+  await expect(stub('echo nope >&2; exit 1').kube.bundleStatus()).rejects.toThrow(/nope/);
+  await expect(stub('echo not-json').kube.bundleStatus()).rejects.toThrow();
+});
+
 test('names outside bank-gw-* are refused before kubectl runs', async () => {
   const { kube, log } = stub(`echo called >> "$0.args"`);
   const dir = log.replace(/\/log$/, '');
   await expect(kube.applyConfigMap('kube-root-ca.crt', big)).rejects.toThrow(/ditolak/);
-  await expect(kube.waitRollout('paladin-node2', 1)).rejects.toThrow(/ditolak/);
   await expect(kube.getConfigMap('bank-gw-5-bundles')).rejects.toThrow(/ditolak/);
   await expect(kube.deploymentExists('bank-gw-2-bundles')).rejects.toThrow(/ditolak/);
-  await expect(kube.templateAnnotations('x')).rejects.toThrow(/ditolak/);
-  await expect(kube.setTemplateAnnotations('x', {})).rejects.toThrow(/ditolak/);
-  await expect(kube.readyPodAnnotations('x')).rejects.toThrow(/ditolak/);
   expect(existsSync(join(dir, 'kubectl.args'))).toBe(false);
 });

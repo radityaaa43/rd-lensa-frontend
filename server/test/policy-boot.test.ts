@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from 'vitest';
 import { bootPolicy } from '../src/policy/boot.ts';
 import type { PolicyStore } from '../src/policy/store.ts';
 
-const env = { OPA_BIN: '/nonexistent/opa' };
+const env = { OPA_BIN: '/nonexistent/opa', OPA_KEYS_DIR: '/nonexistent/keys' };
 const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 afterEach(() => log.mockClear());
 
@@ -10,6 +10,13 @@ test('no OPA_BIN: no policy deps, nothing built', () => {
   const makeStore = vi.fn();
   expect(bootPolicy({}, { makeStore })).toBeUndefined();
   expect(makeStore).not.toHaveBeenCalled();
+});
+
+test('OPA_BIN without OPA_KEYS_DIR: no policy deps, nothing built, logged', () => {
+  const makeStore = vi.fn();
+  expect(bootPolicy({ OPA_BIN: '/nonexistent/opa' }, { makeStore })).toBeUndefined();
+  expect(makeStore).not.toHaveBeenCalled();
+  expect(log).toHaveBeenCalledWith(expect.stringContaining('Kebijakan dinonaktifkan'), expect.objectContaining({ message: expect.stringContaining('OPA_KEYS_DIR') }));
 });
 
 test('store that cannot be opened: undefined and logged', () => {

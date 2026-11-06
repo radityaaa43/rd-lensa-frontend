@@ -1,11 +1,12 @@
 // Demo/Playwright server: the real HTTP API over fake adapters, no chain access. Run: PORT=8791 npx tsx src/mock-main.ts
 import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { gunzipSync } from 'node:zlib';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildApp } from './app.ts';
 import { fakeAdapter } from '../test/fake-adapter.ts';
-import type { Kube } from './policy/kube.ts';
+import type { GatewayBundles, Kube } from './policy/kube.ts';
 import { Opa } from './policy/opa.ts';
 import { Publisher } from './policy/publish.ts';
 import type { PolicyDeps } from './policy/routes.ts';
@@ -22,25 +23,35 @@ stealth.lens = async (req, result, party) => {
   return v.verdict === 'sealed' ? { ...v, verdict: 'partial', amount: req.amount } : v;
 };
 
+// a real bundle is a gzip tar holding .manifest; the stub's is the bare JSON
+const revisionOf = (b: Buffer): string | null => {
+  let text: string;
+  try { text = gunzipSync(b).toString('latin1'); } catch { text = b.toString('latin1'); }
+  return /"revision":\s*"([^"]+)"/.exec(text)?.[1] ?? null;
+};
 // Halaman Kebijakan: the real store, workflow and publisher over an in-memory cluster where only gateway 2 exists and
 // every rollout succeeds. Without OPA_BIN, a stub reports no errors and no tests so the screen still works.
 class MockKube implements Kube {
-  private readonly maps = new Map<string, Record<string, Buffer>>();
-  private ann: Record<string, string> = {};
+  // gateway 2 starts on version 1 of both bundles
+  private readonly maps = new Map<string, Record<string, Buffer>>([['bank-gw-2-bundles', {
+    'bi.tar.gz': Buffer.from('{"revision":"bi-v1"}'), 'bank.tar.gz': Buffer.from('{"revision":"bank-a-v1"}'),
+  }]]);
   deploymentExists = async (name: string) => name === 'bank-gw-2';
   getConfigMap = async (name: string) => this.maps.get(name) ?? null;
   applyConfigMap = async (name: string, files: Record<string, Buffer>) => { this.maps.set(name, files); };
-  templateAnnotations = async () => ({ ...this.ann });
-  setTemplateAnnotations = async (_deploy: string, a: Record<string, string>) => { this.ann = { ...a }; };
-  waitRollout = async () => true;
-  readyPodAnnotations = async (deploy: string) => (deploy === 'bank-gw-2' ? { ...this.ann } : null);
+  // the gateway "loads" whatever was applied last: it reports the revision written in each bundle's manifest
+  bundleStatus = async (): Promise<Record<string, GatewayBundles>> => {
+    const files = this.maps.get('bank-gw-2-bundles');
+    const entry = (f?: Buffer) => ({ revision: f ? revisionOf(f) : null, code: null, message: null });
+    return files ? { 'bank-gw-2': { age_s: 0, bundles: { bi: entry(files['bi.tar.gz']), bank: entry(files['bank.tar.gz']) } } } : {};
+  };
 }
 class StubOpa extends Opa {
   constructor() { super('', ''); }
   override assemble() {}
   override check = async () => [] as string[];
   override test = async () => ({ passed: 0, total: 0 });
-  override build = async (_dir: string, _revision: string, outFile: string) => writeFileSync(outFile, '');
+  override build = async (_dir: string, revision: string, outFile: string) => writeFileSync(outFile, JSON.stringify({ revision }));
 }
 const USED = { A: { RD: 1_900_000_000, DFABI: 300 }, B: { RD: 1_555_400_000, DFABI: 0 }, C: { RD: 250_000_000, DFABI: 40 } } as const;
 

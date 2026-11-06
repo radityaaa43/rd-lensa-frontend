@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Kube } from './kube.ts';
+import type { GatewayBundles, Kube } from './kube.ts';
 import type { Opa } from './opa.ts';
 import { SEEDS_DIR } from './store.ts';
 import type { PolicyStore } from './store.ts';
@@ -11,12 +11,16 @@ import type { BankPolicy, BiPolicy, GatewayStatus, Owner } from './types.ts';
 type Node = 1 | 2 | 3 | 4;
 const NODES: Node[] = [1, 2, 3, 4];
 const OWNERS: Owner[] = ['bi', 'bank-a', 'bank-b', 'bank-c'];
-const A_BI = 'policy.lensa/bi';
-const A_BANK = 'policy.lensa/bank';
-const ROLLOUT_TIMEOUT_S = 120;
+// Gateways poll bundle-server every 5-15 s and the kubelet refreshes a mounted ConfigMap within about 90 s.
+const WAIT_MS = 180_000;
+const POLL_MS = 3_000;
+// A gateway reports every few seconds (each poll updates its status); an older report is a gateway that is gone.
+const FRESH_S = 60;
 
 // Writes bi.tar.gz and bank.tar.gz for one gateway into outDir from the store's current versions. `pin` names a
 // version of one owner that is not current yet (the one being published). Node 1's bank document is a seed, not an Owner.
+// Each bundle is signed (when the Opa has a keys dir) by its owner: bi.tar.gz with BI's key, bank.tar.gz with the bank's;
+// node 1's bank bundle belongs to BI.
 export async function buildBundles(
   opa: Opa, store: PolicyStore, node: Node, outDir: string, pin?: { owner: Owner; n: number },
 ): Promise<{ bi: number; bank: number }> {
@@ -34,23 +38,30 @@ export async function buildBundles(
   const work = mkdtempSync(join(tmpdir(), 'lensa-bundle-'));
   try {
     opa.assemble(node, bi.doc as BiPolicy, bank.doc as BankPolicy, work);
-    await opa.build(join(work, 'bi'), `bi-v${bi.n}`, join(outDir, 'bi.tar.gz'));
-    await opa.build(join(work, 'bank'), `${bankName}-v${bank.n}`, join(outDir, 'bank.tar.gz'));
+    await opa.build(join(work, 'bi'), `bi-v${bi.n}`, join(outDir, 'bi.tar.gz'), 'bi');
+    await opa.build(join(work, 'bank'), `${bankName}-v${bank.n}`, join(outDir, 'bank.tar.gz'), bankName === 'bank-bi' ? 'bi' : bankName);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
   return { bi: bi.n, bank: bank.n };
 }
 
-const asNumber = (s: string | undefined): number | null => {
-  const n = Number(s);
-  return s !== undefined && Number.isInteger(n) ? n : null;
+// 'bank-a-v3' -> 3
+const versionOf = (revision: string | null | undefined): number | null => {
+  const m = /-v(\d+)$/.exec(revision ?? '');
+  return m ? Number(m[1]) : null;
 };
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export interface PublisherTiming { waitMs?: number; pollMs?: number }
 
 export class Publisher {
   private queue: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly kube: Kube, private readonly opa: Opa, private readonly store: PolicyStore) {}
+  constructor(
+    private readonly kube: Kube, private readonly opa: Opa, private readonly store: PolicyStore,
+    private readonly timing: PublisherTiming = {},
+  ) {}
 
   // One publish at a time: two owners can both touch the same gateway ConfigMap.
   publish(owner: Owner, n: number): Promise<void> {
@@ -76,22 +87,22 @@ export class Publisher {
   }
 
   // 'restored' = failed but the previous state is back; any other string = failed and the restore error.
+  // No Deployment is touched: the gateways pull the new bundles from bundle-server by themselves. The publish counts as
+  // done for a node once its gateway reports the new revisions (a bundle with a bad signature is never activated,
+  // so it never reports).
   private async publishNode(node: Node, pin: { owner: Owner; n: number }): Promise<'ok' | 'skipped' | 'restored' | string> {
     const deploy = `bank-gw-${node}`;
     const cm = `${deploy}-bundles`;
     let touched = false;
     let prevCm: Record<string, Buffer> | null = null;
-    let prevAnn: Record<string, string> = {};
     const out = mkdtempSync(join(tmpdir(), 'lensa-publish-'));
     try {
       if (!(await this.kube.deploymentExists(deploy))) return 'skipped';
       const v = await buildBundles(this.opa, this.store, node, out, pin);
       prevCm = await this.kube.getConfigMap(cm);
-      prevAnn = await this.kube.templateAnnotations(deploy);
       touched = true;
       await this.kube.applyConfigMap(cm, { 'bi.tar.gz': readFileSync(join(out, 'bi.tar.gz')), 'bank.tar.gz': readFileSync(join(out, 'bank.tar.gz')) });
-      await this.kube.setTemplateAnnotations(deploy, { ...prevAnn, [A_BI]: String(v.bi), [A_BANK]: String(v.bank) });
-      if (await this.kube.waitRollout(deploy, ROLLOUT_TIMEOUT_S)) return 'ok';
+      if (await this.waitFor(deploy, v)) return 'ok';
     } catch (e) {
       // falls through to the restore; the publish counts as failed for this node
       console.error(`Terbit ke ${deploy} gagal: ${(e as Error).message}`);
@@ -100,23 +111,49 @@ export class Publisher {
     }
     if (!touched) return 'restored'; // nothing changed on the cluster
     try {
-      // ponytail: a first publish has no previous ConfigMap to put back, and it is not deleted; the annotations
-      // do go back, so the Deployment rolls to the old template and the stray ConfigMap is harmless until retry.
+      // ponytail: a first publish has no previous ConfigMap to put back, and it is not deleted; the gateway never
+      // activated the new bundle, so the stray ConfigMap is harmless until retry.
       if (prevCm) await this.kube.applyConfigMap(cm, prevCm);
-      await this.kube.setTemplateAnnotations(deploy, prevAnn);
       return 'restored';
     } catch (e) {
       return (e as Error).message;
     }
   }
 
+  // Polls the sink until the gateway reports `bi-v<bi>` and the bank bundle at version `bank`, or the time is up.
+  private async waitFor(deploy: string, v: { bi: number; bank: number }): Promise<boolean> {
+    const { waitMs = WAIT_MS, pollMs = POLL_MS } = this.timing;
+    const deadline = Date.now() + waitMs;
+    let last: unknown;
+    for (;;) {
+      try {
+        last = (await this.kube.bundleStatus())[deploy];
+      } catch (e) {
+        last = (e as Error).message; // the sink may be restarting: keep polling until the deadline
+      }
+      const b = (last as GatewayBundles | undefined)?.bundles;
+      if (b && versionOf(b.bi?.revision) === v.bi && versionOf(b.bank?.revision) === v.bank) return true;
+      if (Date.now() >= deadline) break;
+      await sleep(pollMs);
+    }
+    console.error(`${deploy} belum melaporkan bi v${v.bi} / bank v${v.bank}; laporan terakhir: ${JSON.stringify(last)}`);
+    return false;
+  }
+
   async status(): Promise<GatewayStatus[]> {
-    return Promise.all(NODES.map(async (node) => {
-      const deploy = `bank-gw-${node}`;
-      if (!(await this.kube.deploymentExists(deploy))) return { node, deployed: false, bi: null, bank: null, ready: false };
-      const a = await this.kube.readyPodAnnotations(deploy);
-      return { node, deployed: true, bi: asNumber(a?.[A_BI]), bank: asNumber(a?.[A_BANK]), ready: a !== null };
-    }));
+    const deployed = await Promise.all(NODES.map((node) => this.kube.deploymentExists(`bank-gw-${node}`)));
+    const reports = deployed.some(Boolean) ? await this.kube.bundleStatus().catch((e: Error) => {
+      console.error(`Status bundle gagal dibaca: ${e.message}`);
+      return {} as Record<string, GatewayBundles>;
+    }) : {};
+    return NODES.map((node, i) => {
+      if (!deployed[i]) return { node, deployed: false, bi: null, bank: null, ready: false };
+      const r = reports[`bank-gw-${node}`];
+      const fresh = r !== undefined && r.age_s <= FRESH_S;
+      const bi = fresh ? versionOf(r.bundles.bi?.revision) : null;
+      const bank = fresh ? versionOf(r.bundles.bank?.revision) : null;
+      return { node, deployed: true, bi, bank, ready: bi !== null && bank !== null };
+    });
   }
 
   // Called once at startup: a publish that was running when the server stopped will never report back.
