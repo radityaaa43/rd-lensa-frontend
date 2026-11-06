@@ -581,21 +581,21 @@ A change is drafted by one person and approved by a different one, then publishe
 |---|---|
 | `types.ts` | `Owner`, `BiPolicy`, `BankPolicy`, `Version`, `Pending`, `GatewayStatus`, `PolicyError(status, reason, errors?)`; `OWNER_OF_PARTY`, `BANK_BUNDLE_OF_NODE` |
 | `store.ts` | versions, pending change and audit log on disk (§8.3) |
-| `opa.ts` | runs the `opa` binary: `check` (validation rules), `test`, `assemble` the bundle dirs, `build` (`opa build -b`) |
+| `opa.ts` | runs the `opa` binary: `check` (validation rules), `test`, `assemble` the bundle dirs, `build` (`opa build -b`, signed with the owner's key from `OPA_KEYS_DIR`) |
 | `workflow.ts` | submit, approve, reject, cancel, republish; one lock per owner |
-| `publish.ts` | `buildBundles` and `Publisher` (build, ConfigMap, annotations, rollout, restore) |
-| `kube.ts` | the only kubectl calls; refuses any name outside `bank-gw-[1-4]` and `bank-gw-[1-4]-bundles` |
+| `publish.ts` | `buildBundles` and `Publisher` (build and sign, ConfigMap, wait for the gateway's revision, restore) |
+| `kube.ts` | the only kubectl calls; refuses any name outside `bank-gw-[1-4]` and `bank-gw-[1-4]-bundles`; reads the gateways' bundle status from the sink of `bundle-server` |
 | `usage.ts` | "Terpakai hari ini": today's outgoing total read from the bank's own Paladin node |
 | `routes.ts` | the endpoints (§8.2) |
 | `boot.ts` | `bootPolicy(env)` wiring for `main.ts` |
 | `cli/policy-build.ts` | `npm run policy:build -w server -- <node> <outdir>`: writes `bi.tar.gz` and `bank.tar.gz` for one gateway from the current versions. Does not touch the cluster |
 
-Policy is on only when `OPA_BIN` is set (path of the `opa` binary, in `~/.config/lensa/lensa.env`). `bootPolicy` is
-fail-soft: without `OPA_BIN`, or when setup throws (logged: "Kebijakan dinonaktifkan, gagal dimulai"), `buildApp` gets no
+Policy is on only when `OPA_BIN` (path of the `opa` binary) and `OPA_KEYS_DIR` (the owners' private signing keys, outside the repo; `besu/opa/keys.sh`) are set, both in `~/.config/lensa/lensa.env`. `bootPolicy` is
+fail-soft: without `OPA_BIN` or `OPA_KEYS_DIR`, or when setup throws (logged: "Kebijakan dinonaktifkan, gagal dimulai"), `buildApp` gets no
 `policy` and registers `registerPolicyUnavailable`: every `/api/policy*` route answers **501**
 `{ reason: "Kebijakan belum tersedia: OPA_BIN belum diatur" }` and the rest of Lensa starts normally. `mock-main.ts`
-wires the same store, workflow and publisher over an in-memory cluster where only gateway 2 exists and every rollout
-succeeds (a reason containing "uji gagal terbit" fails its first publish, for Playwright).
+wires the same store, workflow and publisher over an in-memory cluster where only gateway 2 exists and every publish
+is confirmed (a reason containing "uji gagal terbit" fails its first publish, for Playwright).
 
 ### 8.2 Routes (in `routes.ts`)
 
@@ -638,14 +638,14 @@ is the `bank-bi` seed, not an owner.
 Approve saves `v(N+1)`, sets `publishing`, then `Publisher.publish(owner, n)`, one publish at a time:
 
 1. targets: all four nodes for `bi`, the owner's node for a bank; a node whose Deployment `bank-gw-<node>` does not exist is skipped (so today only node 2 can be published);
-2. build both tarballs (`opa build -b`) into a temp dir; the bank bundle builds alone and reads BI's values as data only;
-3. apply ConfigMap `bank-gw-<node>-bundles` (`bi.tar.gz`, `bank.tar.gz`) and set pod-template annotations `policy.lensa/bi` and `policy.lensa/bank` to the version numbers, which rolls the Deployment;
-4. wait for the rollout, 120 s; on failure restore the previous ConfigMap and annotations.
+2. build and sign both tarballs (`opa build -b --signing-key`) into a temp dir; the bank bundle builds alone and reads BI's values as data only; `bi.tar.gz` is signed with BI's key, `bank.tar.gz` with the bank's (node 1's with BI's);
+3. apply ConfigMap `bank-gw-<node>-bundles` (`bi.tar.gz`, `bank.tar.gz`). `bundle-server` serves it and the gateway's OPA polls it (5-15 s, ConfigMap refresh up to about 90 s); no Deployment is touched, so Lensa's port-forward stays up;
+4. poll the sink status of `bundle-server` (`kubectl get --raw` through the service proxy) until the gateway reports `bi-v<n>` and `<bank>-v<n>` as active, 180 s; a bundle that fails signature verification is never activated, so it never reports; on failure restore the previous ConfigMap.
 
 Success deletes `pending.json` and audits `published`. Failure keeps the approved version, sets `publish-failed`, audits it and
 answers 502 `Gagal terbit ke gateway N` (adding `Pemulihan gagal, …` when the restore failed too); "Terbitkan ulang"
 calls `republish`. At startup `recoverInterrupted()` turns a `publishing` left by a stopped server into `publish-failed`.
-`GET /api/policy` `gateways` reads each ready pod's two annotations, so the screen shows which version a gateway really runs.
+`GET /api/policy` `gateways` reads the active revisions each gateway reported to the sink (a report older than 60 s counts as not ready), so the screen shows which version a gateway really runs.
 
 ### 8.4 Web
 

@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -80,4 +82,23 @@ test.skipIf(need)('build writes a bundle tarball', async () => {
   await opa.build(join(out, 'bank'), 'bank-bi-v1', join(out, 'bank.tar.gz'));
   expect(existsSync(join(out, 'bi.tar.gz'))).toBe(true);
   expect(existsSync(join(out, 'bank.tar.gz'))).toBe(true);
+});
+
+test.skipIf(need)('build signs with the key of the named owner; unsigned without a keys dir; a missing key fails', async () => {
+  const out = tmp();
+  const keys = tmp();
+  for (const id of ['bi', 'bank-a']) {
+    writeFileSync(join(keys, `${id}.pem`), generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }));
+  }
+  opa.assemble(2, seed<BiPolicy>('bi'), seed<BankPolicy>('bank-a'), out);
+  const signed = new Opa(process.env.OPA_BIN!, OPA_ROOT, keys);
+  const list = (f: string) => execFileSync('tar', ['tzf', f]).toString();
+  await signed.build(join(out, 'bank'), 'bank-a-v1', join(out, 'bank.tar.gz'), 'bank-a');
+  expect(list(join(out, 'bank.tar.gz'))).toContain('.signatures.json');
+  // the JWT header names the key id the gateway pins
+  const sig = JSON.parse(execFileSync('tar', ['xzOf', join(out, 'bank.tar.gz'), '/.signatures.json']).toString()).signatures[0] as string;
+  expect(JSON.parse(Buffer.from(sig.split('.')[0]!, 'base64url').toString())).toMatchObject({ alg: 'RS256', kid: 'bank-a' });
+  await opa.build(join(out, 'bi'), 'bi-v1', join(out, 'bi.tar.gz'), 'bi');
+  expect(list(join(out, 'bi.tar.gz'))).not.toContain('.signatures.json');
+  await expect(signed.build(join(out, 'bank'), 'x', join(out, 'x.tar.gz'), 'bank-zzz')).rejects.toThrow(/opa build gagal/);
 });

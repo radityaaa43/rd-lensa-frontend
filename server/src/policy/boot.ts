@@ -15,12 +15,14 @@ export interface BootParts {
 }
 
 // Halaman Kebijakan is optional: no OPA_BIN, or any failure while wiring it, means no policy deps (routes answer 501)
-// and the rest of Lensa still starts.
+// and the rest of Lensa still starts. OPA_KEYS_DIR (private bundle signing keys, outside the repo) is required: the
+// gateways only activate signed bundles, so without it a publish could never take effect.
 export function bootPolicy(env: NodeJS.ProcessEnv, parts: BootParts = {}): PolicyDeps | undefined {
   if (!env.OPA_BIN) return undefined;
   try {
+    if (!env.OPA_KEYS_DIR) throw new Error('OPA_KEYS_DIR belum diatur');
     const store = parts.makeStore?.() ?? new PolicyStore(POLICY_STATE_DIR, SEEDS_DIR);
-    const opa = new Opa(env.OPA_BIN, OPA_ROOT);
+    const opa = new Opa(env.OPA_BIN, OPA_ROOT, env.OPA_KEYS_DIR);
     const publisher = parts.makePublisher?.(store, opa) ?? new Publisher(kubectlKube(env), opa, store);
     publisher.recoverInterrupted();
     // a failure that is not already a PolicyError came from publishing: say so, keep the original in the server log
