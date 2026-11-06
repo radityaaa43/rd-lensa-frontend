@@ -4,6 +4,7 @@ import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
+import { notoDrift } from '../policy/noto-config.ts';
 import { besuNetwork, besuReceipt, paladinNodeReceipt } from './besu-network.ts';
 import { besuTrace, nameFrom } from './besu-trace.ts';
 import type { Sample } from '../stats.ts';
@@ -334,6 +335,8 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     async health() {
       try {
         const p = await withDeadline(plat(), 10_000, 'Memuat platform Noto');
+        const drift = notoDrift(p.data);
+        if (drift) return { ready: false, detail: drift };
         const nodes = [p.node1, ...BANKS.map((b) => bank(p, b).client)];
         const down: number[] = [];
         await Promise.all(nodes.map((c, i) => withDeadline(c.ptx.queryTransactions({ limit: 1 }), NODE_PROBE_MS, `Node ${i + 1}`).catch(() => { down.push(i + 1); })));
