@@ -32,7 +32,8 @@ export const REGISTRY: Record<Platform, PlatformInfo> = {
     label: 'Fabric-X', gateways: ['fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4'], enforced: true,
     ...(transport() ? { usage: (party: Exclude<PartyId, 'BI'>, limits: Partial<Record<Token, number>> | undefined) => fabricxUsage(party, limits) } : {}),
   },
-  iroha3: { label: 'Iroha 3', gateways: [], enforced: false },
+  // ir-gw-N (besu/opa/bundles/bi/bi/platform/iroha3); no usage() yet, the route answers 501. enforced stays false until live step 4.
+  iroha3: { label: 'Iroha 3', gateways: ['ir-gw-1', 'ir-gw-2', 'ir-gw-3', 'ir-gw-4'], enforced: false },
 };
 
 export const isPlatform = (v: unknown): v is Platform => (PLATFORMS as readonly unknown[]).includes(v);
