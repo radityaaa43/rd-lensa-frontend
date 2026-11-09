@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, StepEvent } from '../adapter.ts';
-import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, type LoadUser } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, WarmingUpError, type LoadUser } from '../adapter.ts';
 import { besuNetwork, besuReceipt } from './besu-network.ts';
 import { besuTrace, nameFrom } from './besu-trace.ts';
 import { BANKS, FLOWS, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type PartyId } from '../domain.ts';
@@ -173,14 +173,24 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
   }
 
   const tokenOf = (asset: 'RD' | 'DFABI') => (asset === 'RD' ? d.rd : d.bond);
-  const balance = (asset: 'RD' | 'DFABI', addr: string): Promise<bigint> =>
-    asset === 'RD' ? reader.rd.balanceOf(addr) : reader.bond.balanceOfByPartition(TRANCHE_A, addr);
+  // Every caller reads an address found through its announcement, which the same tx funded. Once such a one-time address reads 0
+  // it was spent and the protocol never pays it again, so it is not read again: a bank holds ~2,000 addresses, ~80% spent, and
+  // re-reading all of them on every balance read sent ~45,000 eth_call a minute through the gateway (history timed out at 20 s).
+  // ponytail: a plain ERC-20 transfer to a spent stealth address (outside the protocol) is not seen until restart.
+  const drained = { RD: new Set<string>(), DFABI: new Set<string>() };
+  const balance = async (asset: 'RD' | 'DFABI', addr: string): Promise<bigint> => {
+    if (drained[asset].has(lc(addr))) return 0n;
+    const b: bigint = await (asset === 'RD' ? reader.rd.balanceOf(addr) : reader.bond.balanceOfByPartition(TRANCHE_A, addr));
+    if (b === 0n) drained[asset].add(lc(addr));
+    return b;
+  };
   const reserved = () => new Set(Object.values(state.pool).flat().filter((e) => !e.used).map((e) => lc(e.stealthAddress)));
   // Stress test: a load user of a bank sends from any unused pooled address of that bank (one address, one transfer).
   const unusedOf = (bank: BankId) => Object.entries(state.pool).filter(([k]) => k.startsWith(`${bank}>`)).flatMap(([, es]) => es.filter((e) => !e.used));
-  // LENSA_BESU_RPC_BANKS="urlA,urlB,urlC": each bank's load transfers go to its own node's Besu door; unset = all through rpcUrl.
+  // LENSA_BESU_RPC_BANKS="urlA,urlB,urlC": every tx a bank signs (transfer, its DvP leg, its stress-test load) goes to its own node's
+  // Besu door (bank-gw-2..4, same OPA rules and mTLS as bank-gw-1); BI's own txs, reads and receipts stay on rpcUrl. Unset = all on rpcUrl.
   const bankRpc = (process.env.LENSA_BESU_RPC_BANKS ?? '').split(',').filter(Boolean);
-  const loadProvider = Object.fromEntries(BANKS.map((b, i) => [b, bankRpc[i] ? new JsonRpcProvider(besuRequest(gwUrl(bankRpc[i]!)), undefined, { cacheTimeout: -1 }) : provider])) as Record<BankId, JsonRpcProvider>;
+  const bankProvider = Object.fromEntries(BANKS.map((b, i) => [b, bankRpc[i] ? new JsonRpcProvider(besuRequest(gwUrl(bankRpc[i]!)), undefined, { cacheTimeout: -1 }) : provider])) as Record<BankId, JsonRpcProvider>;
 
   // Every stealth address the bank received this asset at (minus the ones reserved for the stress test), with its balance.
   async function holdings(bank: BankId, asset: 'RD' | 'DFABI'): Promise<Holding[]> {
@@ -333,8 +343,8 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
         tx = await step(1, async () => {
           const sellerSrc = award ? await biSeller() : await take(req.from as BankId, 'DFABI', amount);
           const buyerSrc = await take(req.to as BankId, 'RD', price);
-          const sellerW = new Wallet(sellerSrc.privateKey, provider);
-          const buyerW = new Wallet(buyerSrc.privateKey, provider);
+          const sellerW = new Wallet(sellerSrc.privateKey, award ? provider : bankProvider[req.from as BankId]);
+          const buyerW = new Wallet(buyerSrc.privateKey, bankProvider[req.to as BankId]);
           const expiry = (await chainNow(provider)) + ESCROW_TTL;
           const terms = {
             tradeId: '0x' + randomBytes(32).toString('hex'),
@@ -353,7 +363,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
           const fundCert = await cert(provider, d, state.deployerKey, 'transferByPartition', sellerSrc.stealthAddress, [TRANCHE_A, predicted, amount]);
           await confirm(await contracts(d, sellerW).bond.transferByPartition(TRANCHE_A, predicted, amount, fundCert, { gasPrice: gp }));
           await confirm(await contracts(d, buyerW).rd.transfer(predicted, price, { gasPrice: gp }));
-          const escrow = new Contract(predicted, artifact('DvPEscrow').abi, Wallet.createRandom().connect(provider));
+          const escrow = new Contract(predicted, artifact('DvPEscrow').abi, Wallet.createRandom().connect(bankProvider[req.to as BankId])); // the buyer settles
           return escrow.settle({ gasPrice: gp });
         });
       } else {
@@ -372,7 +382,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
           }
           // The bank signs with the key recovered from one of its own received stealth addresses, never a normal account.
           const src = await take(req.from as BankId, asset, amount);
-          const w = new Wallet(src.privateKey, provider);
+          const w = new Wallet(src.privateKey, bankProvider[req.from as BankId]);
           if (asset === 'RD') return contracts(d, w).rd.sendStealth(s.stealthAddress, amount, s.ephemeralPubKey, s.viewTag, memo, { gasPrice: gp });
           const args = [TRANCHE_A, s.stealthAddress, amount, s.ephemeralPubKey, s.viewTag, memo];
           const c = await cert(provider, d, state.deployerKey, 'transferByPartitionStealth', w.address, args);
@@ -594,7 +604,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
         if (signal?.aborted) throw new Error(CANCELLED); // released below: nothing was submitted
         submittedAt = Date.now();
         p = pay(chainId, banks[to].metaAddress, banks[from].identityKey, d.rd, amount);
-        const w = new Wallet(entry.privateKey, loadProvider[from]);
+        const w = new Wallet(entry.privateKey, bankProvider[from]);
         tx = await contracts(d, w).rd.sendStealth(p.s.stealthAddress, amount, p.s.ephemeralPubKey, p.s.viewTag, p.memo, { gasPrice: gp });
       } catch (e) {
         // Cancelled: nothing was submitted, the address is still funded. Any other failure (a revert at estimateGas, a lost
@@ -620,10 +630,14 @@ export async function load(): Promise<ModelAdapter | null> {
   const adapter = createStealthAdapter(s);
   // The first read of the announcement cache walks every block since the deploy (about 9 s on the live chain). Start it now, in the
   // background, so the first history() or lens() finds it warm; a failure here just means the first real call pays and reports it.
-  void adapter.history('BI', 1).catch(() => {});
-  // the same for the balance scans (scanOwned): every party's first read would otherwise pay the whole scan
-  // and then each bank's history (its sent-tx scan of the spenders), whose first cold read went past the route's deadline (502)
-  void Promise.all((['BI', ...BANKS] as PartyId[]).map((p) => adapter.balanceOf(p, 'RD').then(() => adapter.balanceOf(p, 'DFABI'))))
-    .then(() => Promise.all(BANKS.map((b) => adapter.history(b, 1)))).catch(() => {});
+  // Then the balance scans (scanOwned) and each bank's history (its sent-tx scan of the spenders). Until that is done (about 3 min
+  // on the live chain), history() answers 503 + Retry-After like Zeto's BI warm-up: a cold read went past the route's 20 s (502).
+  const history = adapter.history;
+  let warm = false;
+  void history('BI', 1).catch(() => {})
+    .then(() => Promise.all((['BI', ...BANKS] as PartyId[]).map((p) => adapter.balanceOf(p, 'RD').then(() => adapter.balanceOf(p, 'DFABI')))))
+    .then(() => Promise.all(BANKS.map((b) => history(b, 1))))
+    .catch(() => {}).finally(() => { warm = true; });
+  adapter.history = (party, limit) => (warm ? history(party, limit) : Promise.reject(new WarmingUpError('Pemindaian alamat stealth pertama sedang berjalan, ±3 menit', 30)));
   return adapter;
 }
