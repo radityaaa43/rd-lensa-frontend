@@ -168,7 +168,7 @@ test('zeto DvP disabled by capabilities: nav item and DvP screen show the reason
 test('a deep link reloads into the same view', async ({ page }) => {
   await page.goto('/iroha3/dasbor?pihak=B');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Dasbor · Bank Nusantara');
-  await expect(page.locator('details.banner.iroha summary')).toContainText('Iroha 3 tanpa privasi');
+  await expect(page.locator('details.banner.iroha summary')).toContainText('DvP dan award privat lewat APS');
 });
 
 test('unknown route returns Indonesian 404 while the web build is served', async ({ request }) => {

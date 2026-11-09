@@ -68,7 +68,7 @@ function Body({ meta, model, tx, block, note, cols, active }: { meta: Meta; mode
           <h2 id="h-tx">Transaksi <span className="mono" title={tx}>{shortHash(tx)}</span>{block !== null && <span className="muted"> · blok {block}</span>}</h2>
           <p className="muted">{note}</p>
         </div>
-        {PLATFORM_OF[model] === 'iroha3' && <span className="badge partial">Sama untuk semua pihak</span>}
+        {PLATFORM_OF[model] === 'iroha3' && cols.every((c) => c.kind === 'view' && c.item.verdict === 'clear') && <span className="badge partial">Sama untuk semua pihak</span>}
       </div>
       <Lenses meta={meta} model={model} cols={cols} active={active} txHash={tx} />
       <TracePanel key={`t|${model}|${tx}|${active}`} meta={meta} model={model} tx={tx} party={active} />

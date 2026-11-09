@@ -76,8 +76,8 @@ function Shell({ meta, route, stress, reloadStress, tx }: { meta: Meta; route: M
         )}
         {PLATFORM_OF[route.model] === 'iroha3' && (
           <details className="banner iroha">
-            <summary>Iroha 3 tanpa privasi: keempat pihak melihat semua transaksi dalam bentuk terbuka. Selengkapnya</summary>
-            <p>Torii hanya membatasi akun yang boleh membaca. Itu kontrol akses, bukan kerahasiaan.</p>
+            <summary>Iroha 3: DvP dan award privat lewat APS, transfer satu pihak masih terbuka untuk keempat validator. Selengkapnya</summary>
+            <p>DvP memakai Atomic Private Settlement: validator hanya menyimpan commitment dan bukti STARK, BI membuka kapsul audit. Transfer RD/DFABI biasa tetap di lane 1: Torii hanya membatasi akun yang boleh membaca, itu kontrol akses, bukan kerahasiaan.</p>
           </details>
         )}
         <p className="vh" aria-live="polite">Menampilkan data sebagai {party}</p>

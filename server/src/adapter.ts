@@ -54,6 +54,7 @@ export interface Trace { source: string; steps: TraceStep[]; note: string | null
 export interface ModelAdapter {
   id: ModelId;
   stepLabels: [string, string, string, string]; // spec §5.3, verbatim
+  txDeadlineMs?: number; // run() + lens() deadline when longer than the server default (Iroha 3 APS: minutes)
   capabilities(): Record<FlowId, Capability>;
   health(): Promise<{ ready: boolean; detail: string }>;
   balanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint>;

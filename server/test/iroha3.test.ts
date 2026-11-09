@@ -179,3 +179,61 @@ describe('iroha3 lens', () => {
     await expect(a.lens(r, await a.run(r, 5n, () => {}), 'C')).rejects.toThrow('tidak sama');
   });
 });
+
+describe('iroha3 private DvP (APS)', () => {
+  const BUNDLE = 'cd'.repeat(32);
+  const apsState: Iroha3State = {
+    ...state,
+    aps: { image: 'img', config: '/state/rd-dfabi.toml', mounts: { state: '/s', keys: '/k', public: '/p' }, auditor: 'http://127.0.0.1:1/',
+      wallets: { BI: 'w-BI', A: 'w-A', B: 'w-B', C: 'w-C' } },
+  };
+  // The driver's stdout of a settled bundle (shape of the cluster s1-dvp log).
+  const lines = (outcome = 'finalized', reject = false) => [
+    'pool_activation_tx=aa lane=1 pool_id=p1', `bundle_id=${BUNDLE}`, 'leg 0 proved after 12s peak_rss_kb=1', 'legs uploaded',
+    ...(reject ? ['leg 0 audit rejected: over limit'] : ['leg 0 audited', 'leg 1 audited', 'prepare registered']),
+    `result_json=${JSON.stringify({ bundle_id: BUNDLE, carrier_tx: H, outcome, height: 42, legs: [{ lane: 1, pool_id: 'p1' }, { lane: 2, pool_id: 'p2' }] })}`,
+  ];
+  const runner = (out: string[], fail = false) => {
+    const calls: string[][] = [];
+    const run = async (args: string[], onLine: (l: string) => void) => { calls.push(args); out.forEach(onLine); if (fail) throw new Error('Driver APS gagal (kode 1)'); };
+    return { run, calls };
+  };
+
+  it('dvp runs one bundle (RD buyer -> seller, DFABI seller -> buyer) with no public submit and no balance check', async () => {
+    const f = fake();
+    const r = runner(lines());
+    const steps: StepEvent[] = [];
+    const res = await createIroha3Adapter(apsState, f.cli, undefined, r.run).run(req('dvp', 'A', 'B', '3'), 3n, (s) => steps.push(s));
+    expect(r.calls[0]).toEqual(['dvp', '/state/rd-dfabi.toml', '--buyer', 'bank-b', '--seller', 'bank-a', '--rd', String(3n * PRICE_PER_UNIT),
+      '--dfabi', '3', '--rd-funding', String(3n * PRICE_PER_UNIT + 2n), '--dfabi-funding', '4', '--expect', 'finalized']);
+    expect(f.calls).toEqual([]);
+    expect(steps.map((s) => s.index)).toEqual([0, 1, 2, 3]);
+    expect(res).toMatchObject({ txHash: H, block: 42 });
+  });
+
+  it('an audit rejection is reported as BI refusing, nothing moved', async () => {
+    const r = runner(lines('aborted', true), true);
+    await expect(createIroha3Adapter(apsState, fake().cli, undefined, r.run).run(req('dvp', 'A', 'B', '3'), 3n, () => {}))
+      .rejects.toThrow(/Ditolak auditor BI \(over limit\)/);
+  });
+
+  it('lens: parties read their own wallet, BI its audit records, the outsider only commitments', async () => {
+    const f = fake();
+    const a = createIroha3Adapter(apsState, f.cli, undefined, runner(lines()).run);
+    const rq = req('dvp', 'A', 'B', '3');
+    const res = await a.run(rq, 3n, () => {});
+    const records = [
+      { leg: 0, verdict: 'approved', payer: 'w-B', recipient: 'w-A', asset: 'RD-ID', amount: '3000000' },
+      { leg: 1, verdict: 'approved', payer: 'w-A', recipient: 'w-B', asset: 'DFABI-ID', amount: '3' },
+    ];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (u: URL) => { expect(String(u)).toBe(`http://127.0.0.1:1/records/${BUNDLE}`); return new Response(JSON.stringify(records)); }) as typeof fetch;
+    try {
+      const [seller, bi, outsider] = await Promise.all((['A', 'BI', 'C'] as PartyId[]).map((p) => a.lens(rq, res, p)));
+      expect(seller).toMatchObject({ verdict: 'clear', amount: '3', rdAmount: '3000000', counterparty: { from: 'A', to: 'B' } });
+      expect(bi).toMatchObject({ verdict: 'reported', amount: '3', rdAmount: '3000000', counterparty: { from: 'A', to: 'B' } });
+      expect(outsider).toMatchObject({ verdict: 'sealed', amount: null, rdAmount: null, counterparty: null });
+      expect(outsider.onChain.map((x) => x.label)).toContain('Bundle APS');
+    } finally { globalThis.fetch = realFetch; }
+  });
+});

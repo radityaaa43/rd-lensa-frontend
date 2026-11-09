@@ -12,6 +12,7 @@ import { loadAuth, partyKey, signedHeaders, type Auth } from './iroha3-auth.ts';
 import { joinInFlight } from './besu-network.ts';
 import { scrub } from './besu-trace.ts';
 import { decodeBox, type Decoded, type NoritoCtx } from './iroha3-norito.ts';
+import { APS_DEADLINE_MS, auditRecords, dockerRunner, runDvp, type ApsConfig, type ApsResult, type ApsRunner } from './iroha3-aps.ts';
 
 // Iroha 3 (071e281e): 3-lane NPoS network with APS enabled; the frontend flows run on lane 1 (restricted dataspace ds-rd).
 // RD and DFABI are DataspaceRestricted assets with one shared home dataspace, ds-rd (id 1): a DvpIsi whose legs sit in two
@@ -26,6 +27,7 @@ export interface Iroha3State {
   accounts: Record<PartyId, string>; // canonical I105 ids
   assets: { RD: string; DFABI: string }; // canonical Base58 asset-definition ids
   funded?: boolean; // false while bootstrap runs: load() ignores it
+  aps?: ApsConfig; // set: DvP and award settle privately through APS (iroha3-aps.ts); absent: the public DvpIsi on lane 1
 }
 
 // Runs `iroha --config <dir>/<config>.toml <args>`; resolves stdout, rejects with the CLI's own error message.
@@ -101,7 +103,7 @@ interface TxGet {
   result_hash?: string;
   entrypoint: { External: { payload: { authority: string; creation_time_ms?: number; time_to_live_ms?: number; instructions: { Instructions: string[] } } } };
 }
-interface Ctx { sid?: string }
+interface Ctx { sid?: string; aps?: ApsResult }
 
 // What history() needs on top of the CLI: each party's operator key (signs the Torii account reads) and the decoder context.
 // `init` runs on the first history() call, not at startup: a broken op toml must not take the whole server down.
@@ -114,7 +116,9 @@ const LANE_WAIT_MS = 15_000;
 const PAGE_ROWS = 100; // rows per account list request (Torii accepts up to 500); a small page needs more round trips because of non-movement rows
 const DECODE_BATCH = 5; // `transaction get` CLI spawns in flight
 
-export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
+export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, apsRun?: ApsRunner) {
+  const aps = s.aps;
+  const apsRunner = aps ? apsRun ?? dockerRunner(aps) : undefined;
   const acct = s.accounts;
   const partyOf = new Map(Object.entries(acct).map(([p, id]) => [id, p as PartyId]));
   const json = async <T>(config: string, args: string[], stdin?: string) => JSON.parse(await cli(config, args, stdin)) as T;
@@ -191,6 +195,14 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     const steps: StepEvent[] = [];
     const emit = (index: number, ms: number) => { const st = { index, label: adapter.stepLabels[index]!, ms }; steps.push(st); onStep(st); };
     const dvp = FLOWS[req.flow].dvp;
+    if (dvp && aps) { // private: no public balance moves, so no balance check either (the notes are funded per leg)
+      let last = Date.now();
+      const step = (i: number) => { const now = Date.now(); emit(i, now - last); last = now; };
+      const r = await runDvp(apsRunner!, aps, { seller: req.from, buyer: req.to, dfabi: amount, rd: amount * PRICE_PER_UNIT }, step);
+      step(2); // the driver returns once all four validators report the same finalized receipt
+      step(3);
+      return { txHash: r.carrier_tx, block: r.height, steps, context: { aps: r } satisfies Ctx };
+    }
     const sid = dvp ? `dvp_${Date.now()}_${randomBytes(3).toString('hex')}` : undefined;
     const p = plan(req, amount, sid);
     const award = FLOWS[req.flow].issuer && dvp; // BI mints the DFABI to itself, then sells it: no stock check
@@ -235,8 +247,38 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     return { txHash: hash, block, steps, context: { sid } satisfies Ctx };
   }
 
+  // What each party can read of a private bundle. The carrier is checked on the party's own validator (it holds the bundle like the
+  // other three); the amounts come from the party's own wallet (DvP parties) or BI's decrypted audit records, never from the ledger.
+  async function privateLens(req: FlowRequest, r: ApsResult, party: PartyId): Promise<LensView> {
+    const role = roleOf(req, party);
+    await readOn(party, r.carrier_tx);
+    const onChain = [
+      { label: 'Bundle APS', value: r.bundle_id },
+      { label: 'Tx carrier', value: r.carrier_tx },
+      { label: 'Blok', value: String(r.height) },
+      ...r.legs.map((l) => ({ label: `Pool ${l.lane === 1 ? 'RD (ds-rd, lane 1)' : 'DFABI (ds-dfabi, lane 2)'}`, value: l.pool_id })),
+    ];
+    if (party === req.from || party === req.to) {
+      return { party, role, verdict: 'clear', amount: req.amount, rdAmount: (BigInt(req.amount) * PRICE_PER_UNIT).toString(),
+        counterparty: { from: req.from, to: req.to }, onChain,
+        method: 'Pihak DvP: nominal dan lawan transaksi dari dompet APS sendiri (note privat). Keempat validator hanya menyimpan bundle, commitment note dan bukti STARK.' };
+    }
+    if (party === 'BI') {
+      const records = await auditRecords(aps!, r.bundle_id);
+      const rdLeg = records.find((x) => x.asset === s.assets.RD);
+      const dfabiLeg = records.find((x) => x.asset === s.assets.DFABI);
+      const who = new Map(Object.entries(aps!.wallets).map(([p, id]) => [id, p as PartyId]));
+      return { party, role, verdict: 'reported', amount: dfabiLeg?.amount ?? null, rdAmount: rdLeg?.amount ?? null,
+        counterparty: dfabiLeg ? { from: who.get(dfabiLeg.payer) ?? null, to: who.get(dfabiLeg.recipient) ?? null } : null, onChain,
+        method: 'BI membuka kapsul audit tiap leg (X25519 + ML-KEM-768) di layanan bi-auditor sebelum menyetujui. Nominal dan pihak dibaca dari catatan audit BI, bukan dari ledger.' };
+    }
+    return { party, role, verdict: 'sealed', amount: null, rdAmount: null, counterparty: null, onChain,
+      method: `Node validator ${PARTIES[party].name} hanya menyimpan bundle, commitment note dan bukti STARK. Nominal dan pihak tidak ada di ledger; kapsul audit hanya bisa dibuka BI.` };
+  }
+
   async function lens(req: FlowRequest, result: FlowResult, party: PartyId): Promise<LensView> {
-    const { sid } = result.context as Ctx;
+    const { sid, aps: bundle } = result.context as Ctx;
+    if (bundle) return privateLens(req, bundle, party);
     const role = roleOf(req, party);
     const dvp = FLOWS[req.flow].dvp;
     const tx = await readOn(party, result.txHash);
@@ -475,6 +517,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
 
   const adapter: ModelAdapter & { fund: typeof mint } = {
     id: 'iroha3',
+    ...(aps ? { txDeadlineMs: APS_DEADLINE_MS } : {}),
     stepLabels: ['Tanda tangan & kirim ke Torii', 'Diterima pipeline', 'Commit di blok (3 dari 4 validator)', 'Tersalin ke 4 validator'],
     capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
     async health() {

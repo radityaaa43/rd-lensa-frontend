@@ -1,7 +1,7 @@
 [Unit]
 Description=Eksplorasi Rupiah Digital server (127.0.0.1)
-Wants=lensa-pf@paladin-node1.service lensa-pf@paladin-node2.service lensa-pf@paladin-node3.service lensa-pf@paladin-node4.service lensa-pf@besu.service lensa-pf@iroha-bi.service lensa-pf@iroha-bank-a.service lensa-pf@iroha-bank-b.service lensa-pf@iroha-bank-c.service 
-After=lensa-pf@paladin-node1.service lensa-pf@paladin-node2.service lensa-pf@paladin-node3.service lensa-pf@paladin-node4.service lensa-pf@besu.service lensa-pf@iroha-bi.service lensa-pf@iroha-bank-a.service lensa-pf@iroha-bank-b.service lensa-pf@iroha-bank-c.service 
+Wants=lensa-pf@paladin-node1.service lensa-pf@paladin-node2.service lensa-pf@paladin-node3.service lensa-pf@paladin-node4.service lensa-pf@besu.service lensa-pf@iroha-bi.service lensa-pf@iroha-bank-a.service lensa-pf@iroha-bank-b.service lensa-pf@iroha-bank-c.service lensa-pf@iroha-auditor.service 
+After=lensa-pf@paladin-node1.service lensa-pf@paladin-node2.service lensa-pf@paladin-node3.service lensa-pf@paladin-node4.service lensa-pf@besu.service lensa-pf@iroha-bi.service lensa-pf@iroha-bank-a.service lensa-pf@iroha-bank-b.service lensa-pf@iroha-bank-c.service lensa-pf@iroha-auditor.service 
 StartLimitIntervalSec=600
 StartLimitBurst=5
 

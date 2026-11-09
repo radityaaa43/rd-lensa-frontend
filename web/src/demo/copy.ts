@@ -38,8 +38,8 @@ export const MODEL_COPY: Record<ModelId, { tag: string; story: string }> = {
     story: 'Ledger hanya menyimpan commitment Pedersen dan bukti ZK, jadi nominal, jenis token, dan pemilik tersembunyi. Transaksi butuh endorsement 3 dari 4 institusi (BI dan tiga bank), sehingga bank tetap bisa bertransaksi saat BI atau satu bank offline. Setelah final, bank pengirim melaporkan transaksi lengkap ke BI; BI mencocokkannya dengan commitment di ledger lalu menyimpannya. Bank penerima membaca dompetnya sendiri, bank lain hanya melihat entri ledger yang buram.',
   },
   iroha3: {
-    tag: 'Lane publik Iroha 3 tanpa privasi. DvP atomik native, empat validator.',
-    story: 'RD dan DFABI adalah aset biasa di lane publik. DvP memakai instruksi native DvpIsi: bank pembeli memberi izin sekali pakai yang terikat ke isi transaksi, lalu kedua kaki pindah dalam satu transaksi. Keempat validator (BI dan tiga bank) menyimpan setiap transaksi dalam bentuk terbuka. Torii hanya membatasi akun mana yang boleh membaca, jadi ini kontrol akses, bukan kerahasiaan. Jalur privat (APS) belum aktif.',
+    tag: 'DvP privat lewat Atomic Private Settlement (APS): bukti STARK dan kapsul audit untuk BI. Transfer satu pihak masih terbuka.',
+    story: 'DvP dan award memakai Atomic Private Settlement: satu bundle dua leg, RD di dataspace ds-rd dan DFABI di ds-dfabi. Tiap leg membelanjakan note privat dengan bukti STARK yang dibuat di sisi klien, jadi keempat validator hanya menyimpan commitment, bukti dan kapsul audit terenkripsi. BI membuka kapsul tiap leg dan menyetujuinya sebelum bundle final; komite 3 dari 4 validator lalu memfinalkan semua leg sekaligus, atau membatalkan semuanya. Bank lain hanya melihat bundle tersegel. Transfer RD/DFABI satu pihak tetap di lane 1 dan terbuka untuk keempat validator (Torii hanya membatasi akun yang boleh membaca). Saldo publik tidak bergerak oleh DvP privat: dananya ada di note pool baru tiap leg.',
   },
 };
 
@@ -47,7 +47,7 @@ export const MODEL_COPY: Record<ModelId, { tag: string; story: string }> = {
 export const PLATFORM_COPY: Record<PlatformId, { tagline: string; sees: [boolean, boolean, boolean]; note?: string }> = {
   besu: { tagline: 'Tiga model privasi: Zeto, Noto, Stealth', sees: [true, true, false] },
   fabricx: { tagline: 'Bukti ZK dan pseudonim Idemix, endorsement 3 dari 4', sees: [true, true, false] },
-  iroha3: { tagline: 'Lane publik, tanpa privasi', sees: [true, true, true], note: 'tanpa privasi' },
+  iroha3: { tagline: 'DvP privat (APS), transfer terbuka', sees: [true, true, false], note: 'transfer terbuka' },
 };
 export const SEES_LABELS = ['BI', 'Pihak transaksi', 'Bank lain'] as const;
 
@@ -57,16 +57,17 @@ export const SEAL_WHY: Record<ModelId, string> = {
   noto: 'Bank di luar transaksi hanya melihat hash state. Isinya hanya dibagikan ke pihak transaksi dan notary BI.',
   stealth: 'Alamat penerima sekali pakai dan identitas pengirim terenkripsi. Tanpa view key, {pihak} tidak bisa memetakannya.',
   fabricx: 'Ledger hanya menyimpan commitment Pedersen dan bukti ZK. {pihak} tidak memegang kunci untuk membukanya.',
-  iroha3: 'Iroha 3 tidak merahasiakan data. Nilai ini kosong karena node {pihak} tidak mengembalikannya.',
+  iroha3: 'Validator {pihak} hanya menyimpan bundle, commitment note dan bukti STARK. Kapsul audit berisi nominal dan pihak hanya bisa dibuka BI.',
 };
 
-// Typical duration of one demo transaction, ONLY from measured live runs (T7, 2026-11-02): iroha3 DvP 45 s, fabricx DvP 4,8 s,
+// Typical duration of one demo transaction, ONLY from measured live runs (T7, 2026-11-02): fabricx DvP 4,8 s,
+// iroha3 private DvP via APS 168 s and award 132 s via the Lensa API (2026-11-10; was 45 s for the public DvpIsi),
 // noto DvP 15,4 s, stealth DvP 11,4 s (2026-11-03), zeto DvP via UI 12,4 s (2026-11-03). Shown as a typical figure, never as a promise.
-export const TYPICAL_SECONDS: Partial<Record<ModelId, number>> = { iroha3: 45, fabricx: 5, noto: 15, stealth: 11, zeto: 12 };
+export const TYPICAL_SECONDS: Partial<Record<ModelId, number>> = { iroha3: 150, fabricx: 5, noto: 15, stealth: 11, zeto: 12 };
 
 // Dasbor stat card "Model privasi" (DESIGN.md §7.4)
 export const MODEL_STYLE: Record<ModelId, string> = {
-  zeto: 'Bukti ZK', noto: 'Notary BI', stealth: 'Alamat sekali pakai', fabricx: 'Bukti ZK + Idemix', iroha3: 'Tanpa privasi',
+  zeto: 'Bukti ZK', noto: 'Notary BI', stealth: 'Alamat sekali pakai', fabricx: 'Bukti ZK + Idemix', iroha3: 'APS (DvP privat)',
 };
 
 export const nodeLabel =(model: ModelId, node: number) => (model === 'stealth' ? 'Akun Besu' : model === 'fabricx' ? `Node Fabric-X ${node}` : model === 'iroha3' ? `Validator Iroha ${node}` : `Paladin node ${node}`);

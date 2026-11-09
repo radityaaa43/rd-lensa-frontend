@@ -49,7 +49,7 @@ function BiReport({ meta, route }: { meta: Meta; route: ModelRoute }) {
 }
 
 export function Report({ meta, route }: { meta: Meta; route: ModelRoute }) {
-  if (PLATFORM_OF[route.model] === 'iroha3') return <Empty title="Tidak berlaku di Iroha 3"><p>Lane publik tanpa privasi: tidak ada laporan yang perlu dicocokkan.</p></Empty>;
+  if (PLATFORM_OF[route.model] === 'iroha3') return <Empty title="Tidak berlaku di Iroha 3"><p>BI menyetujui setiap DvP privat sebelum final lewat kapsul audit, dan transfer biasa terbuka: tidak ada laporan bank yang perlu dicocokkan.</p></Empty>;
   if (route.party !== 'BI') {
     return (
       <Empty title="Hanya BI yang menerima laporan">

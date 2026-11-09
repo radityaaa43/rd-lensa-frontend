@@ -37,7 +37,6 @@ export function Header({ meta, route, network, title, sub, h1 }: {
         <PartySwitcher
           meta={meta} party={route.party} onChange={(party) => navigate({ ...route, party })}
           disabledReason={route.screen === 'tps' ? 'Tidak berlaku untuk stress test' : undefined}
-          hint={platform === 'iroha3' ? 'Tampilan sama untuk semua pihak' : undefined}
         />
         <a className="chip" {...linkTo({ ...route, screen: 'dasbor', tx: undefined })}>
           <i className={`dot${network === undefined ? ' unknown' : up < nodes.length ? ' down' : ''}`} aria-hidden="true" />

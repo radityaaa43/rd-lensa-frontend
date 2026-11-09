@@ -270,7 +270,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
         const result = await adapter.run(req, amount, (s) => emit('step', s));
         const lenses: LensView[] = await Promise.all(PARTY_IDS.map((p) => adapter.lens(req, result, p)));
         return { txHash: result.txHash, block: result.block, steps: result.steps, lenses };
-      })(), TX_DEADLINE_MS, 'Transaksi');
+      })(), adapter.txDeadlineMs ?? TX_DEADLINE_MS, 'Transaksi');
       emit('result', out);
     } catch (e) {
       if (isGatewayDeny(e)) app.log.error({ err: e }, `tx ${req.model} ${req.flow} denied by gateway`); // the original stays in the log
