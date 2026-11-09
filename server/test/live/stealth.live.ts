@@ -79,9 +79,9 @@ describe('stealth adapter on Besu', () => {
   });
 
   it('transferForLoad: prepareLoad pools stealth addresses, confirmedAt is the receipt time', async () => {
-    await a.prepareLoad(3);
-    expect(await a.loadCapacity()).toBeGreaterThanOrEqual(6); // 3 pairs x (ceil(3/3)+1)
-    const s = await a.transferForLoad('B', 'C', 1000n);
+    await a.prepareLoad(2, 2);
+    expect(await a.loadCapacity(2)).toBeGreaterThanOrEqual(2);
+    const s = await a.transferForLoad({ bank: 'B', i: 1 }, { bank: 'C', i: 0 }, 1000n);
     expect(s.confirmedAt).toBeGreaterThan(s.submittedAt);
   });
 });

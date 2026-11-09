@@ -41,7 +41,8 @@ const post = <T,>(path: string, body?: unknown) =>
 
 export const getMeta = () => call<Meta>('/api/meta');
 export const getHealth = () => call<Health>('/api/health');
-export const getCapacity = () => call<Capacity>('/api/preflight-capacity');
+// ready transfers per load user, per model, with `users` load users per bank
+export const getCapacity = (users: number) => call<Capacity>(`/api/preflight-capacity?users=${users}`);
 // pending: tx ids this party's node holds back as not indexed yet (x-history-pending, ARCHITECTURE.md §2.2 v1.3)
 export interface HistoryPage { items: HistoryItem[]; truncated: boolean; pending: string[] }
 export const getHistory = (model: ModelId, party: PartyId, limit: number) =>

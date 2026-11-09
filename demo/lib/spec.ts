@@ -31,7 +31,7 @@ export const SCENARIOS: ScenarioMeta[] = [
   { id: 'S7', title: 'Lensa: tx S3-S6 dari hasil run dan dari Riwayat, 4 kolom', writes: 0, readsTxs: true },
   { id: 'S8', title: 'Laporan ke BI (Iroha 3: pemberitahuan tersembunyi)', writes: 0 },
   { id: 'S9', title: 'Validasi dan keadaan error: nominal 0, melebihi batas, alasan nonaktif', writes: 0, mockOnly: true },
-  { id: 'S10', title: 'Stress test (opt-in): dialog konfirmasi, durasi terkecil', writes: 50, optIn: true },
+  { id: 'S10', title: 'Stress test (opt-in): dialog konfirmasi, satu tahap terkecil', writes: 50, optIn: true }, // writes: about a minute of 3 users
 ];
 export const scenarioById = (id: string) => SCENARIOS.find((s) => s.id.toLowerCase() === id.toLowerCase());
 

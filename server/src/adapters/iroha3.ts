@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, Receipt, StepEvent, Trace } from '../adapter.ts';
-import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, type LoadUser } from '../adapter.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
@@ -496,19 +496,22 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps) {
     network,
     receipt,
     trace,
-    async loadCapacity() {
+    // The load users of a bank share the bank's account, so its balance is split between them.
+    async loadCapacity(users) {
       const balances = await Promise.all(BANKS.map((b) => balanceOf(b, 'RD')));
-      return 3 * Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT);
+      return Math.floor(Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT) / users);
     },
-    async prepareLoad(n) {
-      const need = BigInt(Math.ceil(n / 3) + 1) * LOAD_AMOUNT;
+    async prepareLoad(users, units) {
+      const need = BigInt(users * units) * LOAD_AMOUNT;
       for (const b of BANKS) {
         const have = await balanceOf(b, 'RD');
         if (have < need) await mint(b, 'RD', need - have);
       }
     },
+    loadCirculates: true,
     // ponytail: no per-sender lock; Iroha has no account nonce and the chain rejects an overdraft. Add one if spends start racing.
-    async transferForLoad(from: BankId, to: BankId, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
+    // A load user is a parallel session of the bank account on the bank's own Torii (tahap 2: one account per user).
+    async transferForLoad({ bank: from }: LoadUser, { bank: to }: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
       if (signal?.aborted) throw new Error(CANCELLED);
       const submittedAt = Date.now();
       await cli(CONFIG[from], [...SUBMIT, 'ledger', 'asset', 'transfer', '--definition', s.assets.RD, '--account', acct[from], '--to', acct[to], '--quantity', amount.toString()]);

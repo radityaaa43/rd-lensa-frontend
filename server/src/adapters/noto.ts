@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, StepEvent, Verdict } from '../adapter.ts';
-import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, loadLookup, type LoadUser } from '../adapter.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
@@ -9,7 +9,7 @@ import { besuNetwork, besuReceipt, paladinNodeReceipt } from './besu-network.ts'
 import { besuTrace, nameFrom } from './besu-trace.ts';
 import type { Sample } from '../stats.ts';
 // Everything Paladin goes through the bond project's modules (its SDK 1.0.0 copy is the only one in play).
-import { appendTrade, loadPlatform, type Platform } from '../../../../besu/noto+pente/bond/src/lib/platform.ts';
+import { appendTrade, loadPlatform, type Participant, type Platform } from '../../../../besu/noto+pente/bond/src/lib/platform.ts';
 import { transferNoto } from '../../../../besu/noto+pente/bond/src/lib/transfer.ts';
 import { issueBond, issueCash } from '../../../../besu/noto+pente/bond/src/lib/issue.ts';
 import { custodianOf, executeOutright } from '../../../../besu/noto+pente/bond/src/lib/outright.ts';
@@ -30,7 +30,7 @@ const chains = new Map<string, Promise<unknown>>();
 // ponytail: if an underlying Paladin call never settles, that party stays locked until server restart; restart is the recovery
 // (no auto-release, because releasing risks double-spend).
 // `hold(p)` lets fn keep the lock until p settles even after fn itself returned or threw (a timed-out DvP keeps running).
-export async function exclusive<T>(senders: PartyId[], fn: (hold: (p: Promise<unknown>) => void) => Promise<T>): Promise<T> {
+export async function exclusive<T>(senders: string[], fn: (hold: (p: Promise<unknown>) => void) => Promise<T>): Promise<T> {
   const keys = [...new Set(senders)].sort(); // sorted: two-party locks cannot deadlock
   const previous = keys.map((k) => chains.get(k) ?? Promise.resolve());
   const held: Promise<unknown>[] = [];
@@ -217,6 +217,24 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     const b = bank(p, party);
     return BigInt((await withDeadline(token.using(b.client).balanceOf(b.verifier, { account: b.verifier.lookup }), BALANCE_MS, `Saldo ${asset} ${party}`)).totalBalance);
   }
+
+  // Load users (stress test): identities stress-nN-ii@nodeN on the bank's own node, each holding its own LOAD_AMOUNT coins.
+  const loadUsers = new Map<string, Participant>();
+  function loadUser(p: Platform, u: LoadUser): Participant {
+    const lookup = loadLookup(u);
+    let x = loadUsers.get(lookup);
+    if (!x) {
+      const b = bank(p, u.bank);
+      loadUsers.set(lookup, x = { name: lookup, node: b.node, client: b.client, verifier: b.client.getVerifiers(lookup)[0]! });
+    }
+    return x;
+  }
+  async function loadUnits(p: Platform, u: LoadUser): Promise<number> {
+    const x = loadUser(p, u);
+    const r = await withDeadline(p.notoCash.using(x.client).balanceOf(x.verifier, { account: x.verifier.lookup }), BALANCE_MS, `Saldo RD ${x.name}`);
+    return Number(BigInt(r.totalBalance) / LOAD_AMOUNT);
+  }
+  const loadAll = (users: number) => BANKS.flatMap((bank) => Array.from({ length: users }, (_, i): LoadUser => ({ bank, i })));
 
   async function untilBalance(party: PartyId, asset: 'RD' | 'DFABI', expected: bigint): Promise<void> {
     const end = Date.now() + DEADLINE;
@@ -417,33 +435,35 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
       const [chain, node] = await Promise.all([besuReceipt(tx), paladinNodeReceipt(party, tx)]); // public receipt + the party's own Paladin node
       return { ...chain, node };
     },
-    async loadCapacity() {
-      const balances = await Promise.all(BANKS.map((b) => balanceOf(b, 'RD')));
-      return 3 * Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT);
+    async loadCapacity(users) {
+      const p = await plat();
+      return Math.min(...(await Promise.all(loadAll(users).map((u) => loadUnits(p, u)))));
     },
 
-    async prepareLoad(n: number) {
+    async prepareLoad(users, units) {
       const p = await plat();
-      const need = BigInt(Math.ceil(n / 3) + 1) * LOAD_AMOUNT;
-      for (const b of BANKS) {
-        const have = await balanceOf(b, 'RD');
-        if (have >= need) continue;
+      for (const u of loadAll(users)) {
+        const coins = units - (await loadUnits(p, u));
+        if (coins <= 0) continue;
         // One exact LOAD_AMOUNT coin per mint (the issue helper mints a single coin per call), 8 in flight; mints have no inputs, so no coin contention.
-        const coins = Number((need - have + LOAD_AMOUNT - 1n) / LOAD_AMOUNT);
-        const lookup = bank(p, b).verifier.lookup;
+        const lookup = loadLookup(u);
         for (let i = 0; i < coins; i += 8) {
-          await withDeadline(Promise.all(Array.from({ length: Math.min(8, coins - i) }, () => issueCash(p, lookup, LOAD_AMOUNT))), DEADLINE, `Penerbitan RD ke ${b}`);
+          await withDeadline(Promise.all(Array.from({ length: Math.min(8, coins - i) }, () => issueCash(p, lookup, LOAD_AMOUNT))), DEADLINE, `Penerbitan RD ke ${lookup}`);
         }
-        await untilBalance(b, 'RD', need);
+        for (const end = Date.now() + DEADLINE; (await loadUnits(p, u)) < units; await sleep(250)) {
+          if (Date.now() > end) throw new DeadlineError(`Saldo RD ${lookup} belum berubah, dan`, DEADLINE);
+        }
       }
     },
+    loadCirculates: true,
 
-    async transferForLoad(from: BankId, to: BankId, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
+    // One lock per load user (its own coins), so users of one bank send in parallel from the bank's node.
+    async transferForLoad(from: LoadUser, to: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
       const p = await plat();
-      return exclusive([from], async (hold) => {
+      return exclusive([loadLookup(from)], async (hold) => {
         if (signal?.aborted) throw new Error(CANCELLED); // the lock is held; nothing submitted yet
-        const submittedAt = Date.now(); // after the lock: queue time is not transfer latency
-        const rawSend = transferNoto(p, 'cash', bank(p, from), bank(p, to).verifier.lookup, amount);
+        const submittedAt = Date.now(); // after the lock
+        const rawSend = transferNoto(p, 'cash', loadUser(p, from), loadLookup(to), amount);
         hold(rawSend);
         await withDeadline(rawSend, DEADLINE, 'Transfer RD Noto');
         return { submittedAt, confirmedAt: Date.now() };

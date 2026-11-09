@@ -1,53 +1,42 @@
 import { describe, expect, test } from 'vitest';
 import type { ModelId } from '../../../server/src/domain.ts';
-import type { Summary } from '../../../server/src/stats.ts';
-import { clampCount, conclusion, minCapacity, showZetoWarning } from './stressForm.ts';
+import { conclusion, maxMinutes, ramp, ready, showZetoWarning } from './stressForm.ts';
 
-const s = (avgTps: number, ok = 10, p50Ms = 1000): Summary => ({ ok, failed: 0, avgTps, peakTps: avgTps, p50Ms, p95Ms: 2000, durationS: 5, series: [] });
-const row = (model: ModelId, avg: number, ok = 10, p50Ms = 1000) => ({ model, s: s(avg, ok, p50Ms) });
+const row = (model: ModelId, tps: number, users = 4, p95Ms = 2000) => ({ model, stage: { tps, users, p95Ms } });
 
 describe('conclusion', () => {
   test('one model', () => {
-    expect(conclusion([row('zeto', 1.5)])).toBe('Zeto: 1,5 TPS rata-rata.');
+    expect(conclusion([row('zeto', 1.5)])).toBe('Zeto: maksimum berkelanjutan 1,5 TPS (4 user per bank, p95 2,00 s).');
   });
-
-  test('Zeto the slowest adds only its measured p50', () => {
-    expect(conclusion([row('zeto', 1.5, 10, 2340), row('noto', 3), row('stealth', 8)])).toBe(
-      'Stealth paling cepat dengan 8,0 TPS rata-rata, sekitar 5× Zeto. p50 Zeto 2,3 s.',
+  test('best against worst', () => {
+    expect(conclusion([row('stealth', 8, 8, 900), row('noto', 3), row('zeto', 1.6, 2, 9500)])).toBe(
+      'Stealth paling tinggi: 8,0 TPS (8 user per bank, p95 0,90 s), sekitar 5× Zeto (1,6 TPS (2 user per bank, p95 9,50 s)).',
     );
   });
-
-  test('no Zeto sentence when Zeto is not the slowest', () => {
-    expect(conclusion([row('noto', 3), row('stealth', 9)])).toBe('Stealth paling cepat dengan 9,0 TPS rata-rata, sekitar 3× Noto.');
-  });
-
   test('a zero-TPS worst model gets no ratio', () => {
-    expect(conclusion([row('stealth', 4), row('noto', 0)])).toBe('Stealth paling cepat dengan 4,0 TPS rata-rata.');
-  });
-
-  test('a worst model with no successes gets no ratio and no p50', () => {
-    expect(conclusion([row('stealth', 4), row('zeto', 0.4, 0, 0)])).toBe('Stealth paling cepat dengan 4,0 TPS rata-rata.');
+    expect(conclusion([row('stealth', 4), row('noto', 0)])).toBe('Stealth paling tinggi: 4,0 TPS (4 user per bank, p95 2,00 s).');
   });
 });
 
-describe('clampCount', () => {
-  test('caps at capacity', () => expect(clampCount(500, 200)).toBe(200));
-  test('keeps a valid count', () => expect(clampCount(50, 200)).toBe(50));
-  test('never below 1', () => expect(clampCount(0, 200)).toBe(1));
-  test('NaN becomes 1', () => expect(clampCount(NaN, 200)).toBe(1));
+test('ramp doubles users per bank up to the maximum', () => {
+  expect(ramp(32)).toEqual([1, 2, 4, 8, 16, 32]);
+  expect(ramp(8)).toEqual([1, 2, 4, 8]);
+  expect(ramp(2)).toEqual([1, 2]);
 });
 
-describe('showZetoWarning', () => {
-  test('zeto with 4 senders', () => expect(showZetoWarning(['zeto'], 4)).toBe(true));
-  test('zeto with 2 senders', () => expect(showZetoWarning(['zeto'], 2)).toBe(false));
-  test('noto with 8 senders', () => expect(showZetoWarning(['noto'], 8)).toBe(false));
+test('maxMinutes is models x stages x stage duration', () => {
+  expect(maxMinutes(2, 8, 60)).toBe(8);
+  expect(maxMinutes(1, 4, 120)).toBe(6);
 });
 
-describe('minCapacity', () => {
-  test('smallest among selected models', () => {
-    expect(minCapacity(['zeto', 'noto'], { zeto: 200, noto: 50, stealth: 900 })).toBe(50);
-  });
-  test('Infinity-free fallback when nothing selected', () => {
-    expect(minCapacity([], { zeto: 200 })).toBe(0);
-  });
+test('ready needs every selected model to have at least one transfer per load user', () => {
+  expect(ready(['zeto', 'noto'], { zeto: 3, noto: 1 })).toBe(true);
+  expect(ready(['zeto', 'noto'], { zeto: 3, noto: 0 })).toBe(false);
+  expect(ready(['zeto'], {})).toBe(false);
+  expect(ready([], { zeto: 3 })).toBe(false);
+});
+
+test('showZetoWarning whenever Zeto is selected (its load runs one transfer at a time)', () => {
+  expect(showZetoWarning(['zeto'], 1)).toBe(true);
+  expect(showZetoWarning(['noto'], 8)).toBe(false);
 });

@@ -54,7 +54,7 @@ npm run demo -- --scenario <id> [--scenario <id> ...] [--platform <model> ...] [
 | S7 | Lensa: keenam transaksi S3-S6 dibuka dari Riwayat, empat kolom | 0 |
 | S8 | Laporan ke BI; Iroha 3 menampilkan pemberitahuan "tidak berlaku" | 0 |
 | S9 | Validasi: nominal 0, melebihi batas, saldo kurang, alur nonaktif. **Hanya mock** | 0 |
-| S10 | Stress test terkecil (50 tx). **Hanya dengan `--include-stress`** | 50 |
+| S10 | Stress test terkecil (satu tahap 1 user per bank, 1 menit). **Hanya dengan `--include-stress`** | ±50 |
 
 S7 membaca transaksi yang ditulis S3-S6 di run yang sama. Tanpa itu S7 berhenti dengan status `blocked` dan pesan, bukan dilewati.
 Lensa dari hasil run (kolom saat transaksi baru selesai) diperiksa di dalam S3-S6, karena statusnya hanya ada di halaman itu.

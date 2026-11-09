@@ -42,8 +42,9 @@ const SUB_KEBIJAKAN_BI = 'Aturan off-chain di gateway setiap bank. BI mengatur j
 let initialLoad = true;
 
 function stressProgress(s: StressSnapshot) {
-  const done = Object.values(s.models).reduce((n, m) => n + (m ? m.summary.ok + m.summary.failed : 0), 0);
-  return `${done}/${s.config.count * s.config.models.length}`;
+  const done = Object.values(s.models).reduce((n, m) => n + (m ? m.ok + m.failed : 0), 0);
+  const cur = Object.values(s.models).find((m) => m?.status === 'running');
+  return `${cur ? `tahap ${cur.stages.length}/${cur.plan.length} · ` : ''}${done.toLocaleString('id-ID')}`;
 }
 
 // ARCHITECTURE.md §3.3: one App-level poll each for health (5 s), network of the current model (10 s), stress (5 s while running)

@@ -156,9 +156,11 @@ describe('fabricx lens', () => {
 });
 
 describe('fabricx capacity, balances, health, load', () => {
-  it('capacity is 3 x the poorest bank in LOAD_AMOUNT coins', async () => {
+  it('capacity per load user is the poorest bank in LOAD_AMOUNT coins split over its users; one user per bank at most', async () => {
     const a = createFabricxAdapter(fake({ balances: { 'bank2/RD': '9000', 'bank3/RD': '4500', 'bank4/RD': '7000' } }).exec);
-    expect(await a.loadCapacity()).toBe(12);
+    expect(await a.loadCapacity(1)).toBe(4);
+    expect(await a.loadCapacity(2)).toBe(2);
+    expect(a.maxLoadUsers).toBe(1);
     expect(await a.balanceOf('B', 'DFABI')).toBe(5000n);
   });
 
@@ -176,9 +178,9 @@ describe('fabricx capacity, balances, health, load', () => {
     expect(Object.values(caps).every((c) => c.enabled)).toBe(true);
   });
 
-  it('prepareLoad tops a short bank up to ceil(n/3)+1 coins and leaves the others alone', async () => {
+  it('prepareLoad tops a short bank up to users x units coins and leaves the others alone', async () => {
     const f = fake({ balances: { 'bank2/RD': '9000', 'bank3/RD': '1000', 'bank4/RD': '9000' } });
-    await createFabricxAdapter(f.exec).prepareLoad(6);
+    await createFabricxAdapter(f.exec).prepareLoad(1, 3);
     expect(f.calls.filter((c) => c[0] === 'issue')).toEqual([['issue', 'bank3', 'RD', '2000']]); // need 3 x 1000, has 1000
   });
 
@@ -192,10 +194,10 @@ describe('fabricx capacity, balances, health, load', () => {
   it('transferForLoad sends an RD transfer, and a cancelled signal sends nothing', async () => {
     const f = fake();
     const a = createFabricxAdapter(f.exec);
-    const s = await a.transferForLoad('A', 'B', 1000n);
+    const s = await a.transferForLoad({ bank: 'A', i: 0 }, { bank: 'B', i: 0 }, 1000n);
     expect(s.confirmedAt).toBeGreaterThanOrEqual(s.submittedAt);
     expect(f.calls).toEqual([['transfer', 'bank2', 'bank3', 'RD', '1000']]);
-    await expect(a.transferForLoad('B', 'C', 1000n, { aborted: true })).rejects.toThrow(CANCELLED);
+    await expect(a.transferForLoad({ bank: 'B', i: 0 }, { bank: 'C', i: 0 }, 1000n, { aborted: true })).rejects.toThrow(CANCELLED);
     expect(f.calls).toHaveLength(1);
   });
 });

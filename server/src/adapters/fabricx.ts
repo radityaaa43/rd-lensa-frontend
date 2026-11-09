@@ -4,7 +4,7 @@ import { realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import { promisify } from 'node:util';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, StepEvent, Verdict } from '../adapter.ts';
-import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, type LoadUser } from '../adapter.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { gwFetch, gwUrl } from '../gateway.ts';
 import { readState } from '../state.ts';
@@ -412,19 +412,22 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall) {
         node: null,
       };
     },
-    async loadCapacity() {
+    // The load users of a bank share the bank's account, so its balance is split between them.
+    async loadCapacity(users) {
       const balances = await Promise.all(BANKS.map((b) => balanceOf(b, 'RD')));
-      return 3 * Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT);
+      return Math.floor(Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT) / users);
     },
-    async prepareLoad(n) {
-      const need = BigInt(Math.ceil(n / 3) + 1) * LOAD_AMOUNT;
+    async prepareLoad(users, units) {
+      const need = BigInt(users * units) * LOAD_AMOUNT;
       for (const b of BANKS) {
         const have = await balanceOf(b, 'RD');
         if (have < need) await issue(b, 'RD', need - have);
       }
     },
+    loadCirculates: true,
+    maxLoadUsers: 1, // one wallet per FSC node: a bank has one sender (tahap 2: more wallets per node)
     // The sender slot is held for the whole call; execFile's timeout (CALL_MS) bounds it and kills a hung kubectl.
-    async transferForLoad(from: BankId, to: BankId, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
+    async transferForLoad({ bank: from }: LoadUser, { bank: to }: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
       return exclusive([from], async () => {
         if (signal?.aborted) throw new Error(CANCELLED);
         const submittedAt = Date.now();

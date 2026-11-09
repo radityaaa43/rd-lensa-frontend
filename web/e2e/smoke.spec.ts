@@ -58,9 +58,10 @@ test('award: BI sells DFABI to a bank; buyer and outsider lenses, and a bank kee
   await expect(page.getByRole('button', { name: 'Jalankan DvP', exact: true })).toBeEnabled();
 });
 
-test('stress run on Ringan shows results and a CSV with the right header', async ({ page }) => {
+test('stress run: ramp config, live stage, stop, results per stage and a CSV with the right header', async ({ page }) => {
   await page.goto('/besu/zeto/tps');
-  await page.getByRole('button', { name: '50 tx' }).click();
+  for (const m of ['Noto', 'Stealth', 'Fabric-X', 'Iroha 3']) await page.locator('.mchk button', { hasText: m }).click(); // Zeto only
+  await page.getByRole('group', { name: 'User per bank (tahap terakhir)' }).getByRole('button', { name: '2', exact: true }).click();
   // UX P2-2: a real modal (backdrop, inert page), focus starts on Batal, Esc cancels without starting
   await page.getByRole('button', { name: 'Mulai stress test' }).click();
   const dialog = page.getByRole('dialog', { name: 'Mulai stress test?' });
@@ -73,16 +74,20 @@ test('stress run on Ringan shows results and a CSV with the right header', async
   await page.getByRole('button', { name: 'Mulai stress test' }).click();
   await page.getByRole('button', { name: 'Mulai', exact: true }).click();
   await expect(page.locator('.banner.stress')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Hasil perbandingan' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('.runrow .prog').first()).toContainText('Tahap 1/2 · 1 user/bank');
+  await page.waitForTimeout(3_000);
+  await page.locator('aside').getByRole('button', { name: 'Hentikan' }).click();
+  await expect(page.getByRole('heading', { name: 'Hasil perbandingan' })).toBeVisible({ timeout: 40_000 });
+  await expect(page.getByRole('table', { name: 'Tahap Zeto' })).toContainText('(terpotong)');
   const download = page.waitForEvent('download');
   await page.getByRole('link', { name: /Unduh hasil/ }).click();
   const body = await readFile(await (await download).path(), 'utf8');
-  expect(body.split('\n')[0].trim()).toBe('model,tps_avg,tps_peak,p50_s,p95_s,ok,failed,duration_s');
+  expect(body.split('\n')[0].trim()).toBe('model,stage,users_per_bank,virtual_users,tps,p50_s,p95_s,p99_s,service_p95_s,ok,failed,fail_ratio,measured_s,ok_A,ok_B,ok_C,recv_A,recv_B,recv_C,recipients,stop');
 
   // the dialog names what WILL run (the form), not the models of the finished run that the snapshot still holds
-  for (const m of ['Zeto', 'Stealth', 'Fabric-X', 'Iroha 3']) await page.locator('.mchk button', { hasText: m }).click();
+  for (const m of ['Zeto', 'Noto']) await page.locator('.mchk button', { hasText: m }).click();
   await page.getByRole('button', { name: 'Mulai stress test' }).click();
-  await expect(dialog).toContainText('Noto · 50 transaksi per model · batas 300 detik.');
+  await expect(dialog).toContainText('Noto · tahap 1 → 2 user per bank · 60 detik per tahap · paling lama 2 menit.');
   await expect(dialog).not.toContainText('Zeto');
   await page.keyboard.press('Escape');
 });

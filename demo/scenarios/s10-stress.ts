@@ -4,15 +4,15 @@ import { MOCK, abortWrites, type Scenario } from '../lib/ctx.ts';
 import { SCENARIOS } from '../lib/spec.ts';
 import { sel } from '../lib/sel.ts';
 
-// S10, opt-in (--include-stress): the confirm dialog, then the smallest run (Ringan = 50 tx, 1 sender, 2 minute limit) on this model only.
-// On live this sends 50 real transactions and holds the busy lock for the run; the CLI only gets here with --include-stress --allow-writes.
+// S10, opt-in (--include-stress): the confirm dialog, then the smallest run (one stage of 1 user per bank, 1 minute) on this model only.
+// On live this sends real transactions for about a minute and holds the busy lock for the run; the CLI only gets here with --include-stress --allow-writes.
 // A stuck run is never stopped by the demo (no POST /api/stress/stop): it is reported and left to the operator.
 export const s10: Scenario = {
   ...SCENARIOS.find((s) => s.id === 'S10')!,
   async run(d) {
     const { page, model, meta } = d;
     const name = meta.models[model].name;
-    const summary = `${name} · 50 transaksi per model · batas 120 detik.`;
+    const summary = `${name} · tahap 1 user per bank · 60 detik per tahap · paling lama 1 menit.`;
 
     await d.step('Atur beban terkecil untuk model ini saja', async () => {
       await page.goto(`/${model === 'zeto' || model === 'noto' || model === 'stealth' ? `besu/${model}` : model}/tps`);
@@ -22,10 +22,9 @@ export const s10: Scenario = {
         if ((await b.getAttribute('aria-pressed')) === 'true') await d.click(b);
       }
       d.check('model terpilih', (await page.locator('.mchk button[aria-pressed=true]').allInnerTexts()).map((t) => t.split('\n')[0]).join(','), name);
-      await d.click(page.getByRole('button', { name: '50 tx' }));
-      await d.click(page.getByRole('group', { name: 'Pengirim paralel' }).getByRole('button', { name: '1', exact: true }));
-      await page.locator('#tlimit').selectOption('120');
-      await d.hold('Beban terkecil: 50 transaksi, 1 pengirim, batas 2 menit.', 1500);
+      await d.click(page.getByRole('group', { name: 'User per bank (tahap terakhir)' }).getByRole('button', { name: '1', exact: true }));
+      await page.locator('#tstage').selectOption('60');
+      await d.hold('Beban terkecil: satu tahap, 1 user per bank (3 user), 1 menit.', 1500);
     });
 
     await d.step('Dialog konfirmasi: Esc membatalkan tanpa mengirim', async () => {
@@ -54,17 +53,17 @@ export const s10: Scenario = {
       });
 
       await d.step('Hasil di layar sama dengan snapshot server dan CSV', async () => {
-        const snap = (await (await page.request.get('/api/stress')).json()) as { state: string; models: Record<string, { summary: { ok: number; failed: number } }> };
-        const s = snap.models[model].summary;
-        const cells = page.locator('table.res tbody tr').first().locator('td');
-        d.check('model', await cells.nth(0).innerText(), name);
-        d.check('berhasil', await cells.nth(5).innerText(), s.ok.toLocaleString('id-ID'));
-        d.check('gagal', await cells.nth(6).innerText(), String(s.failed));
-        d.check('transaksi stress terkirim', String(s.ok + s.failed), '50');
+        const snap = (await (await page.request.get('/api/stress')).json()) as { state: string; models: Record<string, { stages: { ok: number; failed: number; users: number }[] }> };
+        const s = snap.models[model].stages[0];
+        const cells = page.getByRole('table', { name: `Tahap ${name}` }).locator('tbody tr').first().locator('td');
+        d.check('tahap', (await cells.nth(0).innerText()).split(' (')[0], '1 · 1 user/bank');
+        d.check('berhasil', await cells.nth(4).innerText(), s.ok.toLocaleString('id-ID'));
+        d.check('gagal', (await cells.nth(5).innerText()).split(' ')[0], String(s.failed));
+        d.check('ada transaksi terukur', String(s.ok > 0), 'true');
         const download = page.waitForEvent('download');
         await page.getByRole('link', { name: /Unduh hasil/ }).click();
         const header = (await readFile(await (await download).path(), 'utf8')).split('\n')[0].trim();
-        d.check('header CSV', header, 'model,tps_avg,tps_peak,p50_s,p95_s,ok,failed,duration_s');
+        d.check('header CSV', header, 'model,stage,users_per_bank,virtual_users,tps,p50_s,p95_s,p99_s,service_p95_s,ok,failed,fail_ratio,measured_s,ok_A,ok_B,ok_C,recv_A,recv_B,recv_C,recipients,stop');
       });
     } catch (e) {
       if (started) abortWrites(`${model} stress: ${(e as Error).message.split('\n')[0]}`);

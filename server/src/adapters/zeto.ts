@@ -3,7 +3,7 @@ import {
   BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf,
   type BankId, type FlowId, type FlowRequest, type PartyId,
 } from '../domain.ts';
-import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, WarmingUpError } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, WarmingUpError, loadLookup, type LoadUser } from '../adapter.ts';
 import { besuTrace, nameFrom } from './besu-trace.ts';
 import { besuNetwork, besuReceipt, holdBack, joinInFlight, paladinNodeReceipt, receiptPage, type ReceiptLike } from './besu-network.ts';
 import type { EventLike } from './noto.ts';
@@ -12,7 +12,7 @@ import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
 import { REPORT_PAGE, ZETO_MOVEMENT_TOPICS, buildReport } from '../../../../besu/zeto/src/bi-report.ts';
 import {
-  AtomFactory, BiLedger, PaladinClient, ZetoInstance, chainIO, heldStates, mintUtxos, nodeConnections, party, reportTo, swap, transfer, within,
+  AtomFactory, BiLedger, PaladinClient, ZetoInstance, chainIO, mintUtxos, nodeConnections, party, reportTo, swap, transfer, within,
   type Party, type Settled,
 } from '../../../../besu/zeto/src/flows.ts';
 
@@ -249,7 +249,11 @@ async function slot<T>(fn: () => Promise<T>): Promise<T> {
   if (active >= MAX_ZETO_TX) await new Promise<void>((r) => waiters.push(r)); else active++;
   try { return await fn(); } finally { const next = waiters.shift(); if (next) next(); else active--; }
 }
-export async function exclusive<T>(senders: PartyId[], fn: () => Promise<T>): Promise<T> {
+export const exclusive = <T>(senders: PartyId[], fn: () => Promise<T>): Promise<T> => lockSenders(senders, () => slot(fn));
+const ZETO_LOAD_LOCK = 'zeto-load'; // see transferForLoad
+// The per-sender part alone. The stress test locks each load user and skips the MAX_ZETO_TX slot: it ramps the load
+// itself and stops on its own rules, so a cap here would measure Lensa instead of the nodes.
+async function lockSenders<T>(senders: string[], fn: () => Promise<T>): Promise<T> {
   const releases: (() => void)[] = [];
   try {
     for (const key of [...new Set(senders)].sort()) { // sorted: no lock-order deadlock between two-party DvPs
@@ -259,7 +263,7 @@ export async function exclusive<T>(senders: PartyId[], fn: () => Promise<T>): Pr
       releases.push(release);
       await prev;
     }
-    return await slot(fn);
+    return await fn();
   } finally { releases.forEach((r) => r()); }
 }
 
@@ -483,11 +487,20 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
     });
   }
 
-  // Unspent, unlocked RD UTXOs of exactly LOAD_AMOUNT a bank owns on its own node.
-  async function loadUtxos(bank: BankId): Promise<number> {
-    const key = lower(state.owners[bank]);
-    return (await heldStates(P[bank].c, state.rd)).filter((s) => lower(s.data.owner) === key && !s.data.locked && BigInt(s.data.amount) === LOAD_AMOUNT).length;
-  }
+  // Load users (stress test): identities stress-nN-ii@nodeN on the bank's own node, each with its own RD UTXOs of LOAD_AMOUNT.
+  // They report to BI over their bank's privacy group like the bank does.
+  const loadUsers = new Map<string, Party>();
+  const loadParty = (u: LoadUser) => {
+    const lookup = loadLookup(u);
+    let x = loadUsers.get(lookup);
+    if (!x) loadUsers.set(lookup, x = party(clients, lookup));
+    return x;
+  };
+  const loadUnits = async (u: LoadUser) => {
+    const x = loadParty(u);
+    return Number(BigInt((await within(zeto('RD', x).balanceOf(x.v, { account: x.lookup }), DEADLINE_MS, `Saldo ${x.lookup}`)).totalBalance) / LOAD_AMOUNT);
+  };
+  const loadAll = (users: number) => BANKS.flatMap((bank) => Array.from({ length: users }, (_, i): LoadUser => ({ bank, i })));
 
   const adapter: ModelAdapter & { fund: typeof fund } = {
     id: 'zeto',
@@ -507,25 +520,33 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
       const [chain, node] = await Promise.all([besuReceipt(tx), paladinNodeReceipt(party, tx)]); // public receipt + the party's own Paladin node
       return { ...chain, node };
     },
-    async loadCapacity() {
-      return 3 * Math.min(...(await Promise.all(BANKS.map(loadUtxos))));
+    async loadCapacity(users) {
+      return Math.min(...(await Promise.all(loadAll(users).map(loadUnits))));
     },
-    async prepareLoad(n) {
-      const need = Math.ceil(n / 3) + 1;
-      for (const bank of BANKS) {
-        const short = need - (await loadUtxos(bank));
-        if (short > 0) await fund(bank, 'RD', short, LOAD_AMOUNT);
+    async prepareLoad(users, units) {
+      for (const u of loadAll(users)) {
+        const short = units - (await loadUnits(u));
+        if (short <= 0) continue;
+        const x = loadParty(u);
+        for (const s of await exclusive(['BI'], () => mintUtxos(P.BI, zeto('RD', P.BI), x, short, LOAD_AMOUNT))) {
+          await reportTo(state.groups[u.bank], x, 'RD', address.RD, s.receipt);
+        }
       }
     },
-    // The 120 s deadline starts once the sender lock and a Zeto slot are held (queue wait is not latency); a hung call keeps both.
-    async transferForLoad(from: BankId, to: BankId, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
-      return afterLock(DEADLINE_MS, 'Transaksi Zeto', (armed) => exclusive([from], async () => {
+    loadCirculates: true,
+    // ONE load transfer at a time, across all users and nodes: Zeto_AnonNullifier transfers proved concurrently on several
+    // nodes made each node's SMT diverge from the chain for good (every later transfer: UTXORootNotFound), 2026-11-09.
+    // The orchestrator still ramps users; their wait is queue time (end-to-end latency), so the ramp shows the ceiling.
+    // The 120 s deadline starts once the lock is held; a hung call keeps it.
+    async transferForLoad(from: LoadUser, to: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
+      const x = loadParty(from);
+      return afterLock(DEADLINE_MS, 'Transaksi Zeto', (armed) => lockSenders([ZETO_LOAD_LOCK], async () => {
         armed();
         if (signal?.aborted) throw new Error(CANCELLED);
         const submittedAt = Date.now();
-        const tx = await transfer(P[from], zeto('RD', P[from]), P[to], Number(amount));
-        await report(from, 'RD', tx);
-        return { submittedAt, confirmedAt: Date.now() }; // confirmed = receipt + BI report accepted (spec 7a.2)
+        const tx = await transfer(x, zeto('RD', x), loadParty(to), Number(amount));
+        await reportTo(state.groups[from.bank], x, 'RD', address.RD, tx.receipt);
+        return { submittedAt, confirmedAt: Date.now() }; // confirmed = receipt + BI report accepted by the node (spec 7a.2)
       }));
     },
     fund,

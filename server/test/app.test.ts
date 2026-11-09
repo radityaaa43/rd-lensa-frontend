@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { NotAvailableError, WarmingUpError, type ModelAdapter } from '../src/adapter.ts';
 import { buildApp, safeReason } from '../src/app.ts';
 import { rpcUp } from '../src/health.ts';
+import { CSV_HEAD } from '../src/stats.ts';
 import type { FlowRequest, ModelId } from '../src/domain.ts';
 import { fakeAdapter } from './fake-adapter.ts';
 
@@ -43,6 +44,8 @@ async function readSse(base: string, path: string): Promise<Sse[]> {
     };
   });
 }
+// a stress run that ends in milliseconds: every virtual user holds 2 transfers and nothing circulates (funds stop rule)
+const quick = () => fakeAdapter('zeto', { tps: 100, capacity: 2, circulates: false });
 async function stressState(a: FastifyInstance) {
   for (let i = 0; i < 200; i++) {
     const s = (await a.inject('/api/stress')).json();
@@ -233,7 +236,7 @@ test('rejects stress while tx active', async () => {
   const a = make({ zeto: z });
   const base = await listen(a);
   const { runId } = (await post(a, '/api/tx', req)).json();
-  const res = await post(a, '/api/stress', { models: ['zeto'], count: 5, concurrency: 1, limitS: 120 });
+  const res = await post(a, '/api/stress', { models: ['zeto'], users: 1, stageS: 60 });
   expect(res.statusCode).toBe(409);
   expect(res.json()).toEqual({ reason: 'Transaksi lain sedang diproses' });
   release();
@@ -241,8 +244,8 @@ test('rejects stress while tx active', async () => {
 });
 
 test('rejects tx while stress active', async () => {
-  const a = make({ zeto: fakeAdapter('zeto', { tps: 20 }) });
-  expect((await post(a, '/api/stress', { models: ['zeto'], count: 10, concurrency: 1, limitS: 120 })).statusCode).toBe(202);
+  const a = make({ zeto: quick() });
+  expect((await post(a, '/api/stress', { models: ['zeto'], users: 1, stageS: 60 })).statusCode).toBe(202);
   expect((await post(a, '/api/tx', req)).statusCode).toBe(409);
   await stressState(a);
   expect((await post(a, '/api/tx', req)).statusCode).toBe(202);
@@ -256,13 +259,14 @@ test('stress: nothing to report before any run', async () => {
 });
 
 test('stress: 400 on schema, capacity and empty model list; 503 on missing adapter', async () => {
-  const a = make({ zeto: fakeAdapter('zeto', { capacity: 10 }) });
-  const cfg = { models: ['zeto'], count: 5, concurrency: 1, limitS: 120 };
-  expect((await post(a, '/api/stress', { ...cfg, concurrency: 3 })).json().reason).toMatch(/^Permintaan tidak valid: /);
+  const a = make({ zeto: quick() });
+  const cfg = { models: ['zeto'], users: 1, stageS: 60 };
+  expect((await post(a, '/api/stress', { ...cfg, users: 3 })).json().reason).toMatch(/^Permintaan tidak valid: /);
+  expect((await post(a, '/api/stress', { ...cfg, stageS: 10 })).json().reason).toMatch(/^Permintaan tidak valid: /);
   expect((await post(a, '/api/stress', { ...cfg, models: [] })).json()).toEqual({ reason: 'Pilih minimal satu model' });
-  const over = await post(a, '/api/stress', { ...cfg, count: 11 });
-  expect(over.statusCode).toBe(400);
-  expect(over.json()).toEqual({ reason: 'Melebihi kapasitas siap Zeto (10 tx)' });
+  const empty = await post(make({ zeto: fakeAdapter('zeto', { capacity: 0 }) }), '/api/stress', cfg);
+  expect(empty.statusCode).toBe(400);
+  expect(empty.json()).toEqual({ reason: 'Saldo user beban Zeto belum siap, jalankan preflight --prepare' });
   const missing = await post(a, '/api/stress', { ...cfg, models: ['noto'] });
   expect(missing.statusCode).toBe(503);
   expect(missing.json()).toEqual({ reason: 'Noto belum tersedia' });
@@ -272,9 +276,9 @@ test('stress: 400 on schema, capacity and empty model list; 503 on missing adapt
 });
 
 test('stress snapshot survives subscriber disconnect', async () => {
-  const a = make({ zeto: fakeAdapter('zeto', { tps: 20 }) });
+  const a = make({ zeto: quick() });
   const base = await listen(a);
-  expect((await post(a, '/api/stress', { models: ['zeto'], count: 20, concurrency: 1, limitS: 120 })).statusCode).toBe(202);
+  expect((await post(a, '/api/stress', { models: ['zeto'], users: 1, stageS: 60 })).statusCode).toBe(202);
   const ctl = new AbortController();
   const res = await fetch(`${base}/api/stress/events`, { signal: ctl.signal });
   expect(res.headers.get('content-type')).toBe('text/event-stream');
@@ -282,13 +286,14 @@ test('stress snapshot survives subscriber disconnect', async () => {
   ctl.abort();
   expect((await a.inject('/api/stress')).json().state).toBe('running');
   const done = await stressState(a);  expect(done.state).toBe('done');
-  expect(done.models.zeto.summary.ok).toBe(20);
+  expect(done.models.zeto.ok).toBe(6); // 3 virtual users x 2 transfers each, then the funds stop rule
+  expect(done.models.zeto.stop).toBe('funds');
 });
 
 test('stress events end with a done snapshot', async () => {
-  const a = make({ zeto: fakeAdapter('zeto', { tps: 50 }) });
+  const a = make({ zeto: quick() });
   const base = await listen(a);
-  await post(a, '/api/stress', { models: ['zeto'], count: 5, concurrency: 1, limitS: 120 });
+  await post(a, '/api/stress', { models: ['zeto'], users: 1, stageS: 60 });
   const events = await readSse(base, '/api/stress/events');
   expect(events.at(-1)!.event).toBe('done');
   expect(events.at(-1)!.data.state).toBe('done');
@@ -298,20 +303,20 @@ test('stress events end with a done snapshot', async () => {
 
 test('stress stop ends the run as stopped', async () => {
   const a = make({ zeto: fakeAdapter('zeto', { tps: 10 }) });
-  await post(a, '/api/stress', { models: ['zeto'], count: 500, concurrency: 1, limitS: 120 });
+  await post(a, '/api/stress', { models: ['zeto'], users: 1, stageS: 60 });
   const res = await post(a, '/api/stress/stop', {});
   expect(res.statusCode).toBe(200);
   expect((await stressState(a)).state).toBe('stopped');
 });
 
 test('stress csv lists only models that ran', async () => {
-  const a = make({ zeto: fakeAdapter('zeto', { tps: 100 }), noto: fakeAdapter('noto', { ready: false }) });
-  await post(a, '/api/stress', { models: ['zeto', 'noto'], count: 5, concurrency: 1, limitS: 120 });
+  const a = make({ zeto: quick(), noto: fakeAdapter('noto', { ready: false }) });
+  await post(a, '/api/stress', { models: ['zeto', 'noto'], users: 1, stageS: 60 });
   await stressState(a);
   const res = await a.inject('/api/stress/csv');
   expect(res.headers['content-type']).toMatch(/^text\/csv/);
   const lines = res.body.split('\n');
-  expect(lines[0]).toBe('model,tps_avg,tps_peak,p50_s,p95_s,ok,failed,duration_s');
+  expect(lines[0]).toBe(CSV_HEAD);
   expect(lines).toHaveLength(2);
   expect(lines[1].startsWith('Zeto,')).toBe(true);
 });
@@ -356,6 +361,17 @@ test('preflight-capacity returns ready capacity per available model', async () =
   const res = await a.inject('/api/preflight-capacity');
   expect(res.statusCode).toBe(200);
   expect(res.json()).toEqual({ zeto: 200, noto: 50 });
+});
+
+test('preflight-capacity asks each adapter for ?users users per bank, capped by its own limit', async () => {
+  const seen: Record<string, number> = {};
+  const z = fakeAdapter('zeto'), f = fakeAdapter('fabricx', { maxUsers: 1 });
+  z.loadCapacity = async (u) => { seen.zeto = u; return 3; };
+  f.loadCapacity = async (u) => { seen.fabricx = u; return 4; };
+  const app = make({ zeto: z, fabricx: f });
+  expect((await app.inject('/api/preflight-capacity?users=8')).json()).toEqual({ zeto: 3, fabricx: 4 });
+  expect(seen).toEqual({ zeto: 8, fabricx: 1 });
+  expect((await app.inject('/api/preflight-capacity?users=3')).statusCode).toBe(400);
 });
 
 test('preflight-capacity omits a model whose capacity cannot be read', async () => {
@@ -596,11 +612,11 @@ test('a tx run error event never leaks', async () => {
 });
 
 test('stress snapshots (events and GET) never leak firstError internals', async () => {
-  const z = fakeAdapter('zeto', { tps: 50 });
+  const z = fakeAdapter('zeto', { capacity: 1 });
   z.transferForLoad = async () => { throw new Error(ENOENT); };
   const a = make({ zeto: z });
   const base = await listen(a);
-  await post(a, '/api/stress', { models: ['zeto'], count: 3, concurrency: 1, limitS: 120 });
+  await post(a, '/api/stress', { models: ['zeto'], users: 1, stageS: 60 });
   const events = await readSse(base, '/api/stress/events');
   expect(leaks(JSON.stringify(events))).toEqual([]);
   const snap = await stressState(a);

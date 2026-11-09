@@ -56,12 +56,14 @@ State ditulis ke `server/state/` (git-ignored). Catatan:
 ## Sebelum meeting
 
 ```bash
-npm run preflight -- --prepare 500
-npm run preflight -- --prepare 200 --only stealth   # Besu saja, tidak menyentuh node Paladin
+npm run preflight -- --prepare 10 --users 32
+npm run preflight -- --prepare 10 --users 32 --only stealth   # Besu saja, tidak menyentuh node Paladin
 npm run preflight
 ```
 
-Perintah pertama menyiapkan kapasitas stress test (500 tx per model). Setelah `--prepare`, restart server supaya state kolam yang baru terbaca. Perintah kedua mengecek Besu, 4 node Paladin, dan kapasitas, tanpa mengubah apa pun.
+Perintah pertama menyiapkan user beban stress test: 32 user per bank (Zeto dan Noto: identitas `stress-nN-ii@nodeN` di node bank; Stealth: alamat stealth bank; Iroha 3 dan Fabric-X: akun bank, Fabric-X 1 user per bank), masing-masing dengan saldo 10 transaksi RD 1.000. Saldo berputar selama tes (penerima membelanjakannya lagi), jadi 10 cukup untuk ramp penuh. Setelah `--prepare`, restart server supaya state kolam Stealth yang baru terbaca. Perintah kedua mengecek Besu, 4 node Paladin, dan kapasitas per user, tanpa mengubah apa pun.
+
+Stress test: beban naik bertahap 1 → 2 → 4 → 8 → 16 → 32 user per bank. Tiap user mengirim dari node banknya sendiri, satu transaksi sekaligus; tiap transaksi diundi ke salah satu dari dua node bank lain, lalu ke user acak di node itu, jadi satu pengirim membayar banyak penerima di kedua node. 15 detik pertama tiap tahap tidak diukur (pemanasan). Model berhenti lebih awal bila lebih dari 20% transaksi satu tahap gagal (titik patah), TPS tidak naik dua tahap berturut-turut (jenuh), tidak ada konfirmasi 3 menit, atau saldo user habis. Hasil: TPS maksimum berkelanjutan, latensi p50/p95/p99 dari permintaan user (termasuk antre) dan p95 layanan, dan rincian per bank. `LENSA_BESU_RPC_BANKS="urlA,urlB,urlC"` mengirim transfer Stealth tiap bank lewat node Besu bank itu sendiri.
 
 ## Menjalankan
 

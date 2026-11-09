@@ -5,22 +5,22 @@ import { getCapacity, getStress, postStress, stopStress, watchStress, type Capac
 import { Results } from './Results.tsx';
 import { RunRows } from './RunRows.tsx';
 import { StressConfig, type Form } from './StressConfig.tsx';
-import { clampCount, minCapacity } from './stressForm.ts';
+import { maxMinutes, ramp } from './stressForm.ts';
 
 // onRun: tells App a run started or stopped, so the global banner (UX H4) follows without waiting for its poll
 export function StressView({ meta, hidden, onRun }: { meta: Meta; hidden: boolean; onRun?: () => void }) {
   const [capacity, setCapacity] = useState<Capacity>({});
   const selectedOnce = useRef(false);
   const [snap, setSnap] = useState<StressSnapshot | null>(null);
-  const [form, setForm] = useState<Form>({ models: [], count: 200, concurrency: 2, limitS: 300 });
-  const [countText, setCountText] = useState<string | null>(null);
+  const [form, setForm] = useState<Form>({ models: [], users: 4, stageS: 60 });
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const unwatch = useRef<() => void>();
   const running = snap?.state === 'running';
 
+  const users = form.users;
   const loadCapacity = useCallback(async () => {
-    const r = await getCapacity();
+    const r = await getCapacity(users);
     if (!r.ok) return;
     setCapacity(r.body);
     // first answer: everything with capacity starts selected
@@ -28,7 +28,7 @@ export function StressView({ meta, hidden, onRun }: { meta: Meta; hidden: boolea
       selectedOnce.current = true;
       setForm((f) => ({ ...f, models: (Object.keys(meta.models) as ModelId[]).filter((m) => (r.body[m] ?? 0) > 0) }));
     }
-  }, [meta]);
+  }, [meta, users]);
 
   const follow = useCallback(() => {
     unwatch.current?.();
@@ -53,22 +53,9 @@ export function StressView({ meta, hidden, onRun }: { meta: Meta; hidden: boolea
   // back on this tab: capacity may have moved while it was hidden
   useEffect(() => { if (!hidden && !running) void loadCapacity(); }, [hidden]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const cap = minCapacity(form.models, capacity);
-  const limit = cap > 0 ? cap : Infinity;
-  const count = clampCount(form.count, limit);
-
   const change = (p: Partial<Form>) => setForm((f) => ({ ...f, ...p }));
-  const toggle = (m: ModelId) => {
-    const models = (Object.keys(meta.models) as ModelId[]).filter((x) => (x === m ? !form.models.includes(m) : form.models.includes(x)));
-    const c = minCapacity(models, capacity);
-    change({ models, count: clampCount(form.count, c > 0 ? c : Infinity) });
-  };
-  const setText = (t: string | null) => {
-    if (!t) return setCountText(t);
-    const n = clampCount(Number(t), limit);
-    setCountText(String(n)); // what is typed is clamped on the spot
-    change({ count: n });
-  };
+  const toggle = (m: ModelId) =>
+    change({ models: (Object.keys(meta.models) as ModelId[]).filter((x) => (x === m ? !form.models.includes(m) : form.models.includes(x))) });
 
   // a run sends real transactions and holds the busy lock, so starting one needs a confirmation (UX H4)
   const confirm = useRef<HTMLDialogElement>(null);
@@ -87,7 +74,7 @@ export function StressView({ meta, hidden, onRun }: { meta: Meta; hidden: boolea
     confirm.current?.close();
     setError(null);
     setStarting(true);
-    const r = await postStress({ models: form.models, count, concurrency: form.concurrency, limitS: form.limitS });
+    const r = await postStress(form);
     setStarting(false);
     if (!r.ok) return setError(r.reason);
     setSnap(r.body);
@@ -95,18 +82,17 @@ export function StressView({ meta, hidden, onRun }: { meta: Meta; hidden: boolea
     onRun?.();
   }
 
-  const shown = snap?.config ?? { ...form, count };
-  const summary = shown.models.length
-    ? `${shown.models.map((m) => meta.models[m].name).join(', ')} · ${shown.count.toLocaleString('id-ID')} transaksi per model · ${shown.concurrency} pengirim paralel`
-    : 'Pilih minimal satu model.';
+  const plan = (c: Form) => `${c.models.map((m) => meta.models[m].name).join(', ')} · tahap ${ramp(c.users).join(' → ')} user per bank · ${c.stageS} detik per tahap`;
+  const shown = snap?.config ?? form;
+  const summary = shown.models.length ? plan(shown) : 'Pilih minimal satu model.';
 
   return (
     <div className="shell" hidden={hidden}>
-      <StressConfig meta={meta} capacity={capacity} form={{ ...form, count }} running={running} starting={starting} cap={cap}
-        countText={countText} error={error} onChange={change} onCountText={setText} onToggle={toggle} onGo={go} />
+      <StressConfig meta={meta} capacity={capacity} form={form} running={running} starting={starting}
+        error={error} onChange={change} onToggle={toggle} onGo={go} />
       <dialog ref={confirm} className="confirm" aria-labelledby="stress-confirm">
         <h2 id="stress-confirm">Mulai stress test?</h2>
-        <p>{form.models.map((m) => meta.models[m].name).join(', ')} · {count.toLocaleString('id-ID')} transaksi per model · batas {form.limitS} detik.</p>
+        <p>{plan(form)} · paling lama {maxMinutes(form.models.length, form.users, form.stageS)} menit.</p>
         <p>Transaksi dikirim ke jaringan nyata. Transfer dan DvP diblokir selama tes.</p>
         <div className="actions">
           <button className="btn" type="button" onClick={() => void start()}>Mulai</button>

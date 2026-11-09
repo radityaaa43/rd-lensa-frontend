@@ -9,7 +9,7 @@ import {
   type FlowId, type FlowRequest, type ModelId, type PartyId,
 } from './domain.ts';
 import { probeNodes, type Probe } from './health.ts';
-import { HEALTH_MS, StressRun, validateStress, type StressConfig } from './stress.ts';
+import { HEALTH_MS, STAGE_S, StressRun, USERS, effectiveUsers, validateStress, type StressConfig } from './stress.ts';
 import { toCsv } from './stats.ts';
 import { REGISTRY, isPlatform } from './policy/platforms.ts';
 import { registerPolicyRoutes, registerPolicyUnavailable, type PolicyDeps } from './policy/routes.ts';
@@ -42,14 +42,14 @@ const txBody = {
 } as const;
 const stressBody = {
   type: 'object', additionalProperties: false,
-  required: ['models', 'count', 'concurrency', 'limitS'],
+  required: ['models', 'users', 'stageS'],
   properties: {
     models: { type: 'array', uniqueItems: true, items: { enum: MODELS } },
-    count: { type: 'integer' },
-    concurrency: { enum: [1, 2, 4, 8] },
-    limitS: { enum: [120, 300, 600] },
+    users: { enum: USERS },
+    stageS: { enum: STAGE_S },
   },
 } as const;
+const usersQuery = { type: 'object', properties: { users: { enum: USERS.map(String) } } } as const;
 // coerceTypes is off, so limit stays a string and the handler checks its range
 const modelQuery = { type: 'object', required: ['model'], properties: { model: { enum: MODELS } } } as const;
 const partyQuery = {
@@ -340,12 +340,13 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     return reply;
   });
 
-  // ready transaction capacity per model; a model that is missing or cannot answer is left out
-  app.get('/api/preflight-capacity', async () => {
+  // ready transfers per load user, per model, for `users` users per bank (default 1); a model that is missing or cannot answer is left out
+  app.get<{ Querystring: { users?: string } }>('/api/preflight-capacity', { schema: { querystring: usersQuery } }, async (request) => {
+    const users = Number(request.query.users ?? 1);
     const entries = await Promise.all(MODELS.map(async (m): Promise<[ModelId, number][]> => {
       const a = adapters[m];
       if (!a) return [];
-      try { return [[m, await withDeadline(a.loadCapacity(), HEALTH_MS, 'Cek kapasitas')]]; } catch { return []; }
+      try { return [[m, await withDeadline(a.loadCapacity(effectiveUsers(users, a)), HEALTH_MS, 'Cek kapasitas')]]; } catch { return []; }
     }));
     return Object.fromEntries(entries.flat());
   });
@@ -361,7 +362,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     try {
       const capacity: Partial<Record<ModelId, number>> = {};
       for (const m of cfg.models) {
-        try { capacity[m] = await withDeadline(adapters[m]!.loadCapacity(), HEALTH_MS, 'Cek kapasitas'); }
+        try { capacity[m] = await withDeadline(adapters[m]!.loadCapacity(effectiveUsers(cfg.users, adapters[m]!)), HEALTH_MS, 'Cek kapasitas'); }
         catch (e) { return reply.code(503).send({ reason: `${MODEL_NAMES[m]} belum siap: ${msg(e)}` }); }
       }
       const v = validateStress(cfg, capacity);
@@ -407,7 +408,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     const snap = lastStress.snapshot();
     const rows = MODELS.flatMap((m) => {
       const s = snap.models[m];
-      return s && s.status !== 'waiting' && s.status !== 'skipped' ? [{ model: MODEL_NAMES[m], s: s.summary }] : [];
+      return s && s.status !== 'waiting' && s.status !== 'skipped' ? [{ model: MODEL_NAMES[m], stages: s.stages, stop: s.stop ?? '' }] : [];
     });
     return reply.header('content-type', 'text/csv; charset=utf-8')
       .header('content-disposition', 'attachment; filename="lensa-stress.csv"').send(toCsv(rows));

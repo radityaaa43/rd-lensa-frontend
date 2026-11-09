@@ -4,7 +4,7 @@ import { loadAdapters } from '../adapters/index.ts';
 import { withDeadline } from '../deadline.ts';
 import { MODEL_NAMES, type ModelId } from '../domain.ts';
 import { probeNodes, type Probe } from '../health.ts';
-import { HEALTH_MS } from '../stress.ts';
+import { HEALTH_MS, USERS, effectiveUsers } from '../stress.ts';
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -12,7 +12,8 @@ const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 export async function runPreflight(
   adapters: Partial<Record<ModelId, ModelAdapter>>,
   probe: Probe,
-  opts: { prepare?: number; only?: ModelId[] },
+  // prepare: transfers each load user gets; users: load users per bank (default the stress test's maximum)
+  opts: { prepare?: number; users?: number; only?: ModelId[] },
   print: (line: string) => void,
 ): Promise<number> {
   let failed = false;
@@ -24,11 +25,13 @@ export async function runPreflight(
   nodes.paladin.forEach((up, i) => check(up, `Paladin node ${i + 1}`, 'tidak menjawab'));
   check(nodes.besu, 'Besu', 'tidak menjawab');
 
+  const users = opts.users ?? USERS[USERS.length - 1];
   const capacity = async (a: ModelAdapter, name: string) => {
+    const u = effectiveUsers(users, a);
     try {
-      const cap = await withDeadline(a.loadCapacity(), HEALTH_MS, 'Cek kapasitas');
-      if (opts.prepare && cap < opts.prepare) check(false, `Kapasitas ${name}`, `${opts.prepare} tx diminta, siap ${cap}`);
-      else check(true, `Kapasitas ${name}: ${cap} tx`);
+      const cap = await withDeadline(a.loadCapacity(u), HEALTH_MS, 'Cek kapasitas');
+      if (opts.prepare && cap < opts.prepare) check(false, `Kapasitas ${name}`, `${opts.prepare} tx per user diminta, siap ${cap}`);
+      else check(true, `Kapasitas ${name}: ${cap} tx per user (${u} user per bank)`);
     } catch (e) { check(false, `Kapasitas ${name}`, msg(e)); }
   };
   for (const m of (opts.only ?? Object.keys(MODEL_NAMES)) as ModelId[]) {
@@ -41,7 +44,7 @@ export async function runPreflight(
       if (!h.ready) continue;
     } catch (e) { check(false, name, msg(e)); continue; }
     if (opts.prepare) {
-      try { await a.prepareLoad(opts.prepare); } catch (e) { check(false, `Siapkan beban ${name}`, msg(e)); continue; }
+      try { await a.prepareLoad(effectiveUsers(users, a), opts.prepare); } catch (e) { check(false, `Siapkan beban ${name}`, msg(e)); continue; }
     }
     await capacity(a, name);
   }
@@ -50,7 +53,16 @@ export async function runPreflight(
 
 const PREPARE_MAX = 10_000;
 
-// undefined when --prepare is absent; otherwise a strict positive integer <= PREPARE_MAX
+// --users N: load users per bank, one of the stress test's choices
+export function parseUsers(argv: string[]): number | undefined {
+  const i = argv.indexOf('--users');
+  if (i < 0) return undefined;
+  const n = Number(argv[i + 1]);
+  if (!(USERS as readonly number[]).includes(n)) throw new Error(`--users butuh salah satu dari ${USERS.join(', ')}, dapat: "${argv[i + 1] ?? ''}"`);
+  return n;
+}
+
+// --prepare N: transfers per load user. undefined when absent; otherwise a strict positive integer <= PREPARE_MAX
 export function parsePrepare(argv: string[]): number | undefined {
   const i = argv.indexOf('--prepare');
   if (i < 0) return undefined;
@@ -63,13 +75,13 @@ export function parsePrepare(argv: string[]): number | undefined {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  let prepare: number | undefined;
-  try { prepare = parsePrepare(process.argv); } catch (e) { console.error(msg(e)); process.exit(2); }
+  let prepare: number | undefined, users: number | undefined;
+  try { prepare = parsePrepare(process.argv); users = parseUsers(process.argv); } catch (e) { console.error(msg(e)); process.exit(2); }
   // --only stealth,noto: prepare (and check) just these models, e.g. Stealth is Besu-only and spares the Paladin nodes
   const oi = process.argv.indexOf('--only');
   const only = oi < 0 ? undefined : (process.argv[oi + 1] ?? '').split(',').filter((m): m is ModelId => m in MODEL_NAMES);
   if (only && !only.length) { console.error('--only butuh model: stealth, noto, zeto, fabricx, atau iroha3'); process.exit(2); }
   let adapters;
   try { adapters = await loadAdapters({ only }); } catch (e) { console.log(`GAGAL Muat adapter: ${msg(e)}`); process.exit(1); }
-  process.exit(await runPreflight(adapters, probeNodes, { prepare, only }, console.log));
+  process.exit(await runPreflight(adapters, probeNodes, { prepare, users, only }, console.log));
 }

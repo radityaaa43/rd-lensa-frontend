@@ -311,7 +311,7 @@ svg.i{width:15px;height:15px;flex:none}
 .runrow.run .state{color:var(--navy);font-weight:600}
 .bar{height:8px;background:var(--line-2);border-radius:4px;overflow:hidden;margin-top:6px}
 .bar i{display:block;height:100%;border-radius:4px;transition:width .2s}
-.prog{font-size:12.5px;color:var(--muted);display:flex;justify-content:space-between}
+.prog{font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 12px}
 .spark{width:100%;height:46px;display:block}
 .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:right}
 .kpis div{font-size:11.5px;color:var(--muted)}

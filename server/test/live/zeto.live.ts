@@ -46,9 +46,9 @@ describe('zeto live', () => {
 
   it('transferForLoad confirms after the BI report is accepted', async () => {
     const a = (await load())!;
-    await a.prepareLoad(3);
-    expect(await a.loadCapacity()).toBeGreaterThanOrEqual(3);
-    const s = await a.transferForLoad('A', 'B', LOAD_AMOUNT);
+    await a.prepareLoad(1, 3);
+    expect(await a.loadCapacity(1)).toBeGreaterThanOrEqual(3);
+    const s = await a.transferForLoad({ bank: 'A', i: 0 }, { bank: 'B', i: 0 }, LOAD_AMOUNT);
     expect(s.confirmedAt).toBeGreaterThan(s.submittedAt);
   });
 });

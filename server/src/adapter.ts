@@ -69,11 +69,26 @@ export interface ModelAdapter {
   receipt(tx: string, party: PartyId): Promise<Receipt>;
   // tx = a HistoryItem.id or a run's txHash; the flow it ends is rebuilt from the chain, the node part from the party's own node.
   trace(tx: string, party: PartyId): Promise<Trace>;
-  loadCapacity(): Promise<number>;
-  prepareLoad(n: number): Promise<void>;
+  // Stress test (stress.ts). A load user is one sender of a bank, sending from that bank's own node.
+  // loadCapacity: transfers of LOAD_AMOUNT each of `users` users per bank can make now (the minimum over the 3 x users users).
+  loadCapacity(users: number): Promise<number>;
+  // Tops every one of `users` users per bank up to `units` transfers.
+  prepareLoad(users: number, units: number): Promise<void>;
   // signal.aborted is checked after the adapter's own lock/slot is acquired and before anything is submitted: then it throws CANCELLED.
-  transferForLoad(from: BankId, to: BankId, amount: bigint, signal?: { aborted: boolean }): Promise<Sample>;
+  // Sample.submittedAt is taken after that lock/slot: the orchestrator measures queue time itself.
+  transferForLoad(from: LoadUser, to: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample>;
+  // What the recipient receives it can spend again in the same run (its capacity grows by one transfer).
+  loadCirculates: boolean;
+  // Distinct senders a bank can have (Fabric-X: one wallet per node); absent = no limit.
+  maxLoadUsers?: number;
 }
+
+// i: 0-based index of the user within its bank
+export interface LoadUser { bank: BankId; i: number }
+// The Paladin node of each bank (node1 = BI) and the identity of a load user on it, e.g. stress-n2-00@node2.
+// besu/opa bank.ident compares identities by node part, so these pass the gateway like the bank's own identity.
+export const BANK_NODE: Record<BankId, number> = { A: 2, B: 3, C: 4 };
+export const loadLookup = (u: LoadUser) => `stress-n${BANK_NODE[u.bank]}-${String(u.i).padStart(2, '0')}@node${BANK_NODE[u.bank]}`;
 
 export const LOAD_AMOUNT = 1000n;
 export const CANCELLED = 'Dibatalkan';

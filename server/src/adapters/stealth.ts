@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, StepEvent } from '../adapter.ts';
-import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, type LoadUser } from '../adapter.ts';
 import { besuNetwork, besuReceipt } from './besu-network.ts';
 import { besuTrace, nameFrom } from './besu-trace.ts';
 import { BANKS, FLOWS, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type PartyId } from '../domain.ts';
@@ -28,7 +28,10 @@ export interface StealthState {
   deployed: Deployed;
   banks: Record<BankId, BankKeys>;
   biMeta?: BiMeta; // BI's own stealth receive keys (award: BI is the seller and gets the RD leg); added by ensureBiKeys, absent = award disabled
-  pool: Record<string, PoolEntry[]>; // 'A>B': funded stealth addresses of A reserved for the stress test
+  pool: Record<string, PoolEntry[]>; // 'A>B' (or 'A>load', received during a run): funded stealth addresses of A reserved for the stress test
+  // The sending bank's own record of whom it paid (lower-case tx hash -> recipient). The chain cannot tell a sender this later:
+  // the memo is encrypted to the recipient. Written by run() for every transfer a bank sends; stress-test transfers are not recorded.
+  sent?: Record<string, PartyId>;
 }
 
 const LABELS: [string, string, string, string] = ['Alamat stealth & enkripsi memo', 'Tanda tangan & kirim transaksi', 'Masuk block Besu', 'BI memindai dengan view key'];
@@ -148,24 +151,49 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
   const refresh = async () => { const r = syncTail.then(sync); syncTail = r.catch(() => {}); await r; return cache; };
   const ofToken = (anns: LoggedAnnouncement[], token: string) => anns.filter((a) => lc(a.caller) === lc(token));
 
+  // What one key pair owns among the announcements of one token, scanned incrementally: `cache` only grows by appending, and a
+  // full scan costs one curve multiplication per announcement (~4 ms; 25 s at 6,000 announcements, so a balance read timed out).
+  // Scans in slices and yields between them, so a cold scan does not stall the server.
+  const owned = new Map<string, { n: number; found: Found[]; seen: Set<string>; tail: Promise<unknown> }>();
+  function scanOwned(token: string, viewKey: string, spendKey: string): Promise<Found[]> {
+    const id = `${lc(token)}:${viewKey}`;
+    const c = owned.get(id) ?? { n: 0, found: [], seen: new Set<string>(), tail: Promise.resolve() };
+    owned.set(id, c);
+    const run = c.tail.then(async () => {
+      const anns = await refresh();
+      for (; c.n < anns.length; await new Promise((r) => setImmediate(r))) {
+        const slice = anns.slice(c.n, c.n + 200);
+        for (const f of scan(ofToken(slice, token), viewKey, spendKey)) if (!c.seen.has(lc(f.stealthAddress))) { c.seen.add(lc(f.stealthAddress)); c.found.push(f); }
+        c.n += slice.length;
+      }
+      return c.found;
+    });
+    c.tail = run.catch(() => {});
+    return run;
+  }
+
   const tokenOf = (asset: 'RD' | 'DFABI') => (asset === 'RD' ? d.rd : d.bond);
   const balance = (asset: 'RD' | 'DFABI', addr: string): Promise<bigint> =>
     asset === 'RD' ? reader.rd.balanceOf(addr) : reader.bond.balanceOfByPartition(TRANCHE_A, addr);
-  const unused = (a: BankId, b: BankId) => (state.pool[`${a}>${b}`] ??= []).filter((e) => !e.used);
-  const reserved = () => new Set(PAIRS.flatMap(([a, b]) => unused(a, b).map((e) => lc(e.stealthAddress))));
+  const reserved = () => new Set(Object.values(state.pool).flat().filter((e) => !e.used).map((e) => lc(e.stealthAddress)));
+  // Stress test: a load user of a bank sends from any unused pooled address of that bank (one address, one transfer).
+  const unusedOf = (bank: BankId) => Object.entries(state.pool).filter(([k]) => k.startsWith(`${bank}>`)).flatMap(([, es]) => es.filter((e) => !e.used));
+  // LENSA_BESU_RPC_BANKS="urlA,urlB,urlC": each bank's load transfers go to its own node's Besu door; unset = all through rpcUrl.
+  const bankRpc = (process.env.LENSA_BESU_RPC_BANKS ?? '').split(',').filter(Boolean);
+  const loadProvider = Object.fromEntries(BANKS.map((b, i) => [b, bankRpc[i] ? new JsonRpcProvider(besuRequest(gwUrl(bankRpc[i]!)), undefined, { cacheTimeout: -1 }) : provider])) as Record<BankId, JsonRpcProvider>;
 
   // Every stealth address the bank received this asset at (minus the ones reserved for the stress test), with its balance.
   async function holdings(bank: BankId, asset: 'RD' | 'DFABI'): Promise<Holding[]> {
     const k = banks[bank];
     const skip = reserved();
-    const found = scan(ofToken(await refresh(), tokenOf(asset)), k.viewKey, k.spendKey).filter((f) => !skip.has(lc(f.stealthAddress)));
+    const found = (await scanOwned(tokenOf(asset), k.viewKey, k.spendKey)).filter((f) => !skip.has(lc(f.stealthAddress)));
     const bals = await Promise.all(found.map((f) => balance(asset, f.stealthAddress)));
     return found.map((f, i) => ({ ...f, balance: bals[i] }));
   }
 
   // BI's own stealth addresses holding the asset (DFABI inventory, RD award receipts), found with BI's view key like a bank's.
   async function biHoldings(asset: 'RD' | 'DFABI' = 'DFABI'): Promise<Holding[]> {
-    const found = scan(ofToken(await refresh(), tokenOf(asset)), biKeys!.viewKey, biKeys!.spendKey);
+    const found = await scanOwned(tokenOf(asset), biKeys!.viewKey, biKeys!.spendKey);
     const bals = await Promise.all(found.map((f) => balance(asset, f.stealthAddress)));
     return found.map((f, i) => ({ ...f, balance: bals[i] }));
   }
@@ -353,6 +381,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
       }
 
       const rc = await step(2, () => confirm(tx));
+      if (!flow.issuer) { (state.sent ??= {})[lc(rc.hash)] = req.to; writeState('stealth', state); }
       await step(3, async () => {
         const anns = await txAnnouncements(rc.blockNumber, rc.hash, kind);
         if (!biRows(chainId, anns, holders, kind).some((r) => r.bank === req.to)) throw new Error('BI tidak menemukan transaksi ini dengan view key');
@@ -468,7 +497,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
       if (gotMain || gotRd || sent.has(txHash)) {
         const counterparty: Counterparty = gotMain
           ? { from: partyOf(read(chainId, main, k.viewKey, kind).sender), to: bank }
-          : { from: bank, to: gotRd ? partyOf(read(chainId, g.rd!, k.viewKey, 'rd').sender) : null };
+          : { from: bank, to: gotRd ? partyOf(read(chainId, g.rd!, k.viewKey, 'rd').sender) : state.sent?.[lc(txHash)] ?? null };
         const issue = counterparty.from === 'BI';
         return { ...base, flow: flowLabel(dvp, kind, issue), role: roleFromParties(party, counterparty, issue), verdict: 'clear', counterparty };
       }
@@ -491,7 +520,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
       txs.push(await serial(() => asBi.rd.mintStealth(p.s.stealthAddress, LOAD_AMOUNT, p.s.ephemeralPubKey, p.s.viewTag, p.memo, { gasPrice: gp })));
     }
     await Promise.all(txs.map(confirm));
-    const found = scan(ofToken(await refresh(), d.rd), k.viewKey, k.spendKey).filter((f) => made.has(lc(f.stealthAddress)));
+    const found = (await scanOwned(d.rd, k.viewKey, k.spendKey)).filter((f) => made.has(lc(f.stealthAddress)));
     if (found.length !== count) throw new Error(`Hanya ${found.length} dari ${count} alamat stealth beban ditemukan`);
     (state.pool[`${bank}>${to}`] ??= []).push(...found.map((f) => ({ stealthAddress: f.stealthAddress, privateKey: f.privateKey, used: false })));
     writeState('stealth', state);
@@ -517,7 +546,9 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
     async balanceOf(party, asset) {
       // BI: the sum over every stealth address its own view key finds (inventory top-ups and award receipts); without a BI key, nothing to read.
       if (party === 'BI') return biKeys ? (await biHoldings(asset)).reduce((m, h) => m + h.balance, 0n) : 0n;
-      return (await holdings(party, asset)).reduce((m, h) => (h.balance > m ? h.balance : m), 0n);
+      // A bank: the sum over every stealth address its own keys find, like BI (the stress test's reserved pool left out).
+      // One transfer still spends from a single address: claim() refuses an amount no single address covers (NO_BALANCE).
+      return (await holdings(party, asset)).reduce((m, h) => m + h.balance, 0n);
     },
     run,
     lens,
@@ -529,40 +560,56 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
       name: nameFrom({ [d.rd.toLowerCase()]: 'RD', [d.bond.toLowerCase()]: 'DFABI', [d.dvpFactory.toLowerCase()]: 'DvPFactory', [d.announcer.toLowerCase()]: 'Announcer' }),
     }),
     receipt: async (tx) => ({ ...(await besuReceipt(tx, undefined, rpcUrl)), node: null }),
-    async loadCapacity() {
-      return 3 * Math.min(...PAIRS.map(([a, b]) => unused(a, b).length));
+    async loadCapacity(users) {
+      return Math.min(...BANKS.map((b) => Math.floor(unusedOf(b).length / users)));
     },
-    async prepareLoad(n) {
-      const target = Math.ceil(n / 3) + 1;
+    async prepareLoad(users, units) {
+      // an entry left over from an earlier run may have been spent already: drop what no longer holds LOAD_AMOUNT
+      for (const es of Object.values(state.pool)) {
+        const bal = await Promise.all(es.map((e) => (e.used ? 0n : reader.rd.balanceOf(e.stealthAddress))));
+        es.forEach((e, i) => { if (bal[i]! < LOAD_AMOUNT) e.used = true; });
+      }
+      writeState('stealth', state);
       for (const [a, b] of PAIRS) {
-        const missing = target - unused(a, b).length; // top up: earlier prepared addresses count
+        const missing = users * units - unusedOf(a).length; // top up: earlier prepared addresses count
         if (missing > 0) await fund(a, b, missing);
       }
     },
+    loadCirculates: true,
     // No lock queue here: the pooled address is the slot, and the 120 s deadline (confirm) starts at submit.
-    async transferForLoad(from, to, amount, signal): Promise<Sample> {
+    // The recipient bank derives the key of the address it was paid at (its own view + spend key, as a real receiver would), so
+    // the payment goes back into the pool and can be spent again.
+    async transferForLoad(fromU: LoadUser, toU: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
+      const from = fromU.bank, to = toU.bank;
       if (amount > LOAD_AMOUNT) throw new Error('Nominal beban melebihi isi alamat stealth');
-      const entry = unused(from, to)[0];
+      const entry = unusedOf(from)[0];
       if (!entry) throw new Error('Alamat stealth beban habis, jalankan prepareLoad');
       if (signal?.aborted) throw new Error(CANCELLED); // slot taken, nothing submitted
       entry.used = true;
       writeState('stealth', state);
       let submittedAt = 0;
-      let tx;
+      let tx, p!: ReturnType<typeof pay>;
       try {
         const gp = await gasPrice();
         if (signal?.aborted) throw new Error(CANCELLED); // released below: nothing was submitted
         submittedAt = Date.now();
-        const p = pay(chainId, banks[to].metaAddress, banks[from].identityKey, d.rd, amount);
-        const w = new Wallet(entry.privateKey, provider);
+        p = pay(chainId, banks[to].metaAddress, banks[from].identityKey, d.rd, amount);
+        const w = new Wallet(entry.privateKey, loadProvider[from]);
         tx = await contracts(d, w).rd.sendStealth(p.s.stealthAddress, amount, p.s.ephemeralPubKey, p.s.viewTag, p.memo, { gasPrice: gp });
       } catch (e) {
-        entry.used = false; // nothing was submitted: the pooled address is still funded
+        // Cancelled: nothing was submitted, the address is still funded. Any other failure (a revert at estimateGas, a lost
+        // send) leaves it out of the pool: put back, an empty address would be picked again for every later transfer.
+        if ((e as Error).message === CANCELLED) entry.used = false;
         writeState('stealth', state);
         throw e;
       }
       await confirm(tx);
-      return { submittedAt, confirmedAt: Date.now() };
+      const confirmedAt = Date.now();
+      const [got] = scan([{ schemeId: 1n, stealthAddress: p.s.stealthAddress, ephemeralPubKey: p.s.ephemeralPubKey, metadata: p.s.viewTag }], banks[to].viewKey, banks[to].spendKey);
+      for (const es of Object.values(state.pool)) { const i = es.indexOf(entry); if (i >= 0) es.splice(i, 1); } // spent: keeps the state file small
+      if (got) (state.pool[`${to}>load`] ??= []).push({ stealthAddress: got.stealthAddress, privateKey: got.privateKey, used: false });
+      writeState('stealth', state);
+      return { submittedAt, confirmedAt };
     },
   };
 }
@@ -574,5 +621,9 @@ export async function load(): Promise<ModelAdapter | null> {
   // The first read of the announcement cache walks every block since the deploy (about 9 s on the live chain). Start it now, in the
   // background, so the first history() or lens() finds it warm; a failure here just means the first real call pays and reports it.
   void adapter.history('BI', 1).catch(() => {});
+  // the same for the balance scans (scanOwned): every party's first read would otherwise pay the whole scan
+  // and then each bank's history (its sent-tx scan of the spenders), whose first cold read went past the route's deadline (502)
+  void Promise.all((['BI', ...BANKS] as PartyId[]).map((p) => adapter.balanceOf(p, 'RD').then(() => adapter.balanceOf(p, 'DFABI'))))
+    .then(() => Promise.all(BANKS.map((b) => adapter.history(b, 1)))).catch(() => {});
   return adapter;
 }

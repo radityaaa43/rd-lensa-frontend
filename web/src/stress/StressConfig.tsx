@@ -1,13 +1,13 @@
 import type { ModelId } from '../../../server/src/domain.ts';
+import type { StressConfig as Cfg } from '../../../server/src/stress.ts';
 import type { Capacity, Meta } from '../api.ts';
 import { COLOR } from './RunRows.tsx';
-import { CONCURRENCY, LIMITS, PRESETS, showZetoWarning } from './stressForm.ts';
+import { STAGES, USERS, WARMUP_S, maxMinutes, ramp, ready, showZetoWarning } from './stressForm.ts';
 
-export interface Form { models: ModelId[]; count: number; concurrency: 1 | 2 | 4 | 8; limitS: 120 | 300 | 600 }
+export type Form = Cfg;
 export interface ConfigProps {
-  meta: Meta; capacity: Capacity; form: Form; running: boolean; starting: boolean; cap: number;
-  countText: string | null; error: string | null;
-  onChange(p: Partial<Form>): void; onCountText(t: string | null): void; onToggle(m: ModelId): void; onGo(): void;
+  meta: Meta; capacity: Capacity; form: Form; running: boolean; starting: boolean; error: string | null;
+  onChange(p: Partial<Form>): void; onToggle(m: ModelId): void; onGo(): void;
 }
 
 const CHECK = <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#fff" strokeWidth="3.5"><path d="M20 6 9 17l-5-5" /></svg>;
@@ -17,6 +17,7 @@ const SUB = { display: 'block', fontSize: '12.5px', fontWeight: 400, color: 'var
 export function StressConfig(p: ConfigProps) {
   const { meta, capacity, form, running } = p;
   const locked = running || p.starting;
+  const canStart = ready(form.models, capacity);
   return (
     <aside aria-label="Konfigurasi stress test" className="cfg">
       <div className="q">
@@ -31,7 +32,7 @@ export function StressConfig(p: ConfigProps) {
                 <span className="box">{on && CHECK}</span>
                 <span>
                   {meta.models[m].name}
-                  <small style={SUB}>{usable ? `Kapasitas siap: ${cap.toLocaleString('id-ID')} tx` : meta.models[m].available ? 'Kapasitas tidak terbaca' : 'Belum tersedia'}</small>
+                  <small style={SUB}>{usable ? `Saldo siap: ${cap.toLocaleString('id-ID')} tx per user` : meta.models[m].available ? 'Kapasitas tidak terbaca' : 'Belum tersedia'}</small>
                 </span>
                 <i className="swatch" style={{ background: COLOR[m] }} />
               </button>
@@ -45,34 +46,30 @@ export function StressConfig(p: ConfigProps) {
         <div className="fixed">Transfer RD antar bank<small>Sama untuk semua model supaya perbandingannya adil.</small></div>
       </div>
       <div className="q">
-        <h3><span className="n">3</span>Beban</h3>
-        <div className="seg">
-          {PRESETS.map(([label, n]) => (
-            <button key={n} aria-pressed={form.count === n} disabled={locked} title={label} onClick={() => { p.onCountText(null); p.onChange({ count: n }); }}>{n} tx</button>
-          ))}
+        <h3><span className="n">3</span>Beban bertahap</h3>
+        <label className="f" id="tusers-label">User per bank (tahap terakhir)</label>
+        <div className="seg" role="group" aria-labelledby="tusers-label">
+          {USERS.map((u) => <button key={u} aria-pressed={form.users === u} disabled={locked} onClick={() => p.onChange({ users: u })}>{u}</button>)}
         </div>
-        <label className="f" htmlFor="tn">Jumlah transaksi per model</label>
-        <input id="tn" inputMode="numeric" disabled={locked} value={p.countText ?? form.count.toLocaleString('id-ID')}
-          onChange={(e) => p.onCountText(e.target.value.replace(/\D/g, ''))} onBlur={() => p.onCountText(null)} />
-        <label className="f" id="tconc-label">Pengirim paralel</label>
-        <div className="seg" role="group" aria-labelledby="tconc-label">
-          {CONCURRENCY.map((c) => <button key={c} aria-pressed={form.concurrency === c} disabled={locked} onClick={() => p.onChange({ concurrency: c })}>{c}</button>)}
-        </div>
-        <label className="f" htmlFor="tlimit">Batas waktu per model</label>
-        <select id="tlimit" value={form.limitS} disabled={locked} onChange={(e) => p.onChange({ limitS: Number(e.target.value) as Form['limitS'] })}>
-          {LIMITS.map(([s, t]) => <option key={s} value={s}>{t}</option>)}
+        <label className="f" htmlFor="tstage">Durasi per tahap</label>
+        <select id="tstage" value={form.stageS} disabled={locked} onChange={(e) => p.onChange({ stageS: Number(e.target.value) as Form['stageS'] })}>
+          {STAGES.map(([s, t]) => <option key={s} value={s}>{t}</option>)}
         </select>
-        <p className="small">Model berhenti saat jumlah transaksi tercapai atau batas waktu habis, mana yang lebih dulu.</p>
+        <p className="small">
+          Tahap {ramp(form.users).join(' → ')} user per bank, dari node bank masing-masing. Tiap user mengirim satu transaksi sekaligus; tiap transaksi ke node bank lain yang diundi, lalu ke user acak di node itu, jadi satu pengirim membayar banyak penerima di kedua node.
+          {` ${WARMUP_S}`} detik pertama tiap tahap adalah pemanasan dan tidak diukur. Paling lama {maxMinutes(form.models.length, form.users, form.stageS)} menit.
+        </p>
+        <p className="small">Model berhenti lebih awal bila lebih dari 20% transaksi satu tahap gagal, TPS tidak naik dua tahap berturut-turut, tidak ada konfirmasi selama 3 menit, atau saldo user habis.</p>
       </div>
-      {showZetoWarning(form.models, form.concurrency) && (
-        <div className="warn">{WARN}<span>Zeto membangun bukti ZK di CPU node. Lebih dari 2 pengirim paralel pernah membuat node Paladin restart, jadi Zeto dibatasi 2 transaksi paralel.</span></div>
+      {showZetoWarning(form.models, form.users) && (
+        <div className="warn">{WARN}<span>Zeto mengirim satu transaksi beban sekaligus: bukti ZK paralel dari beberapa node pernah membuat pohon SMT node menyimpang dari chain (UTXORootNotFound). User tambahan menunggu antrean, jadi latensi naik dan TPS menunjukkan batas serial.</span></div>
       )}
       <div>
-        <button className={running ? 'btn2 stop' : 'btn2'} disabled={!running && (p.starting || form.models.length === 0 || p.cap === 0)} onClick={p.onGo}>
+        <button className={running ? 'btn2 stop' : 'btn2'} disabled={!running && (p.starting || !canStart)} onClick={p.onGo}>
           {running ? 'Hentikan' : 'Mulai stress test'}
         </button>
-        {!running && !p.starting && (form.models.length === 0 || p.cap === 0) && (
-          <p className="small">{form.models.length === 0 ? 'Pilih minimal satu model.' : 'Model terpilih belum punya kapasitas siap. Jalankan preflight --prepare dulu.'}</p>
+        {!running && !p.starting && !canStart && (
+          <p className="small">{form.models.length === 0 ? 'Pilih minimal satu model.' : 'Saldo user beban model terpilih belum siap. Jalankan preflight --prepare dulu.'}</p>
         )}
         {p.error && <p className="small" role="alert" style={{ color: 'var(--sealed)' }}>{p.error}</p>}
       </div>

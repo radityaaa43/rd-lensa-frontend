@@ -6,7 +6,7 @@ const FLOW_IDS: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-tra
 // Deterministic adapter for tests: no chain access, fixed results.
 export function fakeAdapter(
   id: ModelId,
-  opts: { ready?: boolean; capacity?: number; tps?: number; failEvery?: number; serial?: boolean; onSubmit?: () => void; disabled?: Partial<Record<FlowId, string>>; transparent?: boolean; biVerdict?: 'reported' | 'notarised' | 'viewkey' } = {}, // transparent: every party reads everything (Iroha 3); biVerdict: what BI's read of a bank-to-bank tx is called (default 'clear')
+  opts: { ready?: boolean; capacity?: number; circulates?: boolean; maxUsers?: number; tps?: number; failEvery?: number; serial?: boolean; onSubmit?: () => void; disabled?: Partial<Record<FlowId, string>>; transparent?: boolean; biVerdict?: 'reported' | 'notarised' | 'viewkey' } = {}, // transparent: every party reads everything (Iroha 3); biVerdict: what BI's read of a bank-to-bank tx is called (default 'clear')
 ): ModelAdapter {
   let calls = 0;
   let lockTail: Promise<unknown> = Promise.resolve(); // opts.serial: one transfer at a time, like a per-sender lock
@@ -87,8 +87,10 @@ export function fakeAdapter(
           : { source: `Node Paladin (${party})`, parts: [{ title: `Receipt ${id} · 0000aaaa`, rows: [{ label: 'Status', value: 'Berhasil' }, { label: 'State privat', value: 'confirmed 1' }] }], note: null }
         : null,
     }),
-    loadCapacity: async () => opts.capacity ?? 1000,
+    loadCapacity: async () => opts.capacity ?? 1000, // per load user
     prepareLoad: async () => {},
+    loadCirculates: opts.circulates ?? true,
+    maxLoadUsers: opts.maxUsers,
     async transferForLoad(_from, _to, _amount, signal) {
       const work = async () => {
         if (signal?.aborted) throw new Error(CANCELLED); // checked once the lock is held, before submitting

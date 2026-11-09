@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { LensView, ModelAdapter, StepEvent } from '../../src/adapter.ts';
 import { LOAD_AMOUNT } from '../../src/adapter.ts';
-import { BANKS, PRICE_PER_UNIT, type FlowId, type FlowRequest, type PartyId } from '../../src/domain.ts';
+import { PRICE_PER_UNIT, type FlowId, type FlowRequest, type PartyId } from '../../src/domain.ts';
 import { createNotoAdapter, load } from '../../src/adapters/noto.ts';
 
 // LIVE: needs the Paladin cluster and state/noto.json (npm run bootstrap -- noto).
@@ -124,16 +124,13 @@ describe('noto adapter (live)', () => {
     expectOnChain(lenses.BI, result.txHash);
   });
 
-  it('load: capacity, prepare and a timed cash transfer B -> C', async () => {
-    await adapter.prepareLoad(6);
-    const cap = await adapter.loadCapacity();
-    expect(cap).toBeGreaterThanOrEqual(3 * 3); // (ceil(6/3)+1) units of LOAD_AMOUNT per bank
-    const min = Math.min(...(await Promise.all(BANKS.map((b) => adapter.balanceOf(b, 'RD')))).map((x) => Number(x / LOAD_AMOUNT)));
-    expect(cap).toBe(3 * min);
-    const b0 = await adapter.balanceOf('B', 'RD');
-    const s = await adapter.transferForLoad('B', 'C', LOAD_AMOUNT);
+  it('load: 2 users per bank prepared, a timed transfer from a load user of B to one of C', async () => {
+    await adapter.prepareLoad(2, 2);
+    expect(await adapter.loadCapacity(2)).toBeGreaterThanOrEqual(2);
+    const b0 = await adapter.balanceOf('B', 'RD'); // the bank's own identity is not a load user: untouched
+    const s = await adapter.transferForLoad({ bank: 'B', i: 1 }, { bank: 'C', i: 0 }, LOAD_AMOUNT);
     expect(s.confirmedAt).toBeGreaterThan(s.submittedAt);
-    expect(await adapter.balanceOf('B', 'RD')).toBe(b0 - LOAD_AMOUNT);
+    expect(await adapter.balanceOf('B', 'RD')).toBe(b0);
   });
 });
 
