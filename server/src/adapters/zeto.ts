@@ -16,7 +16,7 @@ import {
   type Party, type Settled,
 } from '../../../../besu/zeto/src/flows.ts';
 
-// Zeto_Anon on Paladin, BI on node1. Issuance is private `mint` (spike: zeto/spike-private-mint.ts);
+// Zeto_AnonNullifier (V1) on Paladin, BI on node1. Issuance is private `mint` (spike: zeto/spike-private-mint.ts);
 // no setERC20 and no public tx to a Zeto contract, ever.
 export interface ZetoState {
   rd: string; dfabi: string; atomFactory: string;
@@ -414,7 +414,7 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
       { label: 'Tx hash', value: result.txHash },
       ...io.flatMap((i) => [
         ...i.outputs.map((o) => ({ label: `Commitment ${i.token}`, value: hex32(o) })),
-        ...i.inputs.map((n) => ({ label: `Input terpakai ${i.token}`, value: hex32(n) })),
+        ...i.inputs.map((n) => ({ label: `Nullifier/input terpakai ${i.token}`, value: hex32(n) })), // Zeto_AnonNullifier: a transfer's inputs are nullifiers; a spent lock's (DvP leg) are the locked commitments
       ]),
     ];
     // BI reads both sides from its ledger (already verified by run()), never from the request.

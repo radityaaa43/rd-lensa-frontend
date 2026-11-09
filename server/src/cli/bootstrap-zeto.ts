@@ -5,7 +5,7 @@ import {
   IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X, PaladinClient, algorithmZetoSnarkBJJ, deployToken, newAtomFactory, newGroup, nodeConnections, party, within,
 } from '../../../../besu/zeto/src/flows.ts';
 
-// Fresh deployment owned by this app: bi@node1 deploys RD and DFABI (Zeto_Anon, never setERC20),
+// Fresh deployment owned by this app: bi@node1 deploys RD and DFABI (Zeto_AnonNullifier, never setERC20),
 // one Pente group {bank, BI} per bank, an AtomFactory, then private opening balances.
 // Run under the cluster lock: flock /tmp/lensa-paladin.lock npm run bootstrap -- zeto
 export async function bootstrap(): Promise<void> {
