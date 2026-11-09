@@ -634,10 +634,14 @@ export async function load(): Promise<ModelAdapter | null> {
   // on the live chain), history() answers 503 + Retry-After like Zeto's BI warm-up: a cold read went past the route's 20 s (502).
   const history = adapter.history;
   let warm = false;
+  const scans = () => Promise.all((['BI', ...BANKS] as PartyId[]).map((p) => adapter.balanceOf(p, 'RD').then(() => adapter.balanceOf(p, 'DFABI'))))
+    .then(() => Promise.all(BANKS.map((b) => history(b, 1))));
+  // After the warm-up the same scans run again 30 s after each round ends, so new announcements (a stress run adds thousands) are
+  // scanned in the background and never by a reader: unscanned, the first balance read after a 32-user run took over the 10 s limit.
+  const keepUp = () => { setTimeout(() => { void scans().catch(() => {}).finally(keepUp); }, 30_000).unref(); };
   void history('BI', 1).catch(() => {})
-    .then(() => Promise.all((['BI', ...BANKS] as PartyId[]).map((p) => adapter.balanceOf(p, 'RD').then(() => adapter.balanceOf(p, 'DFABI')))))
-    .then(() => Promise.all(BANKS.map((b) => history(b, 1))))
-    .catch(() => {}).finally(() => { warm = true; });
+    .then(scans)
+    .catch(() => {}).finally(() => { warm = true; keepUp(); });
   adapter.history = (party, limit) => (warm ? history(party, limit) : Promise.reject(new WarmingUpError('Pemindaian alamat stealth pertama sedang berjalan, ±3 menit', 30)));
   return adapter;
 }
