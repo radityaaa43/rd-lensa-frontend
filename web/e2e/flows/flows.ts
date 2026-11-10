@@ -25,7 +25,7 @@ const OUTSIDER: Record<Model, (flow: Flow) => Seen> = {
   noto: () => 'sealed', // hash of the state only
   stealth: () => 'partial', // one-time address and encrypted memo; the amount stays public
   fabricx: () => 'sealed', // Pedersen commitments + ZK proof, no record on its node
-  iroha3: (f) => (f === 'dvp' || f === 'award' ? 'sealed' : 'clear'), // DvP/award via APS; transfers on public lane 1
+  iroha3: () => 'sealed', // every flow is an APS bundle in the shared pools: validators hold commitments + STARK proofs
 };
 
 const route = (m: Model, screen: string, party: P) => `/${m === 'fabricx' || m === 'iroha3' ? m : `besu/${m}`}/${screen}?pihak=${party}`;
