@@ -327,6 +327,16 @@ describe('iroha3 private shared pools (APS, every flow)', () => {
     await expect(a.lens(rq, res, 'A')).rejects.toThrow(/belum menemukan note bundle/);
   });
 
+  it('history without a Lensa record: the role comes from which way the party\'s own notes moved', async () => {
+    const other = 'bc'.repeat(32);
+    const items = [{ bundle_id: other, height: 60, asset: 'rd', direction: 'in', amount: '7' },
+      { bundle_id: 'cd'.repeat(32), height: 61, asset: 'dfabi', direction: 'out', amount: '1' }, { bundle_id: 'cd'.repeat(32), height: 61, asset: 'rd', direction: 'in', amount: '1000000' }];
+    const a = createIroha3Adapter(sharedState, fake().cli, undefined, driver({ 'bank-c': wallet('bank-c', '7', '0', items) }).run);
+    const h = await a.history('C', 10);
+    expect(h[0]).toMatchObject({ block: 61, flow: 'dvp', asset: 'DFABI', role: 'sender', amount: '1', rdAmount: '1000000', counterparty: { from: 'C', to: null } });
+    expect(h[1]).toMatchObject({ id: other, flow: null, asset: 'RD', role: 'receiver', amount: '7', counterparty: { from: null, to: 'C' } });
+  });
+
   it('history: a bank lists its own movements from the chain, BI every finalized bundle from its audit records', async () => {
     writeFileSync(join(dir, 'pools.json'), JSON.stringify({ rd: { bundles: [{ id: BUNDLE, height: 50 }, { id: 'aa'.repeat(32), height: 0 }] }, dfabi: { bundles: [] } }));
     const items = [{ bundle_id: BUNDLE, height: 50, asset: 'rd', direction: 'out', amount: '300' }];
