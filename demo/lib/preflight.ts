@@ -8,7 +8,8 @@ export interface PreflightResult { ok: boolean; lines: string[]; errors: string[
 const NEEDS: Record<string, string[]> = { S3: ['rd-issue', 'dfabi-issue'], S4: ['rd-transfer', 'dfabi-transfer'], S5: ['dvp'], S6: ['award'] };
 const PRICE = PRICE_PER_UNIT;
 
-export async function preflight(a: Api, models: ModelId[], scenarios: string[]): Promise<PreflightResult> {
+// flows: --flow; empty = every flow of the selected write scenarios
+export async function preflight(a: Api, models: ModelId[], scenarios: string[], flows: string[] = []): Promise<PreflightResult> {
   const lines: string[] = [], errors: string[] = [];
   const ok = (s: string) => lines.push(`  ok    ${s}`);
   const bad = (s: string) => { lines.push(`  GAGAL ${s}`); errors.push(s); };
@@ -20,10 +21,12 @@ export async function preflight(a: Api, models: ModelId[], scenarios: string[]):
   for (const m of models) (health.models[m]?.ready ? ok : (s: string) => bad(s))(`${m} siap${health.models[m]?.ready ? '' : `: ${health.models[m]?.detail ?? 'tidak ada jawaban'}`}`);
   stress === 'running' ? bad('stress test sedang berjalan: transfer dan DvP ditolak sampai selesai') : ok(`stress test ${stress}`);
 
-  const writes = scenarios.filter((s) => s in NEEDS);
+  const needs = (s: string) => NEEDS[s].filter((f) => !flows.length || flows.includes(f));
+  const writes = scenarios.filter((s) => s in NEEDS && needs(s).length);
+  const run = new Set(writes.flatMap(needs));
   for (const m of models) {
     lines.push(`${m}:`);
-    for (const s of writes) for (const f of NEEDS[s]) {
+    for (const s of writes) for (const f of needs(s)) {
       const c = meta.models[m]?.capabilities[f];
       c?.enabled ? ok(`${s} ${f} aktif`) : bad(`${m}: ${s} butuh "${f}" tetapi nonaktif${c?.reason ? ` (${c.reason})` : ''}`);
     }
@@ -39,8 +42,10 @@ export async function preflight(a: Api, models: ModelId[], scenarios: string[]):
     if (Object.values(bal).some((v) => v === null)) continue;
     const b = bal as Record<keyof typeof bal, bigint>;
     const left = (what: string, v: bigint, need: bigint, at: string) => (v < need ? bad(`${m}: ${what} kurang di ${at}: saldo ${v}, butuh ${need}`) : undefined);
-    if (writes.includes('S3')) { b.Xrd += 1n; b.Xdf += 1n; }
-    if (writes.includes('S4')) { left(`${X} RD`, b.Xrd, 1n, 'S4'); left(`${X} DFABI`, b.Xdf, 1n, 'S4'); b.Xrd -= 1n; b.Xdf -= 1n; b.Yrd += 1n; b.Ydf += 1n; }
+    if (run.has('rd-issue')) b.Xrd += 1n;
+    if (run.has('dfabi-issue')) b.Xdf += 1n;
+    if (run.has('rd-transfer')) { left(`${X} RD`, b.Xrd, 1n, 'S4'); b.Xrd -= 1n; b.Yrd += 1n; }
+    if (run.has('dfabi-transfer')) { left(`${X} DFABI`, b.Xdf, 1n, 'S4'); b.Xdf -= 1n; b.Ydf += 1n; }
     if (writes.includes('S5')) { left(`${X} DFABI`, b.Xdf, 1n, 'S5'); left(`${Y} RD`, b.Yrd, PRICE, 'S5'); b.Xdf -= 1n; b.Ydf += 1n; b.Yrd -= PRICE; b.Xrd += PRICE; }
     // Fabric-X issues new DFABI for an award (no BI stock to draw from), so a BI stock of 0 is normal there
     if (writes.includes('S6')) { if (m !== 'fabricx') left('BI DFABI (persediaan)', b.BIdf, 1n, 'S6'); left(`${Y} RD`, b.Yrd, PRICE, 'S6'); }

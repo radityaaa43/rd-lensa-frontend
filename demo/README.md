@@ -28,11 +28,13 @@ Mode **live** (tanpa `--mock`) memakai layanan `lensa.service` di `:8790` dan ch
 npm run demo -- --list
 npm run demo -- --all [--include-stress] [--allow-writes]
 npm run demo -- --scenario <id> [--scenario <id> ...] [--platform <model> ...] [opsi]
+npm run demo -- --flow <alur> [--flow <alur> ...] [--platform <model> ...] [opsi]
 ```
 
 | Opsi | Arti |
 |---|---|
 | `--platform zeto\|noto\|stealth\|fabricx\|iroha3` | batasi platform (bisa diulang); tanpa ini semua lima |
+| `--flow rd-issue\|rd-transfer\|dfabi-issue\|dfabi-transfer\|dvp\|award` | hanya alur itu (bisa diulang). Tanpa `--scenario`: skenario tulis yang memuat alur itu, lalu S7 (dibuka lagi dari Riwayat) |
 | `--headed` | tampilkan browser (untuk ditonton) |
 | `--speed slow\|normal\|fast` | jeda untuk penonton: 2x, 1x, hampir nol. Env: `DEMO_SPEED` |
 | `--allow-writes` | wajib di live bila ada skenario yang mengirim transaksi. Tanpa ini CLI hanya mencetak jumlah transaksi lalu berhenti |
@@ -70,6 +72,19 @@ Pasangan bank di live (X kirim, Y beli; penerbitan ke X, penjualan perdana ke Y)
 | iroha3 | B -> A | |
 
 Satu run live penuh (S3-S6) = 6 transaksi per platform, 30 total, berurutan.
+
+## Satu alur saja (`--flow`)
+
+Satu transaksi, dengan peragaan lengkap: form, Proses, Lensa empat pihak, selisih saldo tepat, Dasbor pengirim dan penerima,
+lalu dibuka lagi dari Riwayat pengirim (S7). Contoh, issuance RD di Zeto:
+
+```bash
+npm run demo -- --platform zeto --flow rd-issue --headed --allow-writes
+```
+
+Ganti `--flow` dengan `rd-transfer`, `dfabi-issue`, `dfabi-transfer`, `dvp`, atau `award`, dan `--platform` dengan model lain.
+Gabung dengan `--scenario` untuk memilih sendiri, misalnya `--scenario S2 --scenario S4 --flow rd-transfer` (S2 = Dasbor dan Riwayat tiap pihak).
+S0 menghitung saldo hanya untuk alur yang dipilih. Latihan tanpa chain: `npm run demo:mock -- --platform zeto --flow rd-issue`.
 
 ## Dua alur siap pakai
 

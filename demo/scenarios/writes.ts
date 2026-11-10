@@ -11,10 +11,13 @@ export const WRITES: Record<string, { flow: FlowId; issuer: boolean }[]> = {
   S5: [{ flow: 'dvp', issuer: false }],
   S6: [{ flow: 'award', issuer: true }],
 };
+// --flow (DEMO_FLOWS): only these flows are written, and S7 reads only those back. Empty = every flow of the scenario.
+export const selectedFlows = (): FlowId[] => (process.env.DEMO_FLOWS ?? '').split(',').filter(Boolean) as FlowId[];
 // S3 issues to X (the seller of S4/S5), S6 sells to Y (the buyer of S5), so X and Y both end up holding what the next steps need.
 export const specFor = (id: string, model: ModelId): WriteSpec[] => {
   const [X, Y] = PAIR[model];
-  return WRITES[id].map(({ flow, issuer }): WriteSpec => {
+  const only = selectedFlows();
+  return WRITES[id].filter(({ flow }) => !only.length || only.includes(flow)).map(({ flow, issuer }): WriteSpec => {
     const from: PartyId = issuer ? 'BI' : X;
     const to: PartyId = id === 'S3' ? X : Y;
     return { flow, from, to, key: `${id}-${flow}` };

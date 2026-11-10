@@ -18,7 +18,7 @@ export default async function globalSetup(config: FullConfig) {
   console.log('S0 preflight');
   for (const m of models) {
     const t0 = Date.now();
-    const r = await preflight(api(ctx), [m], scenarios).catch((e: Error) => ({ ok: false, lines: [`  GAGAL ${e.message}`], errors: [e.message] }));
+    const r = await preflight(api(ctx), [m], scenarios, (process.env.DEMO_FLOWS ?? '').split(',').filter(Boolean)).catch((e: Error) => ({ ok: false, lines: [`  GAGAL ${e.message}`], errors: [e.message] }));
     console.log(r.lines.join('\n'));
     failed.push(...r.errors);
     const res: ScenarioResult = {
