@@ -81,7 +81,8 @@ kalau mati. Semuanya hanya di `127.0.0.1`.
 - `lensa.service`: server di port `PORT` (default 8790). Dianggap jalan setelah `/api/health` menjawab 200.
 - `lensa-pf@<nama>.service`: satu port-forward per baris `deploy/forwards.conf` (Paladin, Besu, Iroha 3). Fabric-X tidak
   butuh forward (memakai `kubectl exec`). Kalau port lokal sedang dipakai proses lain, unit menunggu dan baru mengambil
-  alih setelah port itu bebas.
+  alih setelah port itu bebas. Jangan `systemctl enable` `lensa-pf@*`: template tidak punya `[Install]`; sebuah forward
+  naik saat boot hanya jika terdaftar di `Wants=`/`After=` pada `lensa.service`.
 - Konfigurasi di `~/.config/lensa/lensa.env` (mode 600, tidak masuk git; contoh: `deploy/lensa.env.example`).
 
 ```bash
