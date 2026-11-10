@@ -17,7 +17,7 @@ const PUBLIC = fileURLToPath(new URL('../../../../iroha3/network/public', import
 const PORT: Record<PartyId, number> = { BI: 38080, A: 38081, B: 38082, C: 38083 };
 // APS private DvP (iroha3-aps.ts): the driver image, its wallet seeds from the iroha3 repo's scripts/keys-init.sh, and the
 // bi-auditor port-forward (kubectl port-forward -n iroha3 svc/bi-auditor 38090:8090).
-const APS_IMAGE = 'ghcr.io/radityaaa43/iroha3-rd-driver:0cdd2571';
+const APS_IMAGE = 'ghcr.io/radityaaa43/iroha3-rd-driver:ce4641e2';
 const APS_KEYS = join(homedir(), 'iroha3-keys');
 const AUDITOR_PORT = 38090;
 const FEE_ASSET = '6TEAJqbb8oEPmLncoNiMRbLEK6tw'; // genesis fee asset (iroha3 repo deploy/k8s-apps/rd-dfabi.toml)
