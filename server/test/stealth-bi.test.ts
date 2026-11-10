@@ -31,6 +31,11 @@ vi.mock('../../../besu/stealth-address/ts/stealth.ts', async (orig) => ({
   scan: (anns: { owner: string; stealthAddress: string }[], viewKey: string) => anns.filter((a) => a.owner === viewKey).map((a) => ({ stealthAddress: a.stealthAddress, privateKey: '0x0' })),
   scanView: () => [],
 }));
+// the worker thread would load the real scan(): run the mocked one inline instead
+vi.mock('../src/adapters/stealth-scan.ts', async () => {
+  const { scan } = await import('../../../besu/stealth-address/ts/stealth.ts');
+  return { scanOffThread: async (...a: Parameters<typeof scan>) => scan(...a) };
+});
 vi.mock('../../../besu/stealth-address/ts/bond.ts', async (orig) => ({ ...(await orig<object>()), parseBondMetadata: (m: string) => ({ amount: BigInt(m), memo: '', token: '' }) }));
 vi.mock('../../../besu/stealth-address/ts/token.ts', async (orig) => ({ ...(await orig<object>()), parseTokenMetadata: (m: string) => ({ amount: BigInt(m), memo: '', token: '' }) }));
 vi.mock('../../../besu/stealth-address/ts/memo.ts', async (orig) => ({ ...(await orig<object>()), openMemo: () => null }));

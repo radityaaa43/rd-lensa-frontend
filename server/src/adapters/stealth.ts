@@ -17,6 +17,7 @@ import { parseBondMetadata } from '../../../../besu/stealth-address/ts/bond.ts';
 import { openMemo } from '../../../../besu/stealth-address/ts/memo.ts';
 import { generateMetaAddress, scan, scanView, type Found, type ViewKeyHolder } from '../../../../besu/stealth-address/ts/stealth.ts';
 import { parseTokenMetadata } from '../../../../besu/stealth-address/ts/token.ts';
+import { scanOffThread } from './stealth-scan.ts';
 
 export interface BankKeys { spendKey: string; viewKey: string; metaAddress: string; identityKey: string }
 export interface BiMeta { spendKey: string; viewKey: string; metaAddress: string }
@@ -153,7 +154,8 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
 
   // What one key pair owns among the announcements of one token, scanned incrementally: `cache` only grows by appending, and a
   // full scan costs one curve multiplication per announcement (~4 ms; 25 s at 6,000 announcements, so a balance read timed out).
-  // Scans in slices and yields between them, so a cold scan does not stall the server.
+  // Scans in a worker thread (stealth-scan.ts): yielding between slices on the main thread still held the event loop ~10 min after
+  // a restart, and every model's reads timed out meanwhile.
   const owned = new Map<string, { n: number; found: Found[]; seen: Set<string>; tail: Promise<unknown> }>();
   function scanOwned(token: string, viewKey: string, spendKey: string): Promise<Found[]> {
     const id = `${lc(token)}:${viewKey}`;
@@ -161,10 +163,9 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
     owned.set(id, c);
     const run = c.tail.then(async () => {
       const anns = await refresh();
-      for (; c.n < anns.length; await new Promise((r) => setImmediate(r))) {
-        const slice = anns.slice(c.n, c.n + 200);
-        for (const f of scan(ofToken(slice, token), viewKey, spendKey)) if (!c.seen.has(lc(f.stealthAddress))) { c.seen.add(lc(f.stealthAddress)); c.found.push(f); }
-        c.n += slice.length;
+      if (c.n < anns.length) {
+        for (const f of await scanOffThread(ofToken(anns.slice(c.n), token), viewKey, spendKey)) if (!c.seen.has(lc(f.stealthAddress))) { c.seen.add(lc(f.stealthAddress)); c.found.push(f); }
+        c.n = anns.length;
       }
       return c.found;
     });
@@ -231,8 +232,9 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
   async function receivedBy(bank: BankId, lo: number): Promise<Set<string>> {
     const anns = await refresh();
     const c = receivedCache.get(bank) ?? { n: Math.max(0, anns.findIndex((a) => a.blockNumber >= lo) === -1 ? anns.length : anns.findIndex((a) => a.blockNumber >= lo)), set: new Set<string>() };
-    if (c.n < anns.length) { for (const f of scan(anns.slice(c.n), banks[bank].viewKey, banks[bank].spendKey)) c.set.add(lc(f.stealthAddress)); c.n = anns.length; }
     receivedCache.set(bank, c);
+    // c.n moves only after the scan landed: a parallel caller may scan the same range again (adds are idempotent), never miss it
+    if (c.n < anns.length) { const end = anns.length; for (const f of await scanOffThread(anns.slice(c.n, end), banks[bank].viewKey, banks[bank].spendKey)) c.set.add(lc(f.stealthAddress)); c.n = Math.max(c.n, end); }
     return c.set;
   }
   const spends = { upTo: -1, byTx: new Map<string, Set<string>>() }; // tx hash -> the `from` addresses of its token Transfer logs (lower-case)
@@ -261,7 +263,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
     const unknown = new Set([...byTx.values()].flatMap((s) => [...s]).filter((x) => !known.has(x)));
     if (unknown.size) {
       const cands = (await refresh()).filter((a) => unknown.has(lc(a.stealthAddress)));
-      const mine = new Set(scan(cands, banks[bank].viewKey, banks[bank].spendKey).map((f) => lc(f.stealthAddress)));
+      const mine = new Set((await scanOffThread(cands, banks[bank].viewKey, banks[bank].spendKey)).map((f) => lc(f.stealthAddress)));
       for (const x of unknown) known.set(x, mine.has(x));
     }
     controlled.set(bank, known);
