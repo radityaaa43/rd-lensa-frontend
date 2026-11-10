@@ -1,3 +1,15 @@
 node_modules
 dist
 server/state
+
+# from platform-exploration root .gitignore (repo split 2026-11-10)
+node_modules/
+out/
+cache/
+.env
+.env.*
+!.env.example
+*.log
+
+# cluster kubeconfig with a client private key, never commit
+alibaba.yaml
