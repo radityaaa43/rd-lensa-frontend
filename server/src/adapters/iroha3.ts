@@ -351,6 +351,25 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     return { rows, cut: true };
   }
 
+  // Rows new since `known` (newest first, immutable): pages of 1, 2, 4, ... from the head, up to the first known row. A Torii
+  // account list costs ~1 s per returned row (2026-11-10 live: limit 1 = 1.2 s, 13 rows = 9 s), so a full re-read is avoided.
+  // Past the fetch window (offset + limit <= 300, see above) it falls back to the full read.
+  async function headRows(party: PartyId, account: string, known: Awaited<ReturnType<typeof accountRows>>): Promise<Awaited<ReturnType<typeof accountRows>>> {
+    const seen = new Set(known.rows.map((r) => r.entrypoint_hash));
+    const fresh: AccountRow[] = [];
+    for (let offset = 0, size = 1; offset + size <= SCAN_PAGES_MAX * PAGE_ROWS; offset += size, size *= 2) {
+      const { items } = await toriiGet<{ items: AccountRow[] }>(party, `/v1/accounts/${encodeURIComponent(account)}/transactions`,
+        new URLSearchParams({ limit: String(size), offset: String(offset) }));
+      const at = items.findIndex((r) => seen.has(r.entrypoint_hash));
+      fresh.push(...(at < 0 ? items : items.slice(0, at)));
+      if (at < 0 && items.length === size) continue;
+      const rows = [...new Map([...fresh, ...(at < 0 ? [] : known.rows)].map((r) => [r.entrypoint_hash, r])).values()]; // a block landing mid-read shifts offsets: dedupe
+      const max = SCAN_PAGES_MAX * PAGE_ROWS;
+      return { rows: rows.slice(0, max), cut: (at >= 0 && known.cut) || rows.length > max };
+    }
+    return accountRows(party, account, PAGE_ROWS);
+  }
+
   // A Torii answers one account query at a time (HTTP 429 query_capacity_exceeded otherwise): reads of one party queue up.
   const lanes = new Map<PartyId, Promise<unknown>>();
   function inLane<T>(party: PartyId, fn: () => Promise<T>): Promise<T> {
@@ -396,16 +415,29 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
 
   // One account-list scan per party at a time: concurrent history() calls (Dasbor 5, Riwayat 20, Lensa 100) share it. The Torii query is
   // limit=PAGE_ROWS whatever the caller asks, and each list took ~1.3 s on the live Torii (2026-11-04): three queued scans crossed the
-  // 20 s route deadline and kept the balance read waiting past LANE_WAIT_MS. A scan that already finished is never reused.
+  // 20 s route deadline and kept the balance read waiting past LANE_WAIT_MS. A finished scan is reused while the party's block
+  // height (/status, unsigned, ~5 ms) has not moved: it held at 275 for minutes on the idle live cluster (2026-11-10). A moved
+  // height reads only each list's new head (headRows). Each list takes the lane on its own, so a balance read waits for one list.
   const scans = new Map<PartyId, () => Promise<Awaited<ReturnType<typeof accountRows>>[]>>();
+  const scanned = new Map<PartyId, { blocks: number; lists: Awaited<ReturnType<typeof accountRows>>[] }>();
   function scanOf(party: PartyId) {
     let scan = scans.get(party);
     if (!scan) {
-      scan = joinInFlight(() => inLane(party, async () => {
+      scan = joinInFlight(async () => {
+        await deps(); // a missing operator key is the error to show, before any node read
+        const res = await http(new URL('status', s.torii[party]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+        if (!res.ok) throw new Error(`Torii ${PARTIES[party].name} menjawab HTTP ${res.status}`);
+        const { blocks } = (await res.json()) as { blocks: number };
+        const last = scanned.get(party);
+        if (last?.blocks === blocks) return last.lists;
         const lists: Awaited<ReturnType<typeof accountRows>>[] = [];
-        for (const p of Object.keys(acct) as PartyId[]) lists.push(await accountRows(party, acct[p], PAGE_ROWS));
+        for (const [i, p] of (Object.keys(acct) as PartyId[]).entries()) {
+          const known = last?.lists[i];
+          lists.push(await inLane(party, () => (known ? headRows(party, acct[p], known) : accountRows(party, acct[p], PAGE_ROWS))));
+        }
+        scanned.set(party, { blocks, lists });
         return lists;
-      }));
+      });
       scans.set(party, scan);
     }
     return scan();
@@ -568,7 +600,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
 export async function load(stateDir?: string): Promise<ModelAdapter | null> {
   const s = readState<Iroha3State>('iroha3', stateDir);
   if (!s || s.funded === false) return null;
-  return createIroha3Adapter(s, irohaCli(s.dir), {
+  const adapter = createIroha3Adapter(s, irohaCli(s.dir), {
     init: async () => {
       const parties = Object.keys(CONFIG) as PartyId[];
       const auth = Object.fromEntries(await Promise.all(parties.map(async (p) => [p, await loadAuth(s.dir, CONFIG[p])]))) as Record<PartyId, Auth>;
@@ -576,4 +608,8 @@ export async function load(stateDir?: string): Promise<ModelAdapter | null> {
       return { auth, ctx: { assets: s.assets, parties: keys } };
     },
   });
+  // The first scan of a party reads its four account lists in full (~40 s on the live Torii, 2026-11-10): start it now, in the
+  // background, so the UI's first history() finds it cached or joins it in flight. A failure here is paid again by the first real call.
+  for (const p of Object.keys(CONFIG) as PartyId[]) void adapter.history(p, 1).catch(() => {});
+  return adapter;
 }

@@ -32,7 +32,7 @@ const state: Iroha3State = {
 const seed = generateKeyPairSync('ed25519').privateKey.export({ format: 'der', type: 'pkcs8' }).subarray(-32);
 const auth = makeAuth(seed, '0x02', `hash:${'11'.repeat(32)}`);
 
-function setup(opts: { box?: Record<string, string>; fetchFail?: (url: URL) => Response | Error | undefined; lists?: typeof LISTS; delay?: number; ctx?: typeof ctx } = {}) {
+function setup(opts: { box?: Record<string, string>; fetchFail?: (url: URL) => Response | Error | undefined; lists?: typeof LISTS; delay?: number; ctx?: typeof ctx; height?: { blocks: number } } = {}) {
   const calls: { url: URL; headers: Record<string, string> }[] = [];
   const cliCalls: { config: string; args: string[] }[] = [];
   // Torii answers one account query at a time: `bad` counts every moment a list read overlapped another list read or a decode.
@@ -41,6 +41,7 @@ function setup(opts: { box?: Record<string, string>; fetchFail?: (url: URL) => R
   const cli: Cli = async (config, args) => {
     cliCalls.push({ config, args });
     if (track.fetch > 0) track.bad++;
+    if (args.includes('asset')) return JSON.stringify({ value: '5' }); // balance read
     track.cli++;
     try { await wait(); } finally { track.cli--; }
     const hash = args[args.indexOf('--hash') + 1]!;
@@ -57,7 +58,7 @@ function setup(opts: { box?: Record<string, string>; fetchFail?: (url: URL) => R
     if (list) { if (track.fetch > 0 || track.cli > 0) track.bad++; track.fetch++; }
     try { if (list) await wait(); } finally { if (list) track.fetch--; }
     if (url.pathname === '/health') return new Response('Healthy', { status: 200 });
-    if (url.pathname === '/status') return Response.json({ blocks: 127 });
+    if (url.pathname === '/status') return Response.json({ blocks: opts.height?.blocks ?? 127 });
     if (url.pathname === '/v1/nexus/lifecycle') return Response.json({ lane_count: 3, lanes: [{ alias: 'universal', visibility: 'public' }, { alias: 'ds-rd', visibility: 'restricted' }, { alias: 'ds-dfabi', visibility: 'restricted' }] });
     const account = decodeURIComponent(url.pathname.split('/')[3]!);
     const all = (opts.lists ?? LISTS)[account] ?? [];
@@ -115,8 +116,9 @@ describe('iroha3 history', () => {
     const { adapter, calls, cliCalls } = setup();
     await adapter.history('B', 20);
     expect(new Set(calls.map((c) => c.url.host))).toEqual(new Set(['torii-b']));
-    expect(calls.length).toBe(4); // one list per party account
-    for (const c of calls) expect(c.headers['X-Iroha-Signature']).toBeTruthy();
+    const lists = calls.filter((c) => c.url.pathname.includes('/transactions'));
+    expect(lists.length).toBe(4); // one list per party account
+    for (const c of lists) expect(c.headers['X-Iroha-Signature']).toBeTruthy();
     expect(new Set(cliCalls.map((c) => c.config))).toEqual(new Set(['op-bank-b']));
   });
 
@@ -237,11 +239,39 @@ describe('iroha3 history, Torii limits', () => {
     expect(c.map((i) => i.id)).toEqual(a.map((i) => i.id));
   });
 
-  test('a scan that finished is not reused: the next call reads the lists again', async () => {
+  // 2026-11-10 live: a Torii account list costs ~1 s per returned row (limit 1 = 1.2 s, 13 rows = 9 s), so four full lists
+  // (~40 s) crossed the 20 s route deadline on every party. The height in /status only moves when a block commits.
+  test('the block height has not moved: the next call reuses the lists and reads no account list', async () => {
     const { adapter, calls } = setup();
+    const first = await adapter.history('A', 20);
+    await expect(adapter.history('A', 20)).resolves.toEqual(first);
+    expect(calls.filter((x) => x.url.pathname.includes('/transactions'))).toHaveLength(4);
+  });
+
+  test('the block height moved: only the head of each list is read, up to the first row already known', async () => {
+    const height = { blocks: 127 };
+    const lists = { ...LISTS, 'acct-A': [...LISTS['acct-A']!] };
+    const { adapter, calls } = setup({ lists, height });
     await adapter.history('A', 20);
-    await adapter.history('A', 20);
-    expect(calls.filter((x) => x.url.pathname.includes('/transactions'))).toHaveLength(8);
+    const n = calls.length;
+    const fresh = 'b'.repeat(64);
+    BOX[fresh] = { box: TRANSFER, authority: 'acct-A' };
+    lists['acct-A'].unshift(row(fresh, 4000));
+    height.blocks = 128;
+    const items = await adapter.history('A', 20);
+    expect(items.map((i) => i.id)).toEqual([fresh, H.dvp, H.transfer, H.issue]);
+    const reads = calls.slice(n).filter((x) => x.url.pathname.includes('/transactions'));
+    expect(Math.max(...reads.map((c) => Number(c.url.searchParams.get('limit'))))).toBeLessThanOrEqual(2);
+    expect(reads.filter((c) => decodeURIComponent(c.url.pathname).includes('acct-A'))).toHaveLength(2); // limit 1 (new), then limit 2 (known)
+  });
+
+  test('a balance read waits for one account list, not the whole scan', async () => {
+    const { adapter, calls } = setup({ delay: 50 });
+    const scan = adapter.history('A', 20);
+    await new Promise((r) => setTimeout(r, 10)); // the scan holds the lane with its first list
+    await adapter.balanceOf('A', 'RD');
+    expect(calls.filter((x) => x.url.pathname.includes('/transactions')).length).toBeLessThan(4);
+    await scan;
   });
 
   test('a hash that is not 64 lowercase hex never reaches the CLI', async () => {
