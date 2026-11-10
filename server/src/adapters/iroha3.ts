@@ -125,7 +125,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   const shared = aps?.mounts.pools ? aps : undefined;
   // What each flow was, by bundle id: the payer's own record of whom it paid (the chain gives a recipient its amount, not the
   // payer). Kept beside pools.json; amounts in history always come from the chain.
-  type Journal = Record<string, { flow: FlowId; from: PartyId; to: PartyId; amount: string }>;
+  type Journal = Record<string, { flow: FlowId; from: PartyId; to: PartyId; amount: string; tx: string }>;
   const journalFile = shared ? join(shared.mounts.pools!, 'lensa-journal.json') : '';
   let journal: Journal = {};
   if (shared) { try { journal = JSON.parse(readFileSync(journalFile, 'utf8')) as Journal; } catch { /* first run */ } }
@@ -229,7 +229,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
       step(2);
       step(3);
       wallets.clear(); // balances moved
-      journal[r.bundle_id] = { flow: req.flow, from: req.from, to: req.to, amount: amount.toString() };
+      journal[r.bundle_id] = { flow: req.flow, from: req.from, to: req.to, amount: amount.toString(), tx: r.carrier_tx };
       try { writeFileSync(journalFile, JSON.stringify(journal), { mode: 0o600 }); } catch (e) { console.error('[iroha3] jurnal tidak tersimpan:', errMsg(e)); }
       return { txHash: r.carrier_tx, block: r.height, steps, context: { aps: r } satisfies Ctx };
     }
@@ -297,6 +297,15 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
       ...r.legs.map((l) => ({ label: `Pool ${l.lane === 1 ? 'RD (ds-rd, lane 1)' : 'DFABI (ds-dfabi, lane 2)'}`, value: l.pool_id })),
     ];
     const dvp = FLOWS[req.flow].dvp;
+    if (shared && (party === req.from || party === req.to)) {
+      // Amounts from the notes this party's keys open in the bundle's receipt on its own Torii, not from the request.
+      const mine = (await walletFor(party)).items.filter((i) => i.bundle_id === r.bundle_id);
+      const of = (a: 'rd' | 'dfabi') => mine.find((i) => i.asset === a)?.amount ?? null;
+      const amount = of(dvp ? 'dfabi' : FLOWS[req.flow].asset === 'RD' ? 'rd' : 'dfabi');
+      if (amount === null) throw new Error(`Dompet ${PARTIES[party].name} belum menemukan note bundle ${r.bundle_id.slice(0, 12)}… di chain`);
+      return { party, role, verdict: 'clear', amount, rdAmount: dvp ? of('rd') : null, counterparty: { from: req.from, to: req.to }, onChain,
+        method: 'Nominal dari note privat yang dibuka view key pihak ini pada receipt bundle di Torii-nya sendiri; lawan transaksi dari catatan pengirim (Lensa). Keempat validator hanya menyimpan commitment, nullifier dan bukti STARK.' };
+    }
     if (party === req.from || party === req.to) {
       return { party, role, verdict: 'clear', amount: req.amount, rdAmount: dvp ? (BigInt(req.amount) * PRICE_PER_UNIT).toString() : null,
         counterparty: { from: req.from, to: req.to }, onChain,
@@ -331,19 +340,20 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   const poolHeights = (): Map<string, number> => {
     try {
       const f = JSON.parse(readFileSync(join(shared!.mounts.pools!, 'pools.json'), 'utf8')) as { rd: { bundles: { id: string; height: number }[] } };
-      return new Map(f.rd.bundles.map((b) => [b.id, b.height]));
+      return new Map(f.rd.bundles.filter((b) => b.height > 0).map((b) => [b.id, b.height])); // 0 = in flight or never finalized
     } catch { return new Map(); }
   };
 
   async function sharedHistory(party: PartyId, want: number): Promise<HistoryItem[]> {
     if (party === 'BI') {
       const byBundle = new Map<string, AuditRecord[]>();
-      for (const r of await allAuditRecords(shared!)) if (r.bundle_id) byBundle.set(r.bundle_id, [...(byBundle.get(r.bundle_id) ?? []), r]);
       const heights = poolHeights();
+      // the auditor also approved legs of bundles that later aborted, and DvPs on the old per-trade pools: only finalized shared-pool bundles count
+      for (const r of await allAuditRecords(shared!)) if (r.bundle_id && heights.has(r.bundle_id)) byBundle.set(r.bundle_id, [...(byBundle.get(r.bundle_id) ?? []), r]);
       return [...byBundle].map(([id, records]): HistoryItem => {
         const { flow, asset, amount, rdAmount, counterparty } = fromRecords(records);
         const role = roleFromParties('BI', counterparty, counterparty?.from === 'BI');
-        return { id, at: null, block: heights.get(id) ?? null, flow, asset, role, verdict: role === 'regulator' ? 'reported' : 'clear', amount, rdAmount, counterparty };
+        return { id: journal[id]?.tx ?? id, at: null, block: heights.get(id) ?? null, flow, asset, role, verdict: role === 'regulator' ? 'reported' : 'clear', amount, rdAmount, counterparty };
       }).sort((a, b) => (b.block ?? 0) - (a.block ?? 0)).slice(0, want);
     }
     const w = await walletFor(party);
@@ -356,7 +366,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
       const asset: 'RD' | 'DFABI' = dvp || (!b.rd && b.dfabi) ? 'DFABI' : 'RD';
       const counterparty = j ? { from: j.from, to: j.to } : null;
       const role = roleFromParties(party, counterparty, !!flow && FLOWS[flow].issuer);
-      return { id, at: null, block: b.height, flow, asset, role, verdict: 'clear', amount: (asset === 'RD' ? b.rd : b.dfabi) ?? null, rdAmount: dvp ? b.rd ?? null : null, counterparty };
+      return { id: j?.tx ?? id, at: null, block: b.height, flow, asset, role, verdict: 'clear', amount: (asset === 'RD' ? b.rd : b.dfabi) ?? null, rdAmount: dvp ? b.rd ?? null : null, counterparty };
     }).sort((a, b) => (b.block ?? 0) - (a.block ?? 0)).slice(0, want);
   }
 

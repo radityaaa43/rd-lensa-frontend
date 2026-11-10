@@ -298,8 +298,11 @@ describe('iroha3 private shared pools (APS, every flow)', () => {
       .rejects.toThrow(/Saldo RD Bank .* tidak cukup/);
   });
 
-  it('transfer lens: sender and receiver clear, BI from its audit records, outsider sealed', async () => {
-    const a = createIroha3Adapter(sharedState, fake().cli, undefined, driver().run);
+  it('transfer lens: sender and receiver read the amount from their own notes on chain, BI from its audit records, outsider sealed', async () => {
+    const a = createIroha3Adapter(sharedState, fake().cli, undefined, driver({
+      'bank-a': wallet('bank-a', '699', '0', [{ bundle_id: BUNDLE, height: 50, asset: 'rd', direction: 'out', amount: '300' }]),
+      'bank-b': wallet('bank-b', '300', '0', [{ bundle_id: BUNDLE, height: 50, asset: 'rd', direction: 'in', amount: '300' }]),
+    }).run);
     const rq = req('rd-transfer', 'A', 'B', '300');
     const res = await a.run(rq, 300n, () => {});
     const records = [
@@ -317,20 +320,29 @@ describe('iroha3 private shared pools (APS, every flow)', () => {
     } finally { globalThis.fetch = realFetch; }
   });
 
-  it('history: a bank lists its own movements from the chain, BI every bundle from its audit records', async () => {
+  it('a party whose notes do not show the bundle gets an error, not the requested amount', async () => {
+    const a = createIroha3Adapter(sharedState, fake().cli, undefined, driver().run);
+    const rq = req('rd-transfer', 'A', 'B', '300');
+    const res = await a.run(rq, 300n, () => {});
+    await expect(a.lens(rq, res, 'A')).rejects.toThrow(/belum menemukan note bundle/);
+  });
+
+  it('history: a bank lists its own movements from the chain, BI every finalized bundle from its audit records', async () => {
+    writeFileSync(join(dir, 'pools.json'), JSON.stringify({ rd: { bundles: [{ id: BUNDLE, height: 50 }, { id: 'aa'.repeat(32), height: 0 }] }, dfabi: { bundles: [] } }));
     const items = [{ bundle_id: BUNDLE, height: 50, asset: 'rd', direction: 'out', amount: '300' }];
     const a = createIroha3Adapter(sharedState, fake().cli, undefined, driver({ 'bank-a': wallet('bank-a', '400', '0', items) }).run);
     await a.run(req('rd-transfer', 'A', 'B', '300'), 300n, () => {});
-    expect(await a.history('A', 10)).toEqual([expect.objectContaining({ id: BUNDLE, block: 50, flow: 'rd-transfer', asset: 'RD', role: 'sender',
+    expect(await a.history('A', 10)).toEqual([expect.objectContaining({ id: H, block: 50, flow: 'rd-transfer', asset: 'RD', role: 'sender',
       verdict: 'clear', amount: '300', rdAmount: null, counterparty: { from: 'A', to: 'B' } })]);
     const records = [
       { bundle_id: BUNDLE, leg: 0, verdict: 'approved', payer: 'w-A', recipient: 'w-B', asset: 'RD-ID', amount: '300' },
       { bundle_id: BUNDLE, leg: 1, verdict: 'approved', payer: 'w-BI', recipient: 'w-BI', asset: 'DFABI-ID', amount: '1' },
+      { bundle_id: 'aa'.repeat(32), leg: 0, verdict: 'approved', payer: 'w-A', recipient: 'w-C', asset: 'RD-ID', amount: '9' }, // never finalized
     ];
     const realFetch = globalThis.fetch;
     globalThis.fetch = (async (u: URL) => { expect(String(u)).toBe('http://127.0.0.1:1/records'); return new Response(JSON.stringify(records)); }) as typeof fetch;
     try {
-      expect(await a.history('BI', 10)).toEqual([expect.objectContaining({ id: BUNDLE, flow: 'rd-transfer', asset: 'RD', role: 'regulator',
+      expect(await a.history('BI', 10)).toEqual([expect.objectContaining({ id: H, block: 50, flow: 'rd-transfer', asset: 'RD', role: 'regulator',
         verdict: 'reported', amount: '300', counterparty: { from: 'A', to: 'B' } })]);
     } finally { globalThis.fetch = realFetch; }
   });
