@@ -88,7 +88,7 @@ describe('stealth adapter on Besu', () => {
 
 describe('stealth history + network live', () => {
   const P: PartyId[] = ['BI', 'A', 'B', 'C'];
-  it('a fresh rd-transfer A->B: each party\'s item equals its lens (a sender cannot name the receiver, so `to` is null)', async () => {
+  it('a fresh rd-transfer A->B: each party\'s item equals its lens (the sender names the receiver from its own record of whom it paid)', async () => {
     const r = req('rd-transfer', 'A', 'B', 1000n);
     const res = await a.run(r, 1000n, () => {});
     const l = await lenses(r, res);
@@ -96,8 +96,7 @@ describe('stealth history + network live', () => {
       const item = (await a.history(p, 20)).find((i) => i.id === res.txHash);
       expect(item, `${p} history has the tx`).toBeDefined();
       expect(item).toMatchObject({ verdict: l[p].verdict, amount: l[p].amount, role: l[p].role });
-      if (p === 'A') expect(item!.counterparty).toEqual({ from: 'A', to: null });
-      else expect(item!.counterparty).toEqual(l[p].counterparty);
+      expect(item!.counterparty).toEqual(l[p].counterparty);
     }
   });
 
