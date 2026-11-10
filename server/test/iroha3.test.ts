@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createIroha3Adapter, intentHash, type Cli, type Iroha3State } from '../src/adapters/iroha3.ts';
 import { PRICE_PER_UNIT, type FlowRequest, type PartyId } from '../src/domain.ts';
 import type { StepEvent } from '../src/adapter.ts';
@@ -234,6 +237,101 @@ describe('iroha3 private DvP (APS)', () => {
       expect(bi).toMatchObject({ verdict: 'reported', amount: '3', rdAmount: '3000000', counterparty: { from: 'A', to: 'B' } });
       expect(outsider).toMatchObject({ verdict: 'sealed', amount: null, rdAmount: null, counterparty: null });
       expect(outsider.onChain.map((x) => x.label)).toContain('Bundle APS');
+    } finally { globalThis.fetch = realFetch; }
+  });
+});
+
+describe('iroha3 private shared pools (APS, every flow)', () => {
+  const BUNDLE = 'ef'.repeat(32);
+  const dir = mkdtempSync(join(tmpdir(), 'iroha3-pools-'));
+  writeFileSync(join(dir, 'pools.json'), JSON.stringify({ rd: { bundles: [] }, dfabi: { bundles: [] } }));
+  const sharedState: Iroha3State = {
+    ...state,
+    aps: { image: 'img', config: '/state/rd-dfabi.toml', mounts: { state: '/s', keys: '/k', public: '/p', pools: dir }, auditor: 'http://127.0.0.1:1/',
+      wallets: { BI: 'w-BI', A: 'w-A', B: 'w-B', C: 'w-C' } },
+  };
+  const result = `result_json=${JSON.stringify({ bundle_id: BUNDLE, carrier_tx: H, outcome: 'finalized', height: 50, legs: [{ lane: 1, pool_id: 'p1' }, { lane: 2, pool_id: 'p2' }] })}`;
+  const wallet = (party: string, rd: string, dfabi: string, items: unknown[] = []) =>
+    `wallet_json=${JSON.stringify({ party, balances: { rd, dfabi }, items })}`;
+  // Answers each driver command like the driver: pay/dvp-shared print a result, wallet prints balances.
+  const driver = (wallets: Record<string, string> = {}) => {
+    const calls: string[][] = [];
+    const run = async (args: string[], onLine: (l: string) => void) => {
+      calls.push(args);
+      if (args[0] === 'wallet') onLine(wallets[args[3]!] ?? wallet(args[3]!, '0', '0'));
+      else ['legs uploaded', 'prepare registered', result].forEach(onLine);
+    };
+    return { run, calls };
+  };
+
+  it('maps every flow to one private bundle, with no public CLI call', async () => {
+    const f = fake();
+    const d = driver();
+    const a = createIroha3Adapter(sharedState, f.cli, undefined, d.run);
+    await a.run(req('rd-issue', 'BI', 'A', '5'), 5n, () => {});
+    await a.run(req('dfabi-transfer', 'B', 'C', '2'), 2n, () => {});
+    await a.run(req('dvp', 'A', 'B', '3'), 3n, () => {});
+    await a.run(req('award', 'BI', 'C', '1'), 1n, () => {});
+    expect(d.calls).toEqual([
+      ['pay', '/state/rd-dfabi.toml', '--asset', 'rd', '--from', 'bi', '--to', 'bank-a', '--amount', '5'],
+      ['pay', '/state/rd-dfabi.toml', '--asset', 'dfabi', '--from', 'bank-b', '--to', 'bank-c', '--amount', '2'],
+      ['dvp-shared', '/state/rd-dfabi.toml', '--buyer', 'bank-b', '--seller', 'bank-a', '--rd', String(3n * PRICE_PER_UNIT), '--dfabi', '3'],
+      ['dvp-shared', '/state/rd-dfabi.toml', '--buyer', 'bank-c', '--seller', 'bi', '--rd', String(PRICE_PER_UNIT), '--dfabi', '1'],
+    ]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('balances come from the party\'s wallet on chain, cached until the next flow', async () => {
+    const d = driver({ 'bank-a': wallet('bank-a', '700', '4') });
+    const a = createIroha3Adapter(sharedState, fake().cli, undefined, d.run);
+    expect(await a.balanceOf('A', 'RD')).toBe(700n);
+    expect(await a.balanceOf('A', 'DFABI')).toBe(4n);
+    expect(d.calls.filter((c) => c[0] === 'wallet')).toHaveLength(1);
+    await a.run(req('rd-transfer', 'A', 'B', '1'), 1n, () => {});
+    await a.balanceOf('A', 'RD');
+    expect(d.calls.filter((c) => c[0] === 'wallet')).toHaveLength(2);
+  });
+
+  it('a payer without one large enough note is told so', async () => {
+    const run = async () => { throw new Error('Driver APS gagal (kode 1): leg 0: insufficient payer note (rejected before proving)'); };
+    await expect(createIroha3Adapter(sharedState, fake().cli, undefined, run).run(req('rd-transfer', 'A', 'B', '9'), 9n, () => {}))
+      .rejects.toThrow(/Saldo RD Bank .* tidak cukup/);
+  });
+
+  it('transfer lens: sender and receiver clear, BI from its audit records, outsider sealed', async () => {
+    const a = createIroha3Adapter(sharedState, fake().cli, undefined, driver().run);
+    const rq = req('rd-transfer', 'A', 'B', '300');
+    const res = await a.run(rq, 300n, () => {});
+    const records = [
+      { bundle_id: BUNDLE, leg: 0, verdict: 'approved', payer: 'w-A', recipient: 'w-B', asset: 'RD-ID', amount: '300' },
+      { bundle_id: BUNDLE, leg: 1, verdict: 'approved', payer: 'w-BI', recipient: 'w-BI', asset: 'DFABI-ID', amount: '1' },
+    ];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify(records))) as typeof fetch;
+    try {
+      const [sender, receiver, bi, outsider] = await Promise.all((['A', 'B', 'BI', 'C'] as PartyId[]).map((p) => a.lens(rq, res, p)));
+      expect(sender).toMatchObject({ verdict: 'clear', amount: '300', rdAmount: null, counterparty: { from: 'A', to: 'B' } });
+      expect(receiver).toMatchObject({ verdict: 'clear', amount: '300', rdAmount: null });
+      expect(bi).toMatchObject({ verdict: 'reported', amount: '300', rdAmount: null, counterparty: { from: 'A', to: 'B' } });
+      expect(outsider).toMatchObject({ verdict: 'sealed', amount: null, counterparty: null });
+    } finally { globalThis.fetch = realFetch; }
+  });
+
+  it('history: a bank lists its own movements from the chain, BI every bundle from its audit records', async () => {
+    const items = [{ bundle_id: BUNDLE, height: 50, asset: 'rd', direction: 'out', amount: '300' }];
+    const a = createIroha3Adapter(sharedState, fake().cli, undefined, driver({ 'bank-a': wallet('bank-a', '400', '0', items) }).run);
+    await a.run(req('rd-transfer', 'A', 'B', '300'), 300n, () => {});
+    expect(await a.history('A', 10)).toEqual([expect.objectContaining({ id: BUNDLE, block: 50, flow: 'rd-transfer', asset: 'RD', role: 'sender',
+      verdict: 'clear', amount: '300', rdAmount: null, counterparty: { from: 'A', to: 'B' } })]);
+    const records = [
+      { bundle_id: BUNDLE, leg: 0, verdict: 'approved', payer: 'w-A', recipient: 'w-B', asset: 'RD-ID', amount: '300' },
+      { bundle_id: BUNDLE, leg: 1, verdict: 'approved', payer: 'w-BI', recipient: 'w-BI', asset: 'DFABI-ID', amount: '1' },
+    ];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (u: URL) => { expect(String(u)).toBe('http://127.0.0.1:1/records'); return new Response(JSON.stringify(records)); }) as typeof fetch;
+    try {
+      expect(await a.history('BI', 10)).toEqual([expect.objectContaining({ id: BUNDLE, flow: 'rd-transfer', asset: 'RD', role: 'regulator',
+        verdict: 'reported', amount: '300', counterparty: { from: 'A', to: 'B' } })]);
     } finally { globalThis.fetch = realFetch; }
   });
 });

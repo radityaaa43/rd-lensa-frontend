@@ -12,7 +12,8 @@ import { loadAuth, partyKey, signedHeaders, type Auth } from './iroha3-auth.ts';
 import { joinInFlight } from './besu-network.ts';
 import { scrub } from './besu-trace.ts';
 import { decodeBox, type Decoded, type NoritoCtx } from './iroha3-norito.ts';
-import { APS_DEADLINE_MS, auditRecords, dockerRunner, runDvp, type ApsConfig, type ApsResult, type ApsRunner } from './iroha3-aps.ts';
+import { APS_DEADLINE_MS, allAuditRecords, auditRecords, dockerRunner, runDvp, runDvpShared, runPay, walletOf, type ApsConfig, type ApsResult, type ApsRunner, type AuditRecord, type Wallet } from './iroha3-aps.ts';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 // Iroha 3 (071e281e): 3-lane NPoS network with APS enabled; the frontend flows run on lane 1 (restricted dataspace ds-rd).
 // RD and DFABI are DataspaceRestricted assets with one shared home dataspace, ds-rd (id 1): a DvpIsi whose legs sit in two
@@ -119,6 +120,25 @@ const DECODE_BATCH = 5; // `transaction get` CLI spawns in flight
 export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, apsRun?: ApsRunner) {
   const aps = s.aps;
   const apsRunner = aps ? apsRun ?? dockerRunner(aps) : undefined;
+  // Shared long-lived pools (driver pool-init): EVERY flow settles privately; balances and history come from the party's own
+  // note keys over the bundle receipts on its own Torii (BI: its audit records). Off: only DvP/award are private.
+  const shared = aps?.mounts.pools ? aps : undefined;
+  // What each flow was, by bundle id: the payer's own record of whom it paid (the chain gives a recipient its amount, not the
+  // payer). Kept beside pools.json; amounts in history always come from the chain.
+  type Journal = Record<string, { flow: FlowId; from: PartyId; to: PartyId; amount: string }>;
+  const journalFile = shared ? join(shared.mounts.pools!, 'lensa-journal.json') : '';
+  let journal: Journal = {};
+  if (shared) { try { journal = JSON.parse(readFileSync(journalFile, 'utf8')) as Journal; } catch { /* first run */ } }
+  const wallets = new Map<PartyId, Promise<Wallet>>();
+  const walletFor = (party: PartyId) => {
+    let w = wallets.get(party);
+    if (!w) {
+      w = walletOf(apsRunner!, shared!, party);
+      wallets.set(party, w);
+      w.catch(() => wallets.delete(party)); // a failed read is not cached
+    }
+    return w;
+  };
   const acct = s.accounts;
   const partyOf = new Map(Object.entries(acct).map(([p, id]) => [id, p as PartyId]));
   const json = async <T>(config: string, args: string[], stdin?: string) => JSON.parse(await cli(config, args, stdin)) as T;
@@ -127,6 +147,11 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   // In the party's lane with the history scan: a Torii answers one query at a time, a balance read racing a scan got HTTP 429.
   // Read as the party's node operator: bank C has no CanReadRestrictedDataspace grant, so its own account is refused (HTTP 403) on ds-rd.
   async function balanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
+    if (shared) return BigInt((await walletFor(party)).balances[asset === 'RD' ? 'rd' : 'dfabi']);
+    return publicBalanceOf(party, asset);
+  }
+  // The public ds-rd balance (flows when not shared; the stress test always).
+  async function publicBalanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
     // A history scan can hold the lane for seconds: the wait has a deadline, so run()'s balance check and loadCapacity never hang on it.
     return withDeadline(inLane(party, async () => {
       try {
@@ -195,6 +220,19 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     const steps: StepEvent[] = [];
     const emit = (index: number, ms: number) => { const st = { index, label: adapter.stepLabels[index]!, ms }; steps.push(st); onStep(st); };
     const dvp = FLOWS[req.flow].dvp;
+    if (shared) {
+      let last = Date.now();
+      const step = (i: number) => { const now = Date.now(); emit(i, now - last); last = now; };
+      const r = dvp
+        ? await runDvpShared(apsRunner!, shared, { seller: req.from, buyer: req.to, dfabi: amount, rd: amount * PRICE_PER_UNIT }, step)
+        : await runPay(apsRunner!, shared, { asset: FLOWS[req.flow].asset, from: req.from, to: req.to, amount }, step);
+      step(2);
+      step(3);
+      wallets.clear(); // balances moved
+      journal[r.bundle_id] = { flow: req.flow, from: req.from, to: req.to, amount: amount.toString() };
+      try { writeFileSync(journalFile, JSON.stringify(journal), { mode: 0o600 }); } catch (e) { console.error('[iroha3] jurnal tidak tersimpan:', errMsg(e)); }
+      return { txHash: r.carrier_tx, block: r.height, steps, context: { aps: r } satisfies Ctx };
+    }
     if (dvp && aps) { // private: no public balance moves, so no balance check either (the notes are funded per leg)
       let last = Date.now();
       const step = (i: number) => { const now = Date.now(); emit(i, now - last); last = now; };
@@ -258,22 +296,68 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
       { label: 'Blok', value: String(r.height) },
       ...r.legs.map((l) => ({ label: `Pool ${l.lane === 1 ? 'RD (ds-rd, lane 1)' : 'DFABI (ds-dfabi, lane 2)'}`, value: l.pool_id })),
     ];
+    const dvp = FLOWS[req.flow].dvp;
     if (party === req.from || party === req.to) {
-      return { party, role, verdict: 'clear', amount: req.amount, rdAmount: (BigInt(req.amount) * PRICE_PER_UNIT).toString(),
+      return { party, role, verdict: 'clear', amount: req.amount, rdAmount: dvp ? (BigInt(req.amount) * PRICE_PER_UNIT).toString() : null,
         counterparty: { from: req.from, to: req.to }, onChain,
-        method: 'Pihak DvP: nominal dan lawan transaksi dari dompet APS sendiri (note privat). Keempat validator hanya menyimpan bundle, commitment note dan bukti STARK.' };
+        method: 'Pihak transaksi: nominal dan lawan transaksi dari dompet APS sendiri (note privat). Keempat validator hanya menyimpan bundle, commitment note dan bukti STARK.' };
     }
     if (party === 'BI') {
-      const records = await auditRecords(aps!, r.bundle_id);
-      const rdLeg = records.find((x) => x.asset === s.assets.RD);
-      const dfabiLeg = records.find((x) => x.asset === s.assets.DFABI);
-      const who = new Map(Object.entries(aps!.wallets).map(([p, id]) => [id, p as PartyId]));
-      return { party, role, verdict: 'reported', amount: dfabiLeg?.amount ?? null, rdAmount: rdLeg?.amount ?? null,
-        counterparty: dfabiLeg ? { from: who.get(dfabiLeg.payer) ?? null, to: who.get(dfabiLeg.recipient) ?? null } : null, onChain,
+      const { amount, rdAmount, counterparty } = fromRecords(await auditRecords(aps!, r.bundle_id));
+      return { party, role, verdict: 'reported', amount, rdAmount, counterparty, onChain,
         method: 'BI membuka kapsul audit tiap leg (X25519 + ML-KEM-768) di layanan bi-auditor sebelum menyetujui. Nominal dan pihak dibaca dari catatan audit BI, bukan dari ledger.' };
     }
     return { party, role, verdict: 'sealed', amount: null, rdAmount: null, counterparty: null, onChain,
       method: `Node validator ${PARTIES[party].name} hanya menyimpan bundle, commitment note dan bukti STARK. Nominal dan pihak tidak ada di ledger; kapsul audit hanya bisa dibuka BI.` };
+  }
+
+  // One bundle as BI's audit records show it. A BI -> BI leg of 1 is the companion leg of a single-asset payment (APS needs
+  // two dataspaces), not a movement.
+  const walletParty = aps ? new Map(Object.entries(aps.wallets).map(([p, id]) => [id, p as PartyId])) : new Map<string, PartyId>();
+  function fromRecords(records: AuditRecord[]) {
+    const companion = (x: AuditRecord) => x.payer === aps!.wallets.BI && x.recipient === aps!.wallets.BI && x.amount === '1';
+    const real = records.filter((x) => !companion(x));
+    const rdLeg = real.find((x) => x.asset === s.assets.RD);
+    const dfabiLeg = real.find((x) => x.asset === s.assets.DFABI);
+    const dvp = !!rdLeg && !!dfabiLeg;
+    const main = dvp ? dfabiLeg : rdLeg ?? dfabiLeg;
+    const counterparty = main ? { from: walletParty.get(main.payer) ?? null, to: walletParty.get(main.recipient) ?? null } : null;
+    const asset: 'RD' | 'DFABI' | null = dvp ? 'DFABI' : rdLeg ? 'RD' : dfabiLeg ? 'DFABI' : null;
+    const issuer = counterparty?.from === 'BI';
+    const flow: FlowId | null = !asset ? null : dvp ? (issuer ? 'award' : 'dvp') : `${asset === 'RD' ? 'rd' : 'dfabi'}-${issuer ? 'issue' : 'transfer'}` as FlowId;
+    return { flow, asset, amount: main?.amount ?? null, rdAmount: dvp ? rdLeg!.amount : null, counterparty };
+  }
+
+  const poolHeights = (): Map<string, number> => {
+    try {
+      const f = JSON.parse(readFileSync(join(shared!.mounts.pools!, 'pools.json'), 'utf8')) as { rd: { bundles: { id: string; height: number }[] } };
+      return new Map(f.rd.bundles.map((b) => [b.id, b.height]));
+    } catch { return new Map(); }
+  };
+
+  async function sharedHistory(party: PartyId, want: number): Promise<HistoryItem[]> {
+    if (party === 'BI') {
+      const byBundle = new Map<string, AuditRecord[]>();
+      for (const r of await allAuditRecords(shared!)) if (r.bundle_id) byBundle.set(r.bundle_id, [...(byBundle.get(r.bundle_id) ?? []), r]);
+      const heights = poolHeights();
+      return [...byBundle].map(([id, records]): HistoryItem => {
+        const { flow, asset, amount, rdAmount, counterparty } = fromRecords(records);
+        const role = roleFromParties('BI', counterparty, counterparty?.from === 'BI');
+        return { id, at: null, block: heights.get(id) ?? null, flow, asset, role, verdict: role === 'regulator' ? 'reported' : 'clear', amount, rdAmount, counterparty };
+      }).sort((a, b) => (b.block ?? 0) - (a.block ?? 0)).slice(0, want);
+    }
+    const w = await walletFor(party);
+    const bundles = new Map<string, { height: number; rd?: string; dfabi?: string }>();
+    for (const i of w.items) bundles.set(i.bundle_id, { ...bundles.get(i.bundle_id), height: i.height, [i.asset]: i.amount });
+    return [...bundles].map(([id, b]): HistoryItem => {
+      const j = journal[id];
+      const flow = j?.flow ?? null;
+      const dvp = flow ? FLOWS[flow].dvp : !!(b.rd && b.dfabi);
+      const asset: 'RD' | 'DFABI' = dvp || (!b.rd && b.dfabi) ? 'DFABI' : 'RD';
+      const counterparty = j ? { from: j.from, to: j.to } : null;
+      const role = roleFromParties(party, counterparty, !!flow && FLOWS[flow].issuer);
+      return { id, at: null, block: b.height, flow, asset, role, verdict: 'clear', amount: (asset === 'RD' ? b.rd : b.dfabi) ?? null, rdAmount: dvp ? b.rd ?? null : null, counterparty };
+    }).sort((a, b) => (b.block ?? 0) - (a.block ?? 0)).slice(0, want);
   }
 
   async function lens(req: FlowRequest, result: FlowResult, party: PartyId): Promise<LensView> {
@@ -446,6 +530,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   async function history(party: PartyId, limit: number): Promise<HistoryItem[] & { truncated?: true }> {
     if (!Number.isInteger(limit) || limit < 1) throw new Error('limit harus bilangan bulat >= 1');
     const want = Math.min(limit, HISTORY_MAX);
+    if (shared) return sharedHistory(party, want);
     // Lists and decodes both go through the party's operator account on its Torii, so they run in its lane, one after another.
     const lists = await scanOf(party);
     return inLane(party, async () => {
@@ -573,13 +658,13 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     trace,
     // The load users of a bank share the bank's account, so its balance is split between them.
     async loadCapacity(users) {
-      const balances = await Promise.all(BANKS.map((b) => balanceOf(b, 'RD')));
+      const balances = await Promise.all(BANKS.map((b) => publicBalanceOf(b, 'RD')));
       return Math.floor(Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT) / users);
     },
     async prepareLoad(users, units) {
       const need = BigInt(users * units) * LOAD_AMOUNT;
       for (const b of BANKS) {
-        const have = await balanceOf(b, 'RD');
+        const have = await publicBalanceOf(b, 'RD');
         if (have < need) await mint(b, 'RD', need - have);
       }
     },
