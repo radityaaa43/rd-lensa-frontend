@@ -21,9 +21,10 @@ export type Exec = (args: string[]) => Promise<string>; // kubectl arguments aft
 
 const CALL_MS = 180_000; // one driver call: ~4 s of work, generous because a slow endorsement must not be cut off
 // BI down: a gateway answer took 260868 ms (fabric, submit 130973 + report 128897), and Envoy cuts a route at 300 s
-// (fabric-x/panurus-itest/scripts/k8s.py:299). So the gateway fetch waits 305 s and the whole tx 310 s.
+// (fabric-x/panurus-itest/scripts/k8s.py:299). So the gateway fetch waits 305 s. The tx deadline also covers the 4 lens reads after
+// run (LEDGER_WAIT_MS 20 s + RECORDS_WAIT_MS 10 s), so 305 + 30 + 5 s margin.
 const GW_CALL_MS = 305_000;
-const TX_DEADLINE_MS = 310_000;
+const TX_DEADLINE_MS = 340_000;
 const LEDGER_WAIT_MS = 20_000;
 const RECORDS_WAIT_MS = 10_000;
 const MAX_TX = 3; // overall in-flight operations
