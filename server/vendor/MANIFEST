@@ -3,8 +3,6 @@
 besu zeto/src/atom.ts
 besu zeto/src/bi-report.ts
 besu zeto/src/common.ts
-besu zeto/src/flows.ts
-besu zeto/src/zeto-v1.ts
 besu zeto/config.json
 besu zeto/abis/Atom.json
 besu zeto/abis/AtomFactory.json
