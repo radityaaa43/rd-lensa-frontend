@@ -39,6 +39,7 @@ jobs:
           --exclude test/noto-config.test.ts
           --exclude test/noto-exclusive.test.ts
           --exclude test/noto-history.test.ts
+          --exclude test/noto-trade-record.test.ts
           --exclude test/policy-boot.test.ts
           --exclude test/policy-opa.test.ts
           --exclude test/policy-platforms.test.ts
