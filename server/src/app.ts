@@ -163,6 +163,14 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     };
   });
 
+  // Kubernetes probes. Liveness: the process answers. Readiness: at least one model loaded; never depends on a bank or a node being
+  // up (that shows in /api/health), or one bank outage would remove the only UI from the Service.
+  app.get('/api/livez', async () => ({ ok: true }));
+  app.get('/api/readyz', async (_request, reply) => {
+    if (Object.values(adapters).some(Boolean)) return { ready: true };
+    return reply.code(503).send({ ready: false, failures: opts.loadFailures ?? {} });
+  });
+
   app.get('/api/health', async () => {
     const [nodes, ...health] = await Promise.all([
       probe().catch(() => ({ besu: false, paladin: [false, false, false, false] })),

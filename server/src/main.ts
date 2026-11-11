@@ -3,15 +3,17 @@ import { fileURLToPath } from 'node:url';
 import { loadAdaptersWithFailures } from './adapters/index.ts';
 import { buildApp } from './app.ts';
 import { assertGatewayEnv } from './gateway.ts';
+import { bindHost } from './listen.ts';
 import { bootPolicy } from './policy/boot.ts';
 
 assertGatewayEnv(); // a bad or ambiguous LENSA_GW_* setting stops the server here, before anything listens
 const PORT = Number(process.env.PORT ?? 8790);
+const HOST = bindHost(process.env);
 const dist = fileURLToPath(new URL('../../web/dist', import.meta.url));
 const { adapters, failures } = await loadAdaptersWithFailures();
 
 const policy = bootPolicy(process.env); // Halaman Kebijakan is optional: undefined makes its routes answer 501
 const app = buildApp(adapters, { webDist: existsSync(dist) ? dist : undefined, loadFailures: failures, policy });
-await app.listen({ host: '127.0.0.1', port: PORT });
-console.log(`Eksplorasi Rupiah Digital: http://127.0.0.1:${PORT}`);
-console.log(`Dari laptop: ssh -L ${PORT}:localhost:${PORT} <host>`);
+await app.listen({ host: HOST, port: PORT });
+console.log(`Eksplorasi Rupiah Digital: http://${HOST}:${PORT}`);
+if (HOST === '127.0.0.1') console.log(`From a laptop: ssh -L ${PORT}:localhost:${PORT} <host>`);
