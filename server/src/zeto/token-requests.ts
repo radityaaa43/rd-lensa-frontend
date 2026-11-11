@@ -49,3 +49,18 @@ export function transferRequest(zeto: string, from: string, transfers: { to: str
     },
   };
 }
+
+export type BalanceOfRequest = {
+  type: 'private'; domain: 'zeto'; abi: readonly Record<string, unknown>[]; function: 'balanceOf'; to: string; from: string;
+  data: { account: string };
+};
+
+// Read-only ptx_call: `from` is the node-local identity that asks, `account` the identity whose UTXOs are summed.
+export function balanceOfRequest(zeto: string, from: string, account: string): BalanceOfRequest {
+  return { type: 'private', domain: 'zeto', abi: ZETO_PRIVATE_ABI, function: 'balanceOf', to: zeto, from, data: { account } };
+}
+
+// Returns the node's result object ({ totalBalance, totalStates, overflow }) unchanged.
+export function zetoBalanceOf(client: { ptx: { call(tx: unknown): Promise<any> } }, zeto: string, from: string, account: string): Promise<any> {
+  return client.ptx.call(balanceOfRequest(zeto, from, account));
+}

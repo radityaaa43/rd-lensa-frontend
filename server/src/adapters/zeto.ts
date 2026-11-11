@@ -4,6 +4,7 @@ import {
   type BankId, type FlowId, type FlowRequest, type PartyId,
 } from '../domain.ts';
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, WarmingUpError, loadLookup, type LoadUser } from '../adapter.ts';
+import { zetoBalanceOf } from '../zeto/token-requests.ts';
 import { besuTrace, nameFrom } from './besu-trace.ts';
 import { besuNetwork, besuReceipt, holdBack, joinInFlight, paladinNodeReceipt, receiptPage, type ReceiptLike } from './besu-network.ts';
 import type { EventLike } from './noto.ts';
@@ -319,7 +320,7 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
 
   const balance = async (id: PartyId, t: Token): Promise<bigint> => {
     // BI's balance is its own account's UTXOs (ARCHITECTURE §7.1 'BI balance'), read from node1 like any party's.
-    return BigInt((await zeto(t, P[id]).balanceOf(P[id].v, { account: LOOKUP[id] })).totalBalance);
+    return BigInt((await zetoBalanceOf(P[id].c, address[t], P[id].lookup, LOOKUP[id])).totalBalance);
   };
   const biStock = () => balance('BI', 'DFABI'); // BI's DFABI inventory (award top-up)
   async function requireBalance(id: PartyId, t: Token, need: bigint) {
@@ -516,7 +517,7 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
   };
   const loadUnits = async (u: LoadUser) => {
     const x = loadParty(u);
-    const units = Number(BigInt((await within(zeto('RD', x).balanceOf(x.v, { account: x.lookup }), DEADLINE_MS, `Saldo ${x.lookup}`)).totalBalance) / LOAD_AMOUNT);
+    const units = Number(BigInt((await within(zetoBalanceOf(x.c, address.RD, x.lookup, x.lookup), DEADLINE_MS, `Saldo ${x.lookup}`)).totalBalance) / LOAD_AMOUNT);
     if (units > 0) await bookKey(x.lookup); // resolveVerifier can create a key (besu, Paladin key_resolver.go:233): only for a user that already holds UTXOs
     return units;
   };

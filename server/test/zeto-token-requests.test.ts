@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ZetoInstance } from '../vendor/paladin-sdk/build/domains/zeto.js';
 import zetoJson from '../vendor/paladin-sdk/build/domains/abis/IZetoFungible.json' with { type: 'json' };
-import { ZETO_PRIVATE_ABI, mintRequest, transferRequest } from '../src/zeto/token-requests.ts';
+import { ZETO_PRIVATE_ABI, balanceOfRequest, mintRequest, transferRequest, zetoBalanceOf } from '../src/zeto/token-requests.ts';
 import { mintUtxos, transfer } from '../src/zeto/flows.ts';
 
 // Option D, step 3: Lensa builds the private Zeto `mint` request itself and sends it with `client.ptx.sendTransaction`.
@@ -115,5 +115,26 @@ describe('transfer', () => {
   it('a failed receipt throws with the failure message', async () => {
     const { issuer: from, to } = stubNode((id) => ({ id, success: false, failureMessage: 'PD012345: boom' }));
     await expect(transfer(from, { address: ZETO } as any, to, 1)).rejects.toThrow(/transfer bi@node1 gagal: PD012345: boom/);
+  });
+});
+
+describe('balanceOf request equals what the vendored SDK sends', () => {
+  it('private call on zeto with from = verifier lookup and data { account }', async () => {
+    const seen: any[] = [];
+    const paladin: any = { call: async (tx: any) => { seen.push(tx); return { totalBalance: '0' }; } };
+    await new ZetoInstance(paladin, ZETO).using(paladin).balanceOf(verifier('bob@node2'), { account: 'bob@node2' });
+    expect(balanceOfRequest(ZETO, 'bob@node2', 'bob@node2')).toEqual(seen[0]);
+    expect(seen[0].type).toBe('private');
+    expect(seen[0].function).toBe('balanceOf');
+  });
+});
+
+describe('zetoBalanceOf', () => {
+  it('sends balanceOfRequest through ptx.call and returns the node result unchanged', async () => {
+    const sent: any[] = [];
+    const result = { totalBalance: '42', totalStates: '2', overflow: false };
+    const client = { ptx: { call: async (tx: unknown) => { sent.push(tx); return result; } } };
+    expect(await zetoBalanceOf(client, ZETO, 'bob@node2', 'bob@node2')).toBe(result);
+    expect(sent).toEqual([balanceOfRequest(ZETO, 'bob@node2', 'bob@node2')]);
   });
 });
