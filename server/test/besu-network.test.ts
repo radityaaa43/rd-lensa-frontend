@@ -17,6 +17,40 @@ const callOf = (replies: Replies = {}) => {
 };
 const noProbe = async () => { throw new Error('no probe expected'); };
 
+// 2026-11-12 23:14Z: ONE slow validator door during rd-transfer exceeded the route deadline (5 s, app.ts) and /api/network answered 502 for the whole page. Each validator now has
+// its own budget; a slow door is that node `down`, the others stay up, and the network always resolves.
+describe('besuNetwork: a slow validator door degrades to one node down', () => {
+  const never = () => new Promise<never>(() => {});
+  it('validator 2 never answers: the call resolves, node 2 is down, the others up', async () => {
+    const call: JsonRpc = async <T>(url: string, method: string) => {
+      if (url.includes('gw2')) return never() as Promise<T>;
+      return ({ eth_blockNumber: '0x10', net_peerCount: '0x3', eth_syncing: false } as Record<string, unknown>)[method] as T;
+    };
+    const t0 = Date.now();
+    const n = await besuNetwork({ paladin: false }, { call, door: (p) => DOORS[p], rpc: noProbe, validatorMs: 60 });
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(n.nodes.map((x) => [x.id, x.status])).toEqual([['besu-validator-1', 'up'], ['besu-validator-2', 'down'], ['besu-validator-3', 'up'], ['besu-validator-4', 'up']]);
+    expect(n.nodes[1]!.detail).toBe('Besu tidak menjawab');
+  });
+  it('a door that answers blockNumber and then hangs on the extras (peers, sync) is down within the budget too, never a hung route', async () => {
+    const call: JsonRpc = async <T>(url: string, method: string) => (url.includes('gw3') && method !== 'eth_blockNumber' ? (never() as Promise<T>) : (({ eth_blockNumber: '0x10', net_peerCount: '0x3', eth_syncing: false } as Record<string, unknown>)[method] as T));
+    const n = await besuNetwork({ paladin: false }, { call, door: (p) => DOORS[p], rpc: noProbe, validatorMs: 60 });
+    expect(n.nodes.map((x) => x.status)).toEqual(['up', 'up', 'down', 'up']);
+  });
+  it('net_peerCount and eth_syncing are asked in parallel (both started before either answers)', async () => {
+    const log: string[] = [];
+    const call: JsonRpc = async <T>(_url: string, method: string) => {
+      if (method === 'eth_blockNumber') return '0x10' as T;
+      log.push(`start ${method}`);
+      await new Promise((r) => setTimeout(r, 30));
+      log.push(`end ${method}`);
+      return (method === 'net_peerCount' ? '0x3' : false) as T;
+    };
+    await besuNetwork({ paladin: false }, { call, door: (p) => (p === 'BI' ? DOORS.BI : undefined), rpc: noProbe });
+    expect(log.slice(0, 2).sort()).toEqual(['start eth_syncing', 'start net_peerCount']);
+  });
+});
+
 describe('besuNetwork', () => {
   it('validators only: 4 validators owned by wiring (validator N = Paladin node N = the party with PARTIES.node N), each read at its own door, full mesh', async () => {
     const { call, seen } = callOf();

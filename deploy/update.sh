@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../web"
 rm -rf dist.new
-trap 'rm -rf dist.new' ERR # a failed build leaves no half-built dist.new behind; dist itself is never touched
+trap 'rm -rf dist.new' EXIT # any exit (a failed build, an explicit `exit 1` below) leaves no half-built dist.new behind; after the swap there is none to remove; dist itself is never touched until the swap
 npx tsc --noEmit
 npx vite build --outDir dist.new --emptyOutDir
 [ -f dist.new/index.html ] || { echo "update: dist.new has no index.html, nothing swapped" >&2; exit 1; }
