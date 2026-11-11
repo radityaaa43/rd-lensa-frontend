@@ -12,7 +12,7 @@ import type { Sample } from '../stats.ts';
 import { appendTrade, loadPlatform, type Participant, type Platform } from '../../../../besu/noto+pente/bond/src/lib/platform.ts';
 import { transferNoto } from '../../../../besu/noto+pente/bond/src/lib/transfer.ts';
 import { issueBond, issueCash } from '../../../../besu/noto+pente/bond/src/lib/issue.ts';
-import { custodianOf, executeOutright } from '../../../../besu/noto+pente/bond/src/lib/outright.ts';
+import { custodianOf, executeOutright, type OnProgress, type TradeRecord } from '../../../../besu/noto+pente/bond/src/lib/outright.ts';
 import { readNotoTx, readStateHashes, readTxReceipt, tradeSpendTxIds, waitTxIndexed, watchDispatch, type NotoTxView } from '../../../../besu/noto+pente/bond/src/lib/receipts.ts';
 
 const DEADLINE = 120_000;
@@ -30,6 +30,17 @@ const chains = new Map<string, Promise<unknown>>();
 // ponytail: if an underlying Paladin call never settles, that party stays locked until server restart; restart is the recovery
 // (no auto-release, because releasing risks double-spend).
 // `hold(p)` lets fn keep the lock until p settles even after fn itself returned or threw (a timed-out DvP keeps running).
+// Runs one DvP and keeps its record in trades.jsonl (append-only; loadTrades keeps the last line per tradeId). `run` gets a progress callback
+// that executeOutright calls after each lock/delegate step: each call appends a PENDING line, so a crash leaves the lock ids on disk. The final
+// line is appended when `run` returns (settled, rolled back or failed); if `run` throws, the PENDING lines stay. A failing disk write is logged,
+// never thrown: the chain is the truth (history reads it), and the DvP may already have moved funds. The callback is sync (a write), as OnProgress allows.
+export function recordedTrade(dataDir: string, run: (onProgress: OnProgress) => Promise<TradeRecord>): Promise<TradeRecord> {
+  const write = (t: TradeRecord) => {
+    try { appendTrade(dataDir, t); } catch (e) { console.error(`[noto] trade ${t.tradeId} (${t.status}) not written to trades.jsonl:`, e); }
+  };
+  return run((t) => write(t)).then((t) => { write(t); return t; });
+}
+
 export async function exclusive<T>(senders: string[], fn: (hold: (p: Promise<unknown>) => void) => Promise<T>): Promise<T> {
   const keys = [...new Set(senders)].sort(); // sorted: two-party locks cannot deadlock
   const previous = keys.map((k) => chains.get(k) ?? Promise.resolve());
@@ -291,8 +302,7 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
         else if (m.startsWith('[settle]')) { executedAt = Date.now(); emit(2, boundary ?? t0, executedAt); } // atom executed on Besu
       };
       // The record is written from the raw promise, so it survives the deadline below (executeOutright keeps running after it).
-      const raw = executeOutright(p, { seller: seller.name, buyer: buyer.name, units: amount.toString(), price: PRICE_PER_UNIT.toString(), tradeId }, log)
-        .then((t) => { appendTrade(p.dataDir, t); return t; });
+      const raw = recordedTrade(p.dataDir, (onProgress) => executeOutright(p, { seller: seller.name, buyer: buyer.name, units: amount.toString(), price: PRICE_PER_UNIT.toString(), tradeId }, log, onProgress));
       hold(raw); // ponytail: the parties stay locked until executeOutright really settles, not when our deadline fires
       const trade = await withDeadline(raw, DVP_DEADLINE, 'DvP Noto').catch((e) => {
         if (e instanceof DeadlineError) throw new Error(`Status DvP belum diketahui; cek ulang (trade ${tradeId} di trades.jsonl, periksa saldo dan lock)`);
