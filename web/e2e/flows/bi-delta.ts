@@ -61,3 +61,29 @@ export function biVerdicts(model: Model, flow: Flow, before: Bal, after: Bal): V
     return got === w ? { cell, status: 'PASS', note: `delta ${got}` } : { cell, status: 'FAIL', note: `delta ${got}, want ${w}` };
   });
 }
+
+// ---- iroha3 payer side: the driver pays a leg from ONE private note (a flow is refused before any write otherwise) ----
+// Needs (iroha3-aps.ts:73,98 comments; iroha wallet.rs:169-172 [unverified here]): the DFABI leg needs one note strictly > amount,
+// the RD leg one note strictly > amount + 1 (it also pays the sponsor 1). The API only gives each party's TOTAL, so the pre-flow check
+// is `total <= min` (a total that small cannot hold such a note); a fragmented pool passes it and is caught by the driver's own
+// refusal, parsed by `parseRefusal`, which stays correct whatever the driver image: the product answers before any proving.
+export type PartyId = 'BI' | 'A' | 'B' | 'C';
+export type Asset = 'RD' | 'DFABI';
+export interface PayerNeed { party: PartyId; asset: Asset; min: bigint }
+export function payerNeeds(model: Model, flow: Flow, from: PartyId, to: PartyId): PayerNeed[] {
+  if (model !== 'iroha3') return [];
+  const a = AMOUNT[flow];
+  if (flow === 'rd-issue' || flow === 'rd-transfer') return [{ party: from, asset: 'RD', min: a + 1n }];
+  if (flow === 'dfabi-issue' || flow === 'dfabi-transfer') return [{ party: from, asset: 'DFABI', min: a }];
+  return [{ party: from, asset: 'DFABI', min: a }, { party: to, asset: 'RD', min: a * PRICE_PER_UNIT + 1n }]; // dvp, award: buyer pays RD
+}
+export function payerShortfalls(needs: PayerNeed[], bals: Partial<Record<PartyId, Bal>>): PayerNeed[] {
+  return needs.filter((n) => { const b = bals[n.party]; return b !== undefined && (n.asset === 'RD' ? b.rd : b.dfabi) <= n.min; });
+}
+// "Saldo RD Bank Nusantara tidak cukup di satu note privat" (server/src/adapters/iroha3-aps.ts:113)
+export function parseRefusal(reason: string): { asset: Asset; name: string } | null {
+  const m = /Saldo (RD|DFABI) (.+?) tidak cukup di satu note privat/.exec(reason);
+  return m ? { asset: m[1] as Asset, name: m[2]! } : null;
+}
+// A top-up mints well above the need so the next runs find a large note again (a run splits one note into leg + change).
+export const topUpAmount = (asset: Asset, min: bigint): bigint => { const floor = asset === 'RD' ? 3_000_000n : 20n; return min * 3n > floor ? min * 3n : floor; };
