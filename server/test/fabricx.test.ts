@@ -531,7 +531,7 @@ describe('fabricx gateway transport', () => {
       await fxGateway('A', { op: 'balance', type: 'RD' });
       expect(ms[0]).toBeGreaterThan(300_000);
       expect(createFabricxAdapter(fake().exec).txDeadlineMs).toBeGreaterThan(ms[0]!);
-      expect(createFabricxAdapter(fake().exec).txDeadlineMs).toBe(340_000);
+      expect(createFabricxAdapter(fake().exec).txDeadlineMs).toBe(745_000); // lock wait 340 s + locked part 340 s + ledger 20 s + lens 30 s + margin 15 s
     } finally { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
   });
 

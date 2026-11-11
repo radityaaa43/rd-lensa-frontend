@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, StepEvent, Verdict } from '../adapter.ts';
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, type LoadUser } from '../adapter.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
-import { withDeadline } from '../deadline.ts';
+import { afterLock, withDeadline } from '../deadline.ts';
 import { gwFetch, gwUrl } from '../gateway.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
@@ -26,6 +26,10 @@ const CALL_MS = 180_000; // one driver call: ~4 s of work, generous because a sl
 // run (LEDGER_WAIT_MS 20 s + RECORDS_WAIT_MS 10 s), so 305 + 30 + 5 s margin.
 const GW_CALL_MS = 305_000;
 const TX_DEADLINE_MS = 340_000;
+// TX_DEADLINE_MS runs once the sender slot is held (afterLock in run()), so a transfer queued behind another is not charged the wait. The
+// server's outer deadline (app.ts:273, txDeadlineMs below) must cover that wait: one transfer ahead at its own bound (LOCK_WAIT_MS), the locked
+// part, then the ledger read (LEDGER_WAIT_MS) and the lens reads, plus 15 s margin.
+const LOCK_WAIT_MS = 340_000;
 const LEDGER_WAIT_MS = 20_000;
 const CUT_POLL_MS = 5_000; // see recoverCut
 const CUT_READ_MS = 10_000; // one ledger listing inside recoverCut: a hung kubectl must not hold the transfer or the recovery
@@ -243,7 +247,10 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall) {
       : flow.dvp ? [['swap', NODE[req.from], NODE[req.to], TOKEN.DFABI, amount.toString(), TOKEN.RD, (amount * PRICE_PER_UNIT).toString()], [req.from, req.to]]
         : [['transfer', NODE[req.from], NODE[req.to], TOKEN[flow.asset], amount.toString()], [req.from]];
     const sent = cmd[0] === 'transfer' || cmd[0] === 'swap'; // issue and award: BI is the sender, the BI-down case does not apply
-    const out = await exclusive(senders, () => (sent ? recoverCut(req.from, () => api<TxOut>(cmd)) : api<TxOut>(cmd)));
+    const out = await afterLock(TX_DEADLINE_MS, 'Transaksi', (armed) => exclusive(senders, () => {
+      armed(); // the slot is ours: the deadline starts now, not when the transfer was queued
+      return sent ? recoverCut(req.from, () => api<TxOut>(cmd)) : api<TxOut>(cmd);
+    }));
 
     // The driver reports its own timings; the ZK proof and the 3-of-4 endorsement are not separable from the submit.
     const ms = (name: string) => out.steps.find((s) => s.name === name)?.ms ?? 0;
@@ -406,7 +413,7 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall) {
 
   const adapter: ModelAdapter & { fund: typeof issue } = {
     id: 'fabricx',
-    txDeadlineMs: TX_DEADLINE_MS,
+    txDeadlineMs: LOCK_WAIT_MS + TX_DEADLINE_MS + LEDGER_WAIT_MS + 30_000 + 15_000,
     stepLabels: ['Bukti ZK & endorsement 3-of-4', 'Final di ledger', 'Laporan ke BI', 'Cek ledger publik'],
     capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
     async health() {
