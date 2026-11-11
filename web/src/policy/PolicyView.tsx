@@ -113,7 +113,7 @@ function BiView({ data, platform }: { data: PolicyData; platform: Platform }) {
       </Section>
       <Section title="Jam operasional per token" who="Diatur BI · zona WIB">
         <div className="poltiles">{TOKENS.map((t) => <HoursTile key={t} token={t} hours={bi.hours[t]} holidays={bi.holidays} />)}</div>
-        <p className="hint">DvP hanya bisa dimulai saat kedua token buka. Menyelesaikan atau membatalkan DvP yang sudah berjalan tetap diizinkan di luar jam.</p>
+        <p className="hint">DvP hanya bisa dimulai saat kedua token buka. Menyelesaikan atau membatalkan DvP yang sudah berjalan tetap diizinkan di luar jam. Menyelesaikan atau membatalkan DvP (spendLock, delegateLock, cancelLock) tidak pernah diblokir jam operasional: jumlahnya sudah diperiksa saat lock dibuat (rd-besu zeto.rego:7, :50-53; paladin.rego:49-57).</p>
       </Section>
       <Section title="Hari libur" who="Diatur BI · semua token tutup seharian">
         {bi.holidays.length === 0 ? <p className="hint">Belum ada hari libur.</p>
