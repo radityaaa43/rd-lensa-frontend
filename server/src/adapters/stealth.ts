@@ -212,6 +212,15 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
   // Smallest single address that covers `need`; marked busy until released so two runs never spend the same address.
   const busy = new Set<string>();
   async function claim(bank: BankId, asset: 'RD' | 'DFABI', need: bigint): Promise<Holding> {
+    try { return await claimOnce(bank, asset, need); } catch (e) {
+      if (!(e instanceof Error) || e.message !== NO_BALANCE) throw e;
+      // A cached 0 (`drained`) can be stale: a lagging node, or a refund that bypassed the protocol. Read the chain once more before giving up.
+      // Nothing is sent before claim() returns, so the retry cannot double a tx.
+      drained[asset].clear();
+      return claimOnce(bank, asset, need);
+    }
+  }
+  async function claimOnce(bank: BankId, asset: 'RD' | 'DFABI', need: bigint): Promise<Holding> {
     const ok = (await holdings(bank, asset)).filter((h) => h.balance >= need && !busy.has(lc(h.stealthAddress))).sort((x, y) => (x.balance < y.balance ? -1 : x.balance > y.balance ? 1 : 0));
     for (const h of ok) {
       busy.add(lc(h.stealthAddress));
