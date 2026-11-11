@@ -4,7 +4,7 @@ import { ZetoInstance } from '../vendor/paladin-sdk/build/domains/zeto.js';
 import v1Json from '../vendor/paladin-sdk/build/domains/abis/IZetoFungible_V1.json' with { type: 'json' };
 import zetoAnonJson from '../vendor/paladin-sdk/build/domains/abis/Zeto_Anon.json' with { type: 'json' };
 import {
-  CANCEL_LOCK_ABI, DELEGATE_LOCK_ABI, ZETO_V1_PRIVATE_ABI,
+  CANCEL_LOCK_ABI, DELEGATE_LOCK_ABI, ZETO_V1_ABI_PIN, ZETO_V1_PRIVATE_ABI, assertPinnedAbi, canonicalAbiSha256,
   cancelLockRequest, createLockRequest, delegateLockRequest, prepareSpendLockRequest,
 } from '../src/zeto/lock-requests.ts';
 
@@ -72,6 +72,32 @@ describe('ABI inputs', () => {
   });
   it('the public delegateLock entry equals the official Zeto_Anon artifact (zeto v0.5.1)', () => {
     expect(DELEGATE_LOCK_ABI).toEqual([(zetoAnonJson as any).abi.find((e: any) => e.type === 'function' && e.name === 'delegateLock')]);
+  });
+});
+
+// Zeto analyst audit item 9 (before S21): the private V1 ABI is pinned by content, independent of the vendored SDK build (a test reference only).
+// Origin: Paladin PR #1189 (open, branch zeto-v1) does NOT commit an ABI JSON; the source of truth is the Solidity interface at its head 28c72b76,
+// sha256 686adfa1... (read by besu, 2026-11-12); the fork checkout the running node is built from contains that head and the same .sol bytes.
+// Serialisation differs per copy, so the pin is the CANONICAL ABI sha256: JSON of the abi array, object keys sorted, no whitespace.
+describe('pinned V1 ABI (zeto 9)', () => {
+  it('the pin names its origin and the nine functions of the interface', () => {
+    expect(ZETO_V1_ABI_PIN.solCommit).toBe('28c72b76fda49d0e7c317432880f167a60da2f78');
+    expect(ZETO_V1_ABI_PIN.solSha256).toBe('686adfa17b5033962a57d49732c9804a36ab9638966395d237332626ed748109');
+    expect(ZETO_V1_ABI_PIN.functions).toEqual(['balanceOf', 'cancelLock', 'createLock', 'deposit', 'mint', 'setERC20', 'spendLock', 'transfer', 'withdraw']);
+  });
+  it('the shipped ABI file has the pinned canonical sha256 (8a55e0df...), the same one besu measured on the PR head build, the fork build and the vendored SDK', () => {
+    expect(ZETO_V1_ABI_PIN.abiSha256).toBe('8a55e0dfd3e34b37a67f313044a528b329a8b2bf010c2fa7d4f3572197e40a1b');
+    expect(canonicalAbiSha256(ZETO_V1_PRIVATE_ABI)).toBe(ZETO_V1_ABI_PIN.abiSha256);
+    expect(canonicalAbiSha256((v1Json as any).abi)).toBe(ZETO_V1_ABI_PIN.abiSha256); // the vendored SDK build carries the same ABI (test reference)
+  });
+  it('is independent of key order and whitespace, but any changed entry is refused', () => {
+    const reordered = JSON.parse(JSON.stringify(ZETO_V1_PRIVATE_ABI, (_k, v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).reverse()) : v)));
+    expect(canonicalAbiSha256(reordered)).toBe(ZETO_V1_ABI_PIN.abiSha256);
+    expect(() => assertPinnedAbi(reordered)).not.toThrow();
+    const dropped = (ZETO_V1_PRIVATE_ABI as any[]).filter((e) => e.name !== 'cancelLock');
+    expect(() => assertPinnedAbi(dropped)).toThrow(/IZetoFungible_V1/);
+    const renamed = (ZETO_V1_PRIVATE_ABI as any[]).map((e) => (e.name === 'transfer' ? { ...e, name: 'transfer2' } : e));
+    expect(() => assertPinnedAbi(renamed)).toThrow(/IZetoFungible_V1/);
   });
 });
 
