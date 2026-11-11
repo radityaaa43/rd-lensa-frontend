@@ -87,3 +87,9 @@ export function parseRefusal(reason: string): { asset: Asset; name: string } | n
 }
 // A top-up mints well above the need so the next runs find a large note again (a run splits one note into leg + change).
 export const topUpAmount = (asset: Asset, min: bigint): bigint => { const floor = asset === 'RD' ? 3_000_000n : 20n; return min * 3n > floor ? min * 3n : floor; };
+
+// Live top-up budget (lead's cap for the iroha3 suite, 2026-11-11): at most 2 top-ups per flow and 6 in total; a third for one flow
+// aborts the run. Each top-up is exactly topUpAmount().
+export const MAX_TOPUPS_PER_FLOW = 2;
+export const MAX_TOPUPS_TOTAL = 6;
+export const topUpAllowed = (perFlow: number, total: number): boolean => perFlow < MAX_TOPUPS_PER_FLOW && total < MAX_TOPUPS_TOTAL;

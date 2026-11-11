@@ -1,7 +1,7 @@
 // Shared live flow runner: drives the real Lensa UI the way a person does (route, asset tab, form, send),
 // waits for the four process steps, opens the lens and checks who reads what. One test per flow.
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { AMOUNT, biVerdicts, need, parseRefusal, payerNeeds, payerShortfalls, short, topUpAmount, type Asset, type Bal } from './bi-delta.ts';
+import { AMOUNT, biVerdicts, need, parseRefusal, payerNeeds, payerShortfalls, short, topUpAllowed, topUpAmount, type Asset, type Bal } from './bi-delta.ts';
 
 export type Model = 'zeto' | 'noto' | 'stealth' | 'fabricx' | 'iroha3';
 type P = 'BI' | 'A' | 'B' | 'C';
@@ -30,18 +30,19 @@ const OUTSIDER: Record<Model, (flow: Flow) => Seen> = {
 };
 
 // BI's own balance and the ids of its history, read through the Lensa API (the same data the UI shows).
-async function biState(request: APIRequestContext, model: Model, party: P = 'BI'): Promise<{ bal: Bal | null; ids: Set<string> }> {
+async function biState(request: APIRequestContext, model: Model, party: P = 'BI'): Promise<{ bal: Bal | null; ids: Set<string>; items: { id: string; fee?: string }[] }> {
   const b = await request.get(`/api/balance?model=${model}&party=${party}`);
   const h = await request.get(`/api/history?model=${model}&party=${party}&limit=100`);
   const bj = b.ok() ? await b.json() : null;
   const hj = h.ok() ? await h.json() : null;
-  const items: { id: string }[] = hj ? (hj.items ?? hj) : [];
-  return { bal: bj ? { rd: BigInt(bj.RD.amount), dfabi: BigInt(bj.DFABI.amount) } : null, ids: new Set(items.map((i) => i.id)) };
+  const items: { id: string; fee?: string }[] = hj ? (hj.items ?? hj) : [];
+  return { bal: bj ? { rd: BigInt(bj.RD.amount), dfabi: BigInt(bj.DFABI.amount) } : null, ids: new Set(items.map((i) => i.id)), items };
 }
 
 // iroha3 only: a payer without one large private note is topped up through the normal Lensa issue flow (POST /api/tx, BI issues to it).
 // It is a LIVE WRITE, so it runs only with IROHA3_TOPUP=1 (lead GO, under flock); without it the test is skipped with the reason.
 const TOPUP = process.env.IROHA3_TOPUP === '1';
+let topUpsTotal = 0; // across the whole run (cap: MAX_TOPUPS_TOTAL)
 async function topUp(request: APIRequestContext, model: Model, to: P, asset: Asset, amount: bigint): Promise<string> {
   const post = await request.post('/api/tx', { data: { model, flow: asset === 'RD' ? 'rd-issue' : 'dfabi-issue', from: 'BI', to, amount: String(amount) } });
   if (post.status() !== 202) throw new Error(`top-up ${asset} ${to}: HTTP ${post.status()} ${await post.text()}`);
@@ -74,7 +75,10 @@ export function defineFlows(model: Model) {
 
       // iroha3 payer side: top up (opt-in) or skip when a payer's total cannot hold the one note the driver needs
       let toppedUp = false;
+      let topUpsThisFlow = 0;
       const topUpParty = async (party: P, asset: Asset, min: bigint) => {
+        if (!topUpAllowed(topUpsThisFlow, topUpsTotal)) throw new Error(`TOP-UP CAP reached (flow ${topUpsThisFlow}, total ${topUpsTotal}): aborting the run, no further top-up`);
+        topUpsThisFlow++; topUpsTotal++;
         const tx = await topUp(request, model, party, asset, topUpAmount(asset, min));
         console.log(`TOPUP ${model} ${c.flow}: ${asset} ${party} +${topUpAmount(asset, min)} tx ${tx}`);
         info.annotations.push({ type: 'topup', description: `${asset} ${party} tx ${tx}` });
@@ -89,6 +93,11 @@ export function defineFlows(model: Model) {
         test.skip(lacking.length > 0 && !TOPUP, `precondition: payer total too small for one note: ${lacking.map((n) => `${n.party} ${n.asset} <= ${n.min}`).join(', ')} (IROHA3_TOPUP=1 tops up, live write, lead GO)`);
         for (const n of lacking) await topUpParty(n.party, n.asset, n.min);
       }
+
+      // iroha3: the RD-leg payer (not BI) pays the sponsor fee 1, so its history row must carry fee "1" (HistoryItem.fee, driver wallet item `fee`)
+      const feePayers = model === 'iroha3' ? payerNeeds(model, c.flow, c.from, c.to).filter((n) => n.asset === 'RD' && n.party !== 'BI').map((n) => n.party) : [];
+      const payerBefore: Partial<Record<P, Set<string>>> = {};
+      for (const p of feePayers) payerBefore[p] = (await biState(request, model, p)).ids;
 
       // 1. compose, like a user: the sender is the route party, the asset is a tab, recipient and amount are form fields
       await page.goto(route(model, c.dvp ? 'dvp' : 'transfer', c.from));
@@ -165,6 +174,16 @@ export function defineFlows(model: Model) {
           info.annotations.push({ type: `bi-delta ${v.cell}`, description: `${v.status} ${v.note}` });
           expect.soft(v.status, `BI ${v.cell}: ${v.note}`).not.toBe('FAIL');
         }
+      }
+      for (const p of feePayers) {
+        let fresh: { id: string; fee?: string } | undefined;
+        for (let i = 0; i < 24 && !fresh; i++) {
+          fresh = (await biState(request, model, p)).items.find((x) => !payerBefore[p]!.has(x.id));
+          if (!fresh) await page.waitForTimeout(5_000);
+        }
+        console.log(`FEE ${model} ${c.flow} ${p}: ${fresh ? `new history item ${fresh.id.slice(0, 12)} fee=${fresh.fee ?? 'absent'}` : 'no new history item'}`);
+        info.annotations.push({ type: `fee ${p}`, description: `${fresh?.fee ?? 'absent'}` });
+        expect.soft(fresh?.fee, `${p}: the RD payer's history row carries fee "1"`).toBe('1');
       }
       expect(errors, 'error di console/halaman').toEqual([]);
     });
