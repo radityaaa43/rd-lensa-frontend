@@ -1,3 +1,4 @@
+import { readCompareStatus, type StatusRead } from './adapters/stealth-status.ts';
 import { randomUUID } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
@@ -91,7 +92,7 @@ function scrub(v: unknown): unknown {
 
 interface Sse { send(event: string, data: unknown): void; end(): void }
 
-export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: Probe; loadFailures?: Partial<Record<ModelId, string>>; policy?: PolicyDeps } = {}): FastifyInstance {
+export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: Probe; loadFailures?: Partial<Record<ModelId, string>>; policy?: PolicyDeps; stealthStatus?: () => Promise<StatusRead> } = {}): FastifyInstance {
   const app = Fastify({
     logger: { level: process.env.VITEST ? 'silent' : 'error' }, // real errors reach the console; tests stay quiet
     forceCloseConnections: true, // shutdown must not wait on keep-alive / SSE sockets
@@ -181,6 +182,13 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       }),
     ]);
     return { models: Object.fromEntries(MODELS.map((m, i) => [m, health[i]])), nodes };
+  });
+
+
+  // Stealth S11 alert: the status of the view-key compare Job, BI's lens only (a bank party gets 403 and nothing is fetched for it). Read through BI's gateway, no kube credential.
+  app.get<{ Querystring: { party: PartyId } }>('/api/stealth/compare-status', { schema: { querystring: { type: 'object', required: ['party'], properties: { party: { enum: PARTY_IDS } } } } }, async (request, reply) => {
+    if (request.query.party !== 'BI') return reply.code(403).send({ reason: 'Status pembanding kunci lihat hanya untuk BI' });
+    return (opts.stealthStatus ?? readCompareStatus)();
   });
 
   // ---- party-scoped reads: never take the busy lock (ARCHITECTURE.md §0.5) ----
