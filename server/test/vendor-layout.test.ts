@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,5 +54,19 @@ describe('sibling code is vendored, not imported from outside the repo', () => {
       return /PRIVATE KEY-----/.test(readFileSync(p, 'utf8'));
     });
     expect(bad.map((p) => relative(VENDOR, p))).toEqual([]);
+  });
+
+  // The vendored Paladin SDK is a local build (see PROVENANCE.md), not an npm release: pin its content here, apart from the
+  // generated PROVENANCE.md, so a changed file fails CI even if the script rewrote the provenance line.
+  // Value = sha256 of the sorted "<sha256>  ./<path>" lines of server/vendor/paladin-sdk/build
+  // (what `cd build && find . -type f | sort | xargs sha256sum | sha256sum` prints).
+  it('the vendored Paladin SDK build matches the pinned content hash', () => {
+    const PINNED = '627cb3b6d6f9fd54baf23535d57707e236fa4232d80bb251e88eef2bed2c1fbd';
+    const build = join(VENDOR, 'paladin-sdk', 'build');
+    const lines = walk(build)
+      .map((p): [string, string] => ['./' + relative(build, p), createHash('sha256').update(readFileSync(p)).digest('hex')])
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([path, h]) => `${h}  ${path}\n`).join('');
+    expect(createHash('sha256').update(lines).digest('hex')).toBe(PINNED);
   });
 });
