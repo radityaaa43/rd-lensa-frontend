@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BiLedger, commitmentOf } from '../../../besu/zeto/src/bi-report.ts';
+import { BiLedger, commitmentOf } from '../vendor/besu/zeto/src/bi-report.ts';
 import { LOOKUP, biRead, zetoBiItem, type ZetoGroup } from '../src/adapters/zeto.ts';
 import type { PartyId } from '../src/domain.ts';
 

@@ -10,11 +10,11 @@ import type { EventLike } from './noto.ts';
 import { afterLock } from '../deadline.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
-import { REPORT_PAGE, ZETO_MOVEMENT_TOPICS, buildReport } from '../../../../besu/zeto/src/bi-report.ts';
+import { REPORT_PAGE, ZETO_MOVEMENT_TOPICS, buildReport } from '../../vendor/besu/zeto/src/bi-report.ts';
 import {
   AtomFactory, BiLedger, IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X, PaladinClient, ZetoInstance, algorithmZetoSnarkBJJ, chainIO, mintUtxos, nodeConnections, party, reportTo, swap, transfer, within,
   type Party, type Settled,
-} from '../../../../besu/zeto/src/flows.ts';
+} from '../../vendor/besu/zeto/src/flows.ts';
 
 // Zeto_AnonNullifier (V1) on Paladin, BI on node1. Issuance is private `mint` (spike: zeto/spike-private-mint.ts);
 // no setERC20 and no public tx to a Zeto contract, ever.

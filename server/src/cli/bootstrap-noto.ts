@@ -1,17 +1,18 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { BI_DATA_FILE, latestContractData, syncNoto } from '../policy/noto-config.ts';
 import { STATE_DIR, readState, writeState } from '../state.ts';
 
-const BOND_DIR = fileURLToPath(new URL('../../../../besu/noto+pente/bond/', import.meta.url));
+// The deploy script lives in the besu repo (not vendored): point LENSA_BOND_DIR at its noto+pente/bond checkout.
+const BOND_DIR = process.env.LENSA_BOND_DIR ?? '';
 
 // Fresh deployment by the project's own script: BI identities on node1, investor1..3 on node2..4.
 // Cash/supply are raised from the script defaults so a DvP at PRICE_PER_UNIT (1e6 RD per unit) is payable.
 // Refuses when state/noto.json exists: a second deployment would add a contract-data file that findLatestContractDataFile
 // may pick over the live one. Pass --force to deploy anyway.
 export async function bootstrap(): Promise<void> {
+  if (!BOND_DIR) { console.error('LENSA_BOND_DIR is not set: it must name the besu repo checkout of noto+pente/bond.'); process.exit(1); }
   if (readState('noto') && !process.argv.includes('--force')) {
     console.error('state/noto.json sudah ada: bootstrap Noto kedua akan menambah deployment baru. Jalankan ulang dengan --force jika memang diinginkan.');
     process.exit(1);

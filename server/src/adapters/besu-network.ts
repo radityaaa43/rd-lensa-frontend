@@ -3,7 +3,7 @@ import { BESU_RPC, gwFetch, paladinUrl } from '../gateway.ts';
 import type { Network, NetworkNode, Receipt, ReceiptPart } from '../adapter.ts';
 import { PARTIES, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
-import { Interface } from '../../../../besu/stealth-address/ts/chain.ts';
+import { Interface } from '../../vendor/besu/stealth-address/ts/chain.ts';
 import { EVENT_ABI } from './chain-abi.ts';
 import { kubectl, type Exec, type FabricxState } from './fabricx.ts';
 

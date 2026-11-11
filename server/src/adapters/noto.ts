@@ -9,11 +9,11 @@ import { besuNetwork, besuReceipt, paladinNodeReceipt } from './besu-network.ts'
 import { besuTrace, nameFrom } from './besu-trace.ts';
 import type { Sample } from '../stats.ts';
 // Everything Paladin goes through the bond project's modules (its SDK 1.0.0 copy is the only one in play).
-import { appendTrade, loadPlatform, type Participant, type Platform } from '../../../../besu/noto+pente/bond/src/lib/platform.ts';
-import { transferNoto } from '../../../../besu/noto+pente/bond/src/lib/transfer.ts';
-import { issueBond, issueCash } from '../../../../besu/noto+pente/bond/src/lib/issue.ts';
-import { custodianOf, executeOutright, type OnProgress, type TradeRecord } from '../../../../besu/noto+pente/bond/src/lib/outright.ts';
-import { readNotoTx, readStateHashes, readTxReceipt, tradeSpendTxIds, waitTxIndexed, watchDispatch, type NotoTxView } from '../../../../besu/noto+pente/bond/src/lib/receipts.ts';
+import { appendTrade, loadPlatform, type Participant, type Platform } from '../../vendor/besu/noto+pente/bond/src/lib/platform.ts';
+import { transferNoto } from '../../vendor/besu/noto+pente/bond/src/lib/transfer.ts';
+import { issueBond, issueCash } from '../../vendor/besu/noto+pente/bond/src/lib/issue.ts';
+import { custodianOf, executeOutright, type OnProgress, type TradeRecord } from '../../vendor/besu/noto+pente/bond/src/lib/outright.ts';
+import { readNotoTx, readStateHashes, readTxReceipt, tradeSpendTxIds, waitTxIndexed, watchDispatch, type NotoTxView } from '../../vendor/besu/noto+pente/bond/src/lib/receipts.ts';
 
 const DEADLINE = 120_000;
 const DVP_DEADLINE = 100_000; // inside the app's 120 s flow deadline

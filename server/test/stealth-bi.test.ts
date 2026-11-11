@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Wallet } from '../../../besu/stealth-address/ts/chain.ts';
+import { Wallet } from '../vendor/besu/stealth-address/ts/chain.ts';
 import { createStealthAdapter, type StealthState } from '../src/adapters/stealth.ts';
 
 // A fake chain: the chain/scan/parse layer is mocked, so the adapter's own BI rules run without a node (ARCHITECTURE.md §7.1).
@@ -8,7 +8,7 @@ const chain = vi.hoisted(() => ({
   bal: new Map<string, bigint>(),
   sender: '', // BI's address, set below
 }));
-vi.mock('../../../besu/stealth-address/ts/chain.ts', async (orig) => ({
+vi.mock('../vendor/besu/stealth-address/ts/chain.ts', async (orig) => ({
   ...(await orig<object>()),
   JsonRpcProvider: class {
     getBlockNumber = async () => 10;
@@ -26,19 +26,19 @@ vi.mock('../../../besu/stealth-address/ts/chain.ts', async (orig) => ({
   biRows: () => [], // the top-up is addressed to none of the banks
   read: () => ({ sender: chain.sender }),
 }));
-vi.mock('../../../besu/stealth-address/ts/stealth.ts', async (orig) => ({
+vi.mock('../vendor/besu/stealth-address/ts/stealth.ts', async (orig) => ({
   ...(await orig<object>()),
   scan: (anns: { owner: string; stealthAddress: string }[], viewKey: string) => anns.filter((a) => a.owner === viewKey).map((a) => ({ stealthAddress: a.stealthAddress, privateKey: '0x0' })),
   scanView: () => [],
 }));
 // the worker thread would load the real scan(): run the mocked one inline instead
 vi.mock('../src/adapters/stealth-scan.ts', async () => {
-  const { scan } = await import('../../../besu/stealth-address/ts/stealth.ts');
+  const { scan } = await import('../vendor/besu/stealth-address/ts/stealth.ts');
   return { scanOffThread: async (...a: Parameters<typeof scan>) => scan(...a) };
 });
-vi.mock('../../../besu/stealth-address/ts/bond.ts', async (orig) => ({ ...(await orig<object>()), parseBondMetadata: (m: string) => ({ amount: BigInt(m), memo: '', token: '' }) }));
-vi.mock('../../../besu/stealth-address/ts/token.ts', async (orig) => ({ ...(await orig<object>()), parseTokenMetadata: (m: string) => ({ amount: BigInt(m), memo: '', token: '' }) }));
-vi.mock('../../../besu/stealth-address/ts/memo.ts', async (orig) => ({ ...(await orig<object>()), openMemo: () => null }));
+vi.mock('../vendor/besu/stealth-address/ts/bond.ts', async (orig) => ({ ...(await orig<object>()), parseBondMetadata: (m: string) => ({ amount: BigInt(m), memo: '', token: '' }) }));
+vi.mock('../vendor/besu/stealth-address/ts/token.ts', async (orig) => ({ ...(await orig<object>()), parseTokenMetadata: (m: string) => ({ amount: BigInt(m), memo: '', token: '' }) }));
+vi.mock('../vendor/besu/stealth-address/ts/memo.ts', async (orig) => ({ ...(await orig<object>()), openMemo: () => null }));
 
 const RD = '0x' + 'aa'.repeat(20);
 const BOND = '0x' + 'bb'.repeat(20);

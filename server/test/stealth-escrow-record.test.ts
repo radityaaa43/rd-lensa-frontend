@@ -4,7 +4,7 @@ import { createStealthAdapter, type StealthState } from '../src/adapters/stealth
 // A fake chain for a bank-to-bank DvP: A holds DFABI, B holds RD, the escrow is created and funded with the bond, then B's RD transfer fails.
 const chain = vi.hoisted(() => ({ anns: [] as Record<string, unknown>[], buyerFails: true }));
 const PREDICTED = '0x' + 'ee'.repeat(20);
-vi.mock('../../../besu/stealth-address/ts/chain.ts', async (orig) => ({
+vi.mock('../vendor/besu/stealth-address/ts/chain.ts', async (orig) => ({
   ...(await orig<object>()),
   JsonRpcProvider: class {
     getBlockNumber = async () => 10;
@@ -25,13 +25,13 @@ vi.mock('../../../besu/stealth-address/ts/chain.ts', async (orig) => ({
   },
   pay: () => ({ s: { stealthAddress: '0x' + '0'.repeat(40), ephemeralPubKey: '0x', viewTag: 0 }, memo: '0x' }),
 }));
-vi.mock('../../../besu/stealth-address/ts/stealth.ts', async (orig) => ({
+vi.mock('../vendor/besu/stealth-address/ts/stealth.ts', async (orig) => ({
   ...(await orig<object>()),
   scan: (anns: { owner: string; stealthAddress: string }[], viewKey: string) => anns.filter((a) => a.owner === viewKey).map((a) => ({ stealthAddress: a.stealthAddress, privateKey: '0x' + '11'.repeat(32) })),
   scanView: () => [],
 }));
 vi.mock('../src/adapters/stealth-scan.ts', async () => {
-  const { scan } = await import('../../../besu/stealth-address/ts/stealth.ts');
+  const { scan } = await import('../vendor/besu/stealth-address/ts/stealth.ts');
   return { scanOffThread: async (...a: Parameters<typeof scan>) => scan(...a) };
 });
 const saved = vi.hoisted(() => ({ writes: 0, fail: false }));

@@ -3,8 +3,8 @@ import { BANKS, type BankId } from '../domain.ts';
 import { createStealthAdapter, type StealthState } from '../adapters/stealth.ts';
 import { withDeadline } from '../deadline.ts';
 import { writeState } from '../state.ts';
-import { JsonRpcProvider, TRANCHE_A, Wallet, contracts, deployAll, pay } from '../../../../besu/stealth-address/ts/chain.ts';
-import { generateMetaAddress } from '../../../../besu/stealth-address/ts/stealth.ts';
+import { JsonRpcProvider, TRANCHE_A, Wallet, contracts, deployAll, pay } from '../../vendor/besu/stealth-address/ts/chain.ts';
+import { generateMetaAddress } from '../../vendor/besu/stealth-address/ts/stealth.ts';
 
 const RD_OPENING = 10n ** 13n;
 const DFABI_OPENING = 10n ** 6n;
@@ -17,7 +17,7 @@ const sent = (p: Promise<{ wait(): Promise<unknown> }>) => withDeadline(p.then((
 // opening balances and writes state/stealth.json.
 export async function bootstrap(): Promise<void> {
   if (!process.env.RPC_URL || !process.env.DEPLOYER_KEY) {
-    try { process.loadEnvFile(fileURLToPath(new URL('../../../../besu/stealth-address/.env.smoke', import.meta.url))); } catch { /* reported below */ }
+    try { process.loadEnvFile(fileURLToPath(new URL('../../vendor/besu/stealth-address/.env.smoke', import.meta.url))); } catch { /* reported below */ }
   }
   const { RPC_URL, DEPLOYER_KEY } = process.env;
   if (!RPC_URL || !DEPLOYER_KEY) throw new Error('RPC_URL dan DEPLOYER_KEY belum diatur (atau stealth-address/.env.smoke tidak ada)');

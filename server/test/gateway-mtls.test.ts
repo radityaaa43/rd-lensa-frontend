@@ -8,11 +8,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { besuRequest } from '../src/adapters/stealth.ts';
 import { jsonRpc } from '../src/adapters/besu-network.ts';
 import { gwFetch, gwUrl } from '../src/gateway.ts';
-import { JsonRpcProvider } from '../../../besu/stealth-address/ts/chain.ts';
+import { JsonRpcProvider } from '../vendor/besu/stealth-address/ts/chain.ts';
 
 // A JSON-RPC server that, like the gateway's Envoy doors, refuses a client without a cert signed by the CA.
 // Certs come from the real generator script (besu/opa/mtls/gen-certs.sh), in a temp dir outside the repo.
-const GEN = new URL('../../../besu/opa/mtls/gen-certs.sh', import.meta.url).pathname;
+const GEN = new URL('../vendor/besu/opa/mtls/gen-certs.sh', import.meta.url).pathname;
 let dir = '', other = '', server: https.Server, base = '';
 
 beforeAll(async () => {
@@ -64,7 +64,7 @@ describe('gateway mTLS (LENSA_GW_MTLS_DIR)', () => {
   it('on: the Paladin client (zeto nodeConnections) presents the client cert, https replaces http', async () => {
     vi.stubEnv('LENSA_GW_MTLS_DIR', dir);
     vi.resetModules();
-    const { nodeConnections, PaladinClient } = await import('../../../besu/zeto/src/flows.ts');
+    const { nodeConnections, PaladinClient } = await import('../vendor/besu/zeto/src/flows.ts');
     const o = nodeConnections[1]!.clientOptions;
     expect(o.url).toBe('https://127.0.0.1:31648');
     const client = new PaladinClient({ ...o, url: base });

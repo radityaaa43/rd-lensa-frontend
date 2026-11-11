@@ -12,11 +12,11 @@ import { gwAgent, gwUrl, partyOfUrl } from '../gateway.ts';
 import {
   Contract, FetchRequest, JsonRpcProvider, TRANCHE_A, Wallet, announcements, artifact, biRows, cert, chainNow, contracts, pay, read,
   type Deployed, type LoggedAnnouncement,
-} from '../../../../besu/stealth-address/ts/chain.ts';
-import { parseBondMetadata } from '../../../../besu/stealth-address/ts/bond.ts';
-import { openMemo } from '../../../../besu/stealth-address/ts/memo.ts';
-import { generateMetaAddress, scan, scanView, type Found, type ViewKeyHolder } from '../../../../besu/stealth-address/ts/stealth.ts';
-import { parseTokenMetadata } from '../../../../besu/stealth-address/ts/token.ts';
+} from '../../vendor/besu/stealth-address/ts/chain.ts';
+import { parseBondMetadata } from '../../vendor/besu/stealth-address/ts/bond.ts';
+import { openMemo } from '../../vendor/besu/stealth-address/ts/memo.ts';
+import { generateMetaAddress, scan, scanView, type Found, type ViewKeyHolder } from '../../vendor/besu/stealth-address/ts/stealth.ts';
+import { parseTokenMetadata } from '../../vendor/besu/stealth-address/ts/token.ts';
 import { scanOffThread } from './stealth-scan.ts';
 
 export interface BankKeys { spendKey: string; viewKey: string; metaAddress: string; identityKey: string }
