@@ -2,7 +2,7 @@
 // (LENSA_GW_<PALADIN|FABRICX>_<BI|A|B|C>=https://<ip>:<port>) with that party's own mTLS client cert
 // (LENSA_GW_MTLS_DIR/<BI|A|B|C>/{ca.crt,lensa.crt,lensa.key}), no kubectl port-forward. Unset = today's loopback ports and one flat cert dir.
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import type { AddressInfo } from 'node:net';
@@ -13,13 +13,23 @@ import { gwEndpoint, gwFetch, gwUrl, paladinUrl } from '../src/gateway.ts';
 import { fxGateway } from '../src/adapters/fabricx.ts';
 import { probeNodes } from '../src/health.ts';
 
-const GEN = new URL('../../../besu/opa/mtls/gen-certs.sh', import.meta.url).pathname;
+// Certs are made here with openssl (no sibling-repo script, so this test also runs in CI): a CA, a server cert for 127.0.0.1 (gw-2.*) and a
+// client cert (lensa.*), written under the same file names the real generator (besu/opa/mtls/gen-certs.sh) uses.
+function makeCerts(dir: string) {
+  const sh = (...a: string[]) => execFileSync('openssl', a, { cwd: dir, stdio: 'ignore' });
+  writeFileSync(join(dir, 'ext.cnf'), 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth,clientAuth\n');
+  sh('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.crt', '-days', '2', '-subj', '/CN=test-ca');
+  for (const [name, cn] of [['gw-2', 'gw-2'], ['lensa', 'lensa']] as const) {
+    sh('req', '-newkey', 'rsa:2048', '-nodes', '-keyout', `${name}.key`, '-out', `${name}.csr`, '-subj', `/CN=${cn}`);
+    sh('x509', '-req', '-in', `${name}.csr`, '-CA', 'ca.crt', '-CAkey', 'ca.key', '-CAcreateserial', '-out', `${name}.crt`, '-days', '2', '-extfile', 'ext.cnf');
+  }
+}
 let caA = '', caB = '', root = '', tls: https.Server, plain: http.Server, tlsBase = '', plainBase = '';
 const seen: string[] = [];
 
 beforeAll(async () => {
   caA = mkdtempSync(join(tmpdir(), 'gwenv-a-')); caB = mkdtempSync(join(tmpdir(), 'gwenv-b-')); root = mkdtempSync(join(tmpdir(), 'gwenv-root-'));
-  for (const d of [caA, caB]) execFileSync(GEN, { env: { ...process.env, OPA_MTLS_DIR: d }, stdio: 'ignore' });
+  for (const d of [caA, caB]) makeCerts(d);
   // two parties with certs from DIFFERENT CAs; the server trusts only CA "A"
   for (const [party, src] of [['A', caA], ['B', caB]] as const) {
     mkdirSync(join(root, party));
