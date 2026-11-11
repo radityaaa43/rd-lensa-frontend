@@ -53,6 +53,7 @@ jobs:
           --exclude test/stealth-claim.test.ts
           --exclude test/stealth-drained.test.ts
           --exclude test/stealth-escrow-record.test.ts
+          --exclude test/stealth-hold.test.ts
           --exclude test/stealth-scan.test.ts
           --exclude test/stealth-verdict.test.ts
           --exclude test/zeto-award-coldstart.test.ts

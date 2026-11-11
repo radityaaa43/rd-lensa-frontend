@@ -43,6 +43,7 @@ const LABELS: [string, string, string, string] = ['Alamat stealth & enkripsi mem
 const FLOW_IDS: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp'];
 const PAIRS: [BankId, BankId][] = [['A', 'B'], ['B', 'C'], ['C', 'A']];
 const TX_MS = 120_000;
+const HOLD_POLL_MS = 15_000; // while a source address is held after a confirm() timeout: how often its balance is read
 const HEALTH_MS = 2000;
 const ESCROW_TTL = 600n; // seconds; the escrow is settled right away, the window only has to outlast the run
 const NO_BALANCE = 'Saldo di satu alamat stealth tidak cukup';
@@ -318,8 +319,9 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
       return r;
     };
     const gp = await gasPrice();
-    const taken: string[] = [];
-    const take = async (bank: BankId, asset: 'RD' | 'DFABI', need: bigint) => { const h = await claim(bank, asset, need); taken.push(lc(h.stealthAddress)); return h; };
+    const taken = new Map<string, 'RD' | 'DFABI'>(); // source addresses this run holds busy, with their asset
+    let timedOut = false; // a confirm() timed out: the tx may still land, so the addresses stay busy (holdAfterTimeout)
+    const take = async (bank: BankId, asset: 'RD' | 'DFABI', need: bigint) => { const h = await claim(bank, asset, need); taken.set(lc(h.stealthAddress), asset); return h; };
     // Award: the escrow's seller leg is one BI inventory address that holds enough. Short of that, one top-up tx (max(1000, amount)) first.
     const biSeller = async (): Promise<Found> => {
       const free = (await biHoldings()).filter((h) => !busy.has(lc(h.stealthAddress)));
@@ -341,7 +343,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
         if (!own) throw new Error('BI tidak menemukan DFABI yang baru diterbitkan ke alamatnya sendiri');
         busy.add(lc(own.stealthAddress));
       }
-      taken.push(lc(own.stealthAddress));
+      taken.set(lc(own.stealthAddress), 'DFABI');
       return own;
     };
     let escrowed: NonNullable<StealthState['escrowed']>[number] | undefined; // set once the escrow exists, cleared once its settle tx is in a block
@@ -423,13 +425,33 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
       const context: Ctx = { kind, stealthAddress: leg.s.stealthAddress, ephemeralPubKey: leg.s.ephemeralPubKey, memo: leg.memo, amount };
       return { txHash: rc.hash, block: rc.blockNumber, steps, context };
     } catch (e) {
+      if (e instanceof DeadlineError) timedOut = true;
       if (escrowed) {
         // A disk or permission error here must not replace the failure being reported.
         try { (state.escrowed ??= []).push(escrowed); writeState('stealth', state); } catch (w) { console.error('[stealth] escrow record not saved:', w); }
       }
       throw e;
     } finally {
-      for (const a of taken) busy.delete(a);
+      if (timedOut) holdAfterTimeout(taken);
+      else for (const a of taken.keys()) busy.delete(a);
+    }
+  }
+
+  // A confirm() timeout does not mean the tx failed: it may still land. Releasing the source address now would let the next run pick it and
+  // spend it again. So the address stays busy until a balance read shows it moved (the tx landed), or 2 x TX_MS passed (it never will). Logged.
+  function holdAfterTimeout(addrs: Map<string, 'RD' | 'DFABI'>) {
+    const until = Date.now() + 2 * TX_MS;
+    for (const [addr, asset] of addrs) {
+      console.warn(`[stealth] confirm timed out: ${addr} stays busy for up to ${(2 * TX_MS) / 1000} s`);
+      const read = () => asset === 'RD' ? reader.rd.balanceOf(addr) : reader.bond.balanceOfByPartition(TRANCHE_A, addr);
+      let base: bigint | undefined;
+      read().then((b: bigint) => { base ??= b; }, () => {});
+      const timer = setInterval(() => {
+        const release = (why: string) => { clearInterval(timer); busy.delete(addr); console.warn(`[stealth] ${addr} released: ${why}`); };
+        if (Date.now() >= until) return release('hold window over');
+        read().then((b: bigint) => { if (base !== undefined && b !== base) release('a balance read shows the tx landed'); }, () => {});
+      }, HOLD_POLL_MS);
+      timer.unref?.();
     }
   }
 
