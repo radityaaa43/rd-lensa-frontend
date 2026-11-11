@@ -1,0 +1,254 @@
+[
+ {
+  "inputs": [],
+  "stateMutability": "nonpayable",
+  "type": "constructor"
+ },
+ {
+  "inputs": [
+   {
+    "internalType": "address",
+    "name": "target",
+    "type": "address"
+   }
+  ],
+  "name": "AddressEmptyCode",
+  "type": "error"
+ },
+ {
+  "inputs": [],
+  "name": "AtomNotPending",
+  "type": "error"
+ },
+ {
+  "inputs": [
+   {
+    "components": [
+     {
+      "internalType": "bool",
+      "name": "success",
+      "type": "bool"
+     },
+     {
+      "internalType": "bytes",
+      "name": "returnData",
+      "type": "bytes"
+     }
+    ],
+    "internalType": "struct Atom.OperationResult[]",
+    "name": "result",
+    "type": "tuple[]"
+   }
+  ],
+  "name": "ExecutionResult",
+  "type": "error"
+ },
+ {
+  "inputs": [],
+  "name": "FailedCall",
+  "type": "error"
+ },
+ {
+  "inputs": [
+   {
+    "internalType": "uint256",
+    "name": "balance",
+    "type": "uint256"
+   },
+   {
+    "internalType": "uint256",
+    "name": "needed",
+    "type": "uint256"
+   }
+  ],
+  "name": "InsufficientBalance",
+  "type": "error"
+ },
+ {
+  "inputs": [],
+  "name": "InvalidInitialization",
+  "type": "error"
+ },
+ {
+  "inputs": [],
+  "name": "NotInitializing",
+  "type": "error"
+ },
+ {
+  "inputs": [],
+  "name": "ReentrancyGuardReentrantCall",
+  "type": "error"
+ },
+ {
+  "anonymous": false,
+  "inputs": [
+   {
+    "indexed": false,
+    "internalType": "enum Atom.Status",
+    "name": "status",
+    "type": "uint8"
+   }
+  ],
+  "name": "AtomStatusChanged",
+  "type": "event"
+ },
+ {
+  "anonymous": false,
+  "inputs": [
+   {
+    "indexed": false,
+    "internalType": "uint64",
+    "name": "version",
+    "type": "uint64"
+   }
+  ],
+  "name": "Initialized",
+  "type": "event"
+ },
+ {
+  "inputs": [],
+  "name": "cancel",
+  "outputs": [],
+  "stateMutability": "nonpayable",
+  "type": "function"
+ },
+ {
+  "inputs": [],
+  "name": "execute",
+  "outputs": [],
+  "stateMutability": "nonpayable",
+  "type": "function"
+ },
+ {
+  "inputs": [
+   {
+    "internalType": "uint256",
+    "name": "n",
+    "type": "uint256"
+   }
+  ],
+  "name": "getOperation",
+  "outputs": [
+   {
+    "components": [
+     {
+      "internalType": "address",
+      "name": "contractAddress",
+      "type": "address"
+     },
+     {
+      "internalType": "bytes",
+      "name": "callData",
+      "type": "bytes"
+     }
+    ],
+    "internalType": "struct Atom.Operation",
+    "name": "operation",
+    "type": "tuple"
+   }
+  ],
+  "stateMutability": "view",
+  "type": "function"
+ },
+ {
+  "inputs": [],
+  "name": "getOperationCount",
+  "outputs": [
+   {
+    "internalType": "uint256",
+    "name": "",
+    "type": "uint256"
+   }
+  ],
+  "stateMutability": "view",
+  "type": "function"
+ },
+ {
+  "inputs": [],
+  "name": "getOperations",
+  "outputs": [
+   {
+    "components": [
+     {
+      "internalType": "address",
+      "name": "contractAddress",
+      "type": "address"
+     },
+     {
+      "internalType": "bytes",
+      "name": "callData",
+      "type": "bytes"
+     }
+    ],
+    "internalType": "struct Atom.Operation[]",
+    "name": "operations",
+    "type": "tuple[]"
+   }
+  ],
+  "stateMutability": "view",
+  "type": "function"
+ },
+ {
+  "inputs": [
+   {
+    "components": [
+     {
+      "internalType": "address",
+      "name": "contractAddress",
+      "type": "address"
+     },
+     {
+      "internalType": "bytes",
+      "name": "callData",
+      "type": "bytes"
+     }
+    ],
+    "internalType": "struct Atom.Operation[]",
+    "name": "operations",
+    "type": "tuple[]"
+   }
+  ],
+  "name": "initialize",
+  "outputs": [],
+  "stateMutability": "nonpayable",
+  "type": "function"
+ },
+ {
+  "inputs": [],
+  "name": "simulate",
+  "outputs": [
+   {
+    "components": [
+     {
+      "internalType": "bool",
+      "name": "success",
+      "type": "bool"
+     },
+     {
+      "internalType": "bytes",
+      "name": "returnData",
+      "type": "bytes"
+     }
+    ],
+    "internalType": "struct Atom.OperationResult[]",
+    "name": "results",
+    "type": "tuple[]"
+   }
+  ],
+  "stateMutability": "nonpayable",
+  "type": "function"
+ },
+ {
+  "inputs": [],
+  "name": "status",
+  "outputs": [
+   {
+    "internalType": "enum Atom.Status",
+    "name": "",
+    "type": "uint8"
+   }
+  ],
+  "stateMutability": "view",
+  "type": "function"
+ }
+]

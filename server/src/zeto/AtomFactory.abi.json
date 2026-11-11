@@ -1,0 +1,79 @@
+[
+ {
+  "inputs": [],
+  "stateMutability": "nonpayable",
+  "type": "constructor"
+ },
+ {
+  "inputs": [],
+  "name": "FailedDeployment",
+  "type": "error"
+ },
+ {
+  "inputs": [
+   {
+    "internalType": "uint256",
+    "name": "balance",
+    "type": "uint256"
+   },
+   {
+    "internalType": "uint256",
+    "name": "needed",
+    "type": "uint256"
+   }
+  ],
+  "name": "InsufficientBalance",
+  "type": "error"
+ },
+ {
+  "anonymous": false,
+  "inputs": [
+   {
+    "indexed": false,
+    "internalType": "address",
+    "name": "addr",
+    "type": "address"
+   }
+  ],
+  "name": "AtomDeployed",
+  "type": "event"
+ },
+ {
+  "inputs": [
+   {
+    "components": [
+     {
+      "internalType": "address",
+      "name": "contractAddress",
+      "type": "address"
+     },
+     {
+      "internalType": "bytes",
+      "name": "callData",
+      "type": "bytes"
+     }
+    ],
+    "internalType": "struct Atom.Operation[]",
+    "name": "operations",
+    "type": "tuple[]"
+   }
+  ],
+  "name": "create",
+  "outputs": [],
+  "stateMutability": "nonpayable",
+  "type": "function"
+ },
+ {
+  "inputs": [],
+  "name": "logic",
+  "outputs": [
+   {
+    "internalType": "address",
+    "name": "",
+    "type": "address"
+   }
+  ],
+  "stateMutability": "view",
+  "type": "function"
+ }
+]
