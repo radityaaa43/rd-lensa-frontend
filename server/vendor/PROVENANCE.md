@@ -2,7 +2,7 @@
 
 Copied by scripts/vendor-siblings.sh from the private sibling repos at these commits. Do not edit files here: change the sibling, then re-run the script.
 
-besu 9890701075984aa7ccc9e27ed4eb784bf51c2189
+besu 3f1889f89c31d3201e84429d65b3d1a44caa2067
 iroha3 b273b0262d7d320ff18f00122c5d6de3b9e51266
 paladin-sdk 627cb3b6d6f9fd54baf23535d57707e236fa4232d80bb251e88eef2bed2c1fbd
 
