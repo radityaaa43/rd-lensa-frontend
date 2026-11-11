@@ -28,7 +28,9 @@ const store = { latest: fakeVersion, current: fakeVersion, history: (owner: stri
 // fake opa: assemble writes the bi data.json with the nodes (report_group per bank party), build writes the revision as the tar content; records signing keys
 class FakeOpa extends Opa {
   built: { revision: string; keyId?: string }[] = [];
+  parity: { missing: string[]; extra: string[] } = { missing: [], extra: [] };
   constructor(private readonly groups: Record<string, string>) { super('opa', '/nonexistent'); }
+  override async bundleParity(): Promise<{ missing: string[]; extra: string[] }> { return this.parity; }
   override assemble(_n: 1 | 2 | 3 | 4, bi: unknown, bank: unknown, outDir: string): void {
     mkdirSync(join(outDir, 'bi/bi/config'), { recursive: true });
     mkdirSync(join(outDir, 'bank/bank/config'), { recursive: true });
@@ -72,9 +74,9 @@ function fakeIo(opts: { refuse?: { party: string; name: string; status?: number 
   return { io, calls, stored };
 }
 
-function run(argv: string[], env: Record<string, string>, o: { groups?: Record<string, string>; io?: ReturnType<typeof fakeIo>; store?: PolicyStore } = {}) {
+function run(argv: string[], env: Record<string, string>, o: { opa?: FakeOpa; groups?: Record<string, string>; io?: ReturnType<typeof fakeIo>; store?: PolicyStore } = {}) {
   const lines: string[] = [];
-  const opa = new FakeOpa(o.groups ?? G);
+  const opa = o.opa ?? new FakeOpa(o.groups ?? G);
   const io = o.io ?? fakeIo();
   const made: string[] = [];
   const deps: CliDeps = { makeOpa: (bin) => { made.push(bin); return opa; }, store: o.store ?? store, storeDir: '/live/state/policy', makeIo: (dir) => { made.push('io:' + dir); return io.io; }, out: (l) => lines.push(l), timing: { waitMs: 50, pollMs: 5 } };
@@ -217,5 +219,30 @@ describe('--out writes the candidate tars and the evidence for review (dry run)'
     for (const n of [1, 2, 3, 4]) for (const f of ['bi', 'bank']) expect(existsSync(join(out, `node${n}`, `${f}.tar.gz`))).toBe(true);
     expect(readFileSync(join(out, 'summary.txt'), 'utf8')).toContain('nodes.node2.report_group');
     expect(r.lines.join('\n')).toContain('store /live/state/policy');
+  });
+});
+
+// besu parity FAIL 2026-11-12: the candidate tars lacked platform/sink, stealth and iroha3 rego (the vendor MANIFEST had never listed them). The CLI compares every built tar with the
+// vendored tree (Opa.bundleParity) and refuses with exit 4 BEFORE writing --out or touching any sink.
+describe('candidate parity with the vendored tree (nothing dropped)', () => {
+  it('a tar missing a vendored rego: exit 4, names the file, writes no --out, calls no sink (dry run and apply)', async () => {
+    for (const argv of [[EXPECT], ['--apply', EXPECT]]) {
+      const opa = new FakeOpa(G); opa.parity = { missing: ['bi/platform/sink/sink.rego'], extra: [] };
+      const out = join(mkdtempSync(join(tmpdir(), 'pubcli-par-')), 'cand');
+      const r = await run([...argv, `--out=${out}`], {}, { opa });
+      expect(r.rc).toBe(4);
+      expect(r.lines.join('\n')).toMatch(/node1 bi\.tar\.gz.*missing.*bi\/platform\/sink\/sink\.rego/);
+      expect(existsSync(out)).toBe(false);
+      expect(r.io.calls).toEqual([]);
+    }
+  });
+  it('an extra rego in a tar also refuses (exit 4)', async () => {
+    const opa = new FakeOpa(G); opa.parity = { missing: [], extra: ['/tmp/x/evil.rego'] };
+    expect((await run([EXPECT], {}, { opa })).rc).toBe(4);
+  });
+  it('matching tars print one parity line per tar and go on', async () => {
+    const r = await run([EXPECT], {});
+    expect(r.rc).toBe(0);
+    expect(r.lines.filter((l) => /parity ok/.test(l))).toHaveLength(8);
   });
 });

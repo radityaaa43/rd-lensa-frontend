@@ -8,7 +8,7 @@
 // - documents come from the PolicyStore's LATEST versions only (store.latest never seeds); a missing version is exit 2. --state-dir picks the store (default: the checkout's server/state/policy).
 // - --out=<dir> (dry run or apply) copies the tars and summary.txt there, readable by others (the candidate for besu's policy-docs.py diff + regress.sh).
 // - --apply needs --expect-report-groups, and both modes refuse (exit 3) when the bundle's report groups differ: the old ids must not go out.
-// Exit codes: 0 ok, 1 failed, 2 refused (configuration), 3 report-group mismatch. Never touches lensa.service or lensa.env.
+// Exit codes: 0 ok, 1 failed, 2 refused (configuration), 3 report-group mismatch, 4 a built tar differs from the vendored tree (a rego file dropped or added). Never touches lensa.service or lensa.env.
 import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -110,6 +110,16 @@ export async function runPublishCli(argv: string[], env: NodeJS.ProcessEnv, deps
       built.set(node, { dir, v });
       out(`node${node} bi.tar.gz sha256 ${sha(readFileSync(join(dir, 'bi.tar.gz')))} (${revisionOf('bi', v.bi)})`);
       out(`node${node} bank.tar.gz sha256 ${sha(readFileSync(join(dir, 'bank.tar.gz')))}`);
+      // nothing dropped: every vendored rego file must be in the tar (a missing sink/stealth/iroha3 door would deny that door at the gateways)
+      for (const name of ['bi', 'bank'] as const) {
+        const par = await opa.bundleParity(join(dir, `${name}.tar.gz`), name);
+        if (par.missing.length || par.extra.length) {
+          out(`node${node} ${name}.tar.gz PARITY FAIL missing: ${par.missing.join(', ') || '-'}; extra: ${par.extra.join(', ') || '-'}`);
+          out('refused: the candidate tar differs from the vendored tree (vendor refresh incomplete?)');
+          return 4;
+        }
+        out(`node${node} ${name}.tar.gz parity ok (every vendored rego file + merged data.json)`);
+      }
     }
     if (outDir) {
       mkdirSync(outDir, { recursive: true, mode: 0o755 });
