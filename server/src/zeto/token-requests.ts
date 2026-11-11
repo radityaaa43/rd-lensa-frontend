@@ -2,8 +2,10 @@
 // itself and sent with `client.ptx.sendTransaction`, so no vendored Paladin SDK build is needed for it.
 //
 // ABI source: IZetoFungible.abi.json is the `abi` array of the private fungible interface the vendored SDK build carries
-// (zeto-token-requests.test.ts pins it equal). Upstream path: solidity/contracts/domains/interfaces/IZetoFungible_V0.sol at the PR #1189 line,
-// IZetoFungible.sol at v1.0.0 [unverified by this agent].
+// (zeto-token-requests.test.ts pins it equal). Upstream: the interface file is `solidity/contracts/domains/interfaces/IZetoFungible.sol`
+// at paladin v1.0.0 and main 559567e38 (blob 9e185b53aa3a5e974c69da3c693576c363812d63) and was renamed `IZetoFungible_V0.sol` by PR #1189
+// (blob 85f52811507a10f2f310ea9d5f4b3092aa2178a7 at 28c72b76f). Checked: the files exist there (gh api contents); the compiled ABI was NOT
+// compared with a v1.0.0 build [unverified].
 import zetoAbi from './IZetoFungible.abi.json';
 
 export const ZETO_PRIVATE_ABI = zetoAbi as readonly Record<string, unknown>[];
