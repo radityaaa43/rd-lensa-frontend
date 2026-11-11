@@ -1,6 +1,7 @@
 // Shared live flow runner: drives the real Lensa UI the way a person does (route, asset tab, form, send),
 // waits for the four process steps, opens the lens and checks who reads what. One test per flow.
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { biVerdicts, type Bal } from './bi-delta.ts';
 
 export type Model = 'zeto' | 'noto' | 'stealth' | 'fabricx' | 'iroha3';
 type P = 'BI' | 'A' | 'B' | 'C';
@@ -28,6 +29,16 @@ const OUTSIDER: Record<Model, (flow: Flow) => Seen> = {
   iroha3: () => 'sealed', // every flow is an APS bundle in the shared pools: validators hold commitments + STARK proofs
 };
 
+// BI's own balance and the ids of its history, read through the Lensa API (the same data the UI shows).
+async function biState(request: APIRequestContext, model: Model): Promise<{ bal: Bal | null; ids: Set<string> }> {
+  const b = await request.get(`/api/balance?model=${model}&party=BI`);
+  const h = await request.get(`/api/history?model=${model}&party=BI&limit=100`);
+  const bj = b.ok() ? await b.json() : null;
+  const hj = h.ok() ? await h.json() : null;
+  const items: { id: string }[] = hj ? (hj.items ?? hj) : [];
+  return { bal: bj ? { rd: BigInt(bj.RD.amount), dfabi: BigInt(bj.DFABI.amount) } : null, ids: new Set(items.map((i) => i.id)) };
+}
+
 const route = (m: Model, screen: string, party: P) => `/${m === 'fabricx' || m === 'iroha3' ? m : `besu/${m}`}/${screen}?pihak=${party}`;
 const digits = (s: string | null) => (s ?? '').replace(/\D/g, '');
 
@@ -42,6 +53,7 @@ export function defineFlows(model: Model) {
       test.skip(!cap?.enabled, `alur ${c.flow} nonaktif: ${cap?.reason}`);
       const name = (id: P) => meta.parties[id].name as string;
       const errors = watchErrors(page);
+      const biBefore = await biState(request, model);
 
       // 1. compose, like a user: the sender is the route party, the asset is a tab, recipient and amount are form fields
       await page.goto(route(model, c.dvp ? 'dvp' : 'transfer', c.from));
@@ -93,6 +105,22 @@ export function defineFlows(model: Model) {
         if (c.dvp && !outsider) expect.soft(digits(await col.locator('.lrd').innerText()), `${id}: kaki RD`).toContain(rdDigits);
       }
       await info.attach('lensa', { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' });
+
+      // 4. BI's own balance moved as the table in bi-delta.ts says; wait for BI's history to show the new tx first (as the sweep did)
+      let biAfter = await biState(request, model);
+      for (let i = 0; i < 24 && ![...biAfter.ids].some((id) => !biBefore.ids.has(id)); i++) {
+        await page.waitForTimeout(5_000);
+        biAfter = await biState(request, model);
+      }
+      expect.soft([...biAfter.ids].some((id) => !biBefore.ids.has(id)), 'BI: transaksi baru belum terbaca di riwayat BI').toBe(true);
+      expect.soft(biBefore.bal !== null && biAfter.bal !== null, 'BI: saldo terbaca').toBe(true);
+      if (biBefore.bal && biAfter.bal) {
+        for (const v of biVerdicts(model, c.flow, biBefore.bal, biAfter.bal)) {
+          console.log(`BI-DELTA ${model} ${c.flow} ${v.cell}: ${v.status} ${v.note}`);
+          info.annotations.push({ type: `bi-delta ${v.cell}`, description: `${v.status} ${v.note}` });
+          expect.soft(v.status, `BI ${v.cell}: ${v.note}`).not.toBe('FAIL');
+        }
+      }
       expect(errors, 'error di console/halaman').toEqual([]);
     });
   }
