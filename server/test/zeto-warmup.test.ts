@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WarmingUpError } from '../src/adapter.ts';
 import { createZetoAdapter, type ZetoState } from '../src/adapters/zeto.ts';
-import { nodeConnections } from '../../../besu/zeto/src/common.ts';
+import { nodeConnections } from '../vendor/besu/zeto/src/common.ts';
 
 afterEach(() => vi.restoreAllMocks());
 

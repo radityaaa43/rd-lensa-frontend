@@ -1,4 +1,4 @@
-import { Interface } from '../../../../besu/stealth-address/ts/chain.ts';
+import { Interface } from '../../vendor/besu/stealth-address/ts/chain.ts';
 import type { Trace, TraceIO, TraceSpan, TraceStep } from '../adapter.ts';
 import { PARTIES, type PartyId } from '../domain.ts';
 import { BESU_RPC, arg, describeLog, jsonRpc, paladinUrl, short, type JsonRpc } from './besu-network.ts';

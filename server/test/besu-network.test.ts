@@ -146,7 +146,7 @@ describe('Paladin node receipt', () => {
 });
 
 // ---- event names from the vendored ABI (event-abi.ts) ----
-import { Interface } from '../../../besu/stealth-address/ts/chain.ts';
+import { Interface } from '../vendor/besu/stealth-address/ts/chain.ts';
 import { describeLog } from '../src/adapters/besu-network.ts';
 
 describe('receipt log names', () => {

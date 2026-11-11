@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { biBalance, createNotoAdapter, newNotoCache, notoHistory, notoItem, sellerFor, receiptPage, type EventLike, type NotoClient, type NotoGroup, type NotoLeg, type NotoScan, type ReceiptLike } from '../src/adapters/noto.ts';
-import type { NotoTxView } from '../../../besu/noto+pente/bond/src/lib/receipts.ts';
+import type { NotoTxView } from '../vendor/besu/noto+pente/bond/src/lib/receipts.ts';
 import type { PartyId } from '../src/domain.ts';
 
 // What each party's own node reads of a base-ledger Noto tx -> one HistoryItem (ARCHITECTURE.md §2.3). NotoTxView values are built by hand.

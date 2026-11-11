@@ -7,7 +7,7 @@ import type { Platform } from './platforms.ts';
 import type { Owner, Pending, Version } from './types.ts';
 
 export const POLICY_STATE_DIR = join(STATE_DIR, 'policy');
-export const OPA_ROOT = fileURLToPath(new URL('../../../../besu/opa', import.meta.url));
+export const OPA_ROOT = fileURLToPath(new URL('../../vendor/besu/opa', import.meta.url));
 export const SEEDS_DIR = join(OPA_ROOT, 'seeds');
 
 export interface AuditEvent {

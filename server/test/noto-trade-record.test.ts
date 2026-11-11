@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { recordedTrade } from '../src/adapters/noto.ts';
-import type { TradeRecord } from '../../../besu/noto+pente/bond/src/lib/outright.ts';
+import type { TradeRecord } from '../vendor/besu/noto+pente/bond/src/lib/outright.ts';
 
 // A DvP writes a PENDING line to trades.jsonl at each lock/delegate step (so a crash leaves the lock ids on disk) and one final line after it
 // ends. loadTrades keeps the last line per tradeId. The chain is the truth: a failing disk write never fails a trade that moved funds.

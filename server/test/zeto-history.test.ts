@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { newZetoCache, topUpFor, zetoBankItem, zetoBiItem, zetoHistory, type Held, type ZetoGroup, type ZetoScan } from '../src/adapters/zeto.ts';
-import { ZETO_MOVEMENT_TOPICS } from '../../../besu/zeto/src/bi-report.ts';
+import { ZETO_MOVEMENT_TOPICS } from '../vendor/besu/zeto/src/bi-report.ts';
 import type { EventLike } from '../src/adapters/noto.ts';
 import type { ReceiptLike } from '../src/adapters/besu-network.ts';
 import type { PartyId } from '../src/domain.ts';

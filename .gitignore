@@ -13,3 +13,6 @@ cache/
 
 # cluster kubeconfig with a client private key, never commit
 alibaba.yaml
+
+# the Foundry output Lensa reads at runtime is vendored on purpose (server/vendor/MANIFEST)
+!server/vendor/besu/stealth-address/out/

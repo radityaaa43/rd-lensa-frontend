@@ -13,7 +13,7 @@ const DFABI_OPENING = 1000n;
 // genesis ids: AssetDefinitionId::derive_from_components("rd"/"dfabi", "wonderland") (iroha3 repo, network/genesis-rd-dfabi.jq)
 const ASSETS = { RD: '7onbjg2gRXveoAAUFsohCZyGW98t', DFABI: '4mBWK1JCwQdHLDPpuVKc56eLsXka' };
 // the iroha3 repo's public bundle (chain_id, genesis.expected_hash) of the network that is running
-const PUBLIC = fileURLToPath(new URL('../../../../iroha3/network/public', import.meta.url));
+const PUBLIC = fileURLToPath(new URL('../../vendor/iroha3/network/public', import.meta.url));
 const PORT: Record<PartyId, number> = { BI: 38080, A: 38081, B: 38082, C: 38083 };
 // APS private DvP (iroha3-aps.ts): the driver image, its wallet seeds from the iroha3 repo's scripts/keys-init.sh, and the
 // bi-auditor port-forward (kubectl port-forward -n iroha3 svc/bi-auditor 38090:8090).

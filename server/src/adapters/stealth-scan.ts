@@ -1,5 +1,5 @@
 import { isMainThread, parentPort, Worker } from 'node:worker_threads';
-import { scan, type Announcement, type Found } from '../../../../besu/stealth-address/ts/stealth.ts';
+import { scan, type Announcement, type Found } from '../../vendor/besu/stealth-address/ts/stealth.ts';
 
 // Bulk stealth scans off the main thread: one curve multiplication per announcement (~4 ms), so a cold scan of a few thousand
 // announcements held Lensa's event loop for minutes after a restart and every model's reads (Iroha 3 too) timed out.

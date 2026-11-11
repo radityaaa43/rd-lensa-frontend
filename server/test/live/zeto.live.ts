@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createZetoAdapter, load, type ZetoState } from '../../src/adapters/zeto.ts';
-import { nodeConnections } from '../../../../besu/zeto/src/common.ts';
+import { nodeConnections } from '../../vendor/besu/zeto/src/common.ts';
 import { readState } from '../../src/state.ts';
 import { BANKS, PRICE_PER_UNIT, type BankId, type PartyId } from '../../src/domain.ts';
 import { type FlowRequest } from '../../src/domain.ts';

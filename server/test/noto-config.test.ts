@@ -58,10 +58,10 @@ test('latestContractData reads the newest contract-data file', () => {
 
 test('Noto health is not ready, with the drift text, when the loaded contracts are not in data.json', async () => {
   vi.resetModules();
-  vi.doMock('../../../besu/noto+pente/bond/src/lib/platform.ts', () => ({ loadPlatform: async () => ({ data: redeployed }) }));
+  vi.doMock('../vendor/besu/noto+pente/bond/src/lib/platform.ts', () => ({ loadPlatform: async () => ({ data: redeployed }) }));
   const { createNotoAdapter: create } = await import('../src/adapters/noto.ts');
   const h = await create('/unused').health();
   expect(h.ready).toBe(false);
   expect(h.detail).toMatch(/belum ada di kebijakan BI/);
-  vi.doUnmock('../../../besu/noto+pente/bond/src/lib/platform.ts');
+  vi.doUnmock('../vendor/besu/noto+pente/bond/src/lib/platform.ts');
 });

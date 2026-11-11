@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveStealth, generateMetaAddress, scan } from '../../../besu/stealth-address/ts/stealth.ts';
+import { deriveStealth, generateMetaAddress, scan } from '../vendor/besu/stealth-address/ts/stealth.ts';
 import { scanOffThread } from '../src/adapters/stealth-scan.ts';
 
 describe('scanOffThread', () => {

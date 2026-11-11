@@ -1,0 +1,32 @@
+{
+  "name": "@lfdecentralizedtrust/paladin-sdk",
+  "version": "0.0.0",
+  "description": "",
+  "main": "build/index.js",
+  "scripts": {
+    "build": "tsc",
+    "abi": "node scripts/abi.mjs",
+    "download-abi": "node scripts/contracts.mjs"
+  },
+  "author": "",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/ws": "^8.18.0",
+    "copy-file": "^11.0.0",
+    "node-fetch": "^3.3.2",
+    "tar": "^7.4.3",
+    "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "uuid": "^11.0.2",
+    "ws": "^8.18.1"
+  },
+  "peerDependencies": {
+    "axios": "^1.7.7",
+    "ethers": "^6.13.4"
+  },
+  "repository": {
+    "url": "https://github.com/LFDT-Paladin/paladin"
+  }
+}

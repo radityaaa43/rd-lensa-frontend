@@ -21,44 +21,7 @@ jobs:
           cache-dependency-path: package-lock.json
       - run: npm ci
       - run: npm test -w web
-      # This repo is checked out alone, so server tests that import the sibling
-      # repos (../../../besu, ../../../../iroha3) cannot load here; they are excluded
-      # below. No typecheck: server and web tsc both import those siblings.
-      # A new server test that imports a sibling fails this job: add it to the list
-      # or cut the import. Full CI needs the sibling imports removed (parked).
-      - run: >
-          npm test -w server --
-          --exclude test/app.test.ts
-          --exclude test/besu-network.test.ts
-          --exclude test/bi-report-paging.test.ts
-          --exclude test/error-leaks.test.ts
-          --exclude test/gateway-mtls.test.ts
-          --exclude test/iroha3-cli.test.ts
-          --exclude test/iroha3-history.test.ts
-          --exclude test/iroha3.test.ts
-          --exclude test/noto-config.test.ts
-          --exclude test/noto-exclusive.test.ts
-          --exclude test/noto-history.test.ts
-          --exclude test/noto-trade-record.test.ts
-          --exclude test/policy-boot.test.ts
-          --exclude test/policy-opa.test.ts
-          --exclude test/policy-platforms.test.ts
-          --exclude test/policy-publish.test.ts
-          --exclude test/policy-routes.test.ts
-          --exclude test/policy-store.test.ts
-          --exclude test/policy-usage.test.ts
-          --exclude test/policy-workflow.test.ts
-          --exclude test/stealth-award-order.test.ts
-          --exclude test/stealth-bi.test.ts
-          --exclude test/stealth-claim.test.ts
-          --exclude test/stealth-drained.test.ts
-          --exclude test/stealth-escrow-record.test.ts
-          --exclude test/stealth-hold.test.ts
-          --exclude test/stealth-scan.test.ts
-          --exclude test/stealth-verdict.test.ts
-          --exclude test/zeto-award-coldstart.test.ts
-          --exclude test/zeto-counterparty.test.ts
-          --exclude test/zeto-gate.test.ts
-          --exclude test/zeto-history.test.ts
-          --exclude test/zeto-stress-parties.test.ts
-          --exclude test/zeto-warmup.test.ts
+      # The server needs no sibling checkout: the code it imports from besu, iroha3 and the Paladin SDK is in server/vendor
+      # (scripts/vendor-siblings.sh, server/test/vendor-layout.test.ts), so the whole suite and tsc run here.
+      - run: npm run typecheck -w server
+      - run: npm test -w server

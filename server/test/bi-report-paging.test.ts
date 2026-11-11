@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BiLedger } from '../../../besu/zeto/src/bi-report.ts';
+import { BiLedger } from '../vendor/besu/zeto/src/bi-report.ts';
 
 // BiLedger against a fake node1 (the events / states / messages the node would page through). No contract is watched, so no commitment is
 // recomputed: the test is about the paging, which used to stop silently at 1000 events, 1000 states and one poll of 200 messages.

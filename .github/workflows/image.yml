@@ -1,0 +1,53 @@
+name: image
+
+# Builds the Lensa image and checks it. Nothing is pushed: the push to ghcr.io and the digest hand-off to the manifests
+# are added by a later PR, after the registry GO (final-design/lensa/PLAN.md S3).
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - package.json
+      - package-lock.json
+      - server/**
+      - web/**
+      - .github/workflows/image.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pin the base image by digest
+        id: base
+        run: |
+          d=$(docker buildx imagetools inspect node:22-bookworm-slim --format '{{.Manifest.Digest}}')
+          echo "image=node@$d" >> "$GITHUB_OUTPUT"
+          echo "base image node@$d" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build
+        run: docker build --build-arg NODE_IMAGE="${{ steps.base.outputs.image }}" -t rd-lensa:ci .
+      - name: Runs as a non-root user
+        run: test "$(docker image inspect rd-lensa:ci --format '{{.Config.User}}')" = "10001:10001"
+      - name: No key, cert, toml, env file or kubeconfig in /app; state dir is empty
+        run: |
+          docker run --rm --entrypoint sh rd-lensa:ci -c '
+            bad=$(find /app -xdev \( -name "*.key" -o -name "*.pem" -o -name "*.crt" -o -name "*.toml" -o -name ".env*" -o -name "alibaba.yaml" -o -name "kubeconfig*" \) -not -path "*/node_modules/*" -not -path "*/vendor/*")
+            test -z "$bad" || { echo "$bad"; exit 1; }
+            test -z "$(ls -A /app/frontend/server/state)"'
+      - name: No cluster or chain tooling in the image
+        run: docker run --rm --entrypoint sh rd-lensa:ci -c 'for t in kubectl docker opa iroha; do command -v "$t" && exit 1; done; exit 0'
+      - name: Starts and answers /api/health (no gateways configured)
+        run: |
+          docker run -d --name lensa rd-lensa:ci
+          for i in $(seq 1 30); do
+            docker exec lensa node -e "fetch('http://127.0.0.1:8790/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" && exit 0
+            sleep 2
+          done
+          docker logs lensa
+          exit 1

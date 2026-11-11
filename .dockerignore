@@ -1,0 +1,17 @@
+.git
+.github
+.worktrees
+.claude
+node_modules
+**/node_modules
+**/dist
+server/state
+server/test
+demo
+deploy
+docs
+*.md
+.env
+.env.*
+alibaba.yaml
+*.log

@@ -5,7 +5,7 @@ import { createStealthAdapter, type StealthState } from '../src/adapters/stealth
 const chain = vi.hoisted(() => ({
   mints: 0, // BI's DFABI top-up txs (asBi.bond.issueByPartitionStealth)
 }));
-vi.mock('../../../besu/stealth-address/ts/chain.ts', async (orig) => ({
+vi.mock('../vendor/besu/stealth-address/ts/chain.ts', async (orig) => ({
   ...(await orig<object>()),
   JsonRpcProvider: class {
     getBlockNumber = async () => 10;
@@ -23,7 +23,7 @@ vi.mock('../../../besu/stealth-address/ts/chain.ts', async (orig) => ({
   },
   pay: () => ({ s: { stealthAddress: '0x' + '0'.repeat(40), ephemeralPubKey: '0x', viewTag: 0 }, memo: '0x' }),
 }));
-vi.mock('../../../besu/stealth-address/ts/stealth.ts', async (orig) => ({ ...(await orig<object>()), scan: () => [], scanView: () => [] }));
+vi.mock('../vendor/besu/stealth-address/ts/stealth.ts', async (orig) => ({ ...(await orig<object>()), scan: () => [], scanView: () => [] }));
 vi.mock('../src/adapters/stealth-scan.ts', async () => ({ scanOffThread: async () => [] }));
 
 const RD = '0x' + 'aa'.repeat(20);
