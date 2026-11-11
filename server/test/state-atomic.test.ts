@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -31,6 +31,15 @@ describe('writeState is atomic', () => {
     writeState('stealth', { a: 2n, b: 'x' }, dir);
     expect(readState('stealth', dir)).toEqual({ a: 2n, b: 'x' });
     expect(readFileSync(join(dir, 'stealth.json'), 'utf8')).toBe(JSON.stringify({ a: { $bigint: '2' }, b: 'x' }, null, 2));
+    expect(readdirSync(dir)).toEqual(['stealth.json']);
+  });
+
+  it('a temp file left by a crashed earlier write (it holds keys) is removed by the next successful write', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lensa-atomic-'));
+    const stale = join(dir, 'stealth.json.99999.tmp');
+    writeFileSync(stale, '{"deployerKey":"secret"}');
+    writeState('stealth', { v: 1 }, dir);
+    expect(existsSync(stale)).toBe(false);
     expect(readdirSync(dir)).toEqual(['stealth.json']);
   });
 });

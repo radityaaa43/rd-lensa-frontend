@@ -1,4 +1,4 @@
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import type { ModelId } from './domain.ts';
@@ -21,12 +21,16 @@ export function writeState(model: ModelId, data: unknown, dir = STATE_DIR): void
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = join(dir, `${model}.json`);
   // Atomic: write a temp file in the same dir, fsync it, then rename over the target. A crash or error before the rename leaves the old file whole
-  // (a plain writeFileSync truncates it first, and a crash mid-write lost every key in it).
+  // (a plain writeFileSync truncates it first, and a crash mid-write lost every key in it). Atomic, not power-loss durable: the directory is not fsynced.
+  // A crash leaves `<file>.<pid>.tmp` holding keys: remove every such leftover before writing.
+  for (const name of readdirSync(dir)) {
+    if (name.startsWith(`${model}.json.`) && name.endsWith('.tmp')) { try { unlinkSync(join(dir, name)); } catch { /* gone already */ } }
+  }
   const tmp = `${file}.${process.pid}.tmp`;
   const json = JSON.stringify(data, (_k, v) => (typeof v === 'bigint' ? { $bigint: v.toString() } : v), 2);
   const fd = openSync(tmp, 'w', 0o600);
   try {
-    writeSync(fd, json);
+    writeFileSync(fd, json); // loops until everything is written
     fsyncSync(fd);
   } catch (e) {
     closeSync(fd);
