@@ -8,6 +8,7 @@
 #   LENSA_ENTRY     a (default: ClusterIP + port-forward under SA lensa-access) | b (adds the CLB ingress policy)
 #   LENSA_GATEWAYS  egress allow-list file (default: gateways.conf next to this script; format in that file)
 #   LENSA_ENV_FILE  KEY=VALUE lines for the ConfigMap (gateway URLs, Besu doors); optional
+#   LENSA_STORAGE_CLASS  class of the PVC (default rd-retain-essd; cluster 1 runs alicloud-essd-wffc and its PV is patched to Retain after the first bind)
 #   LENSA_IMAGE     ghcr.io/radityaaa43/rd-lensa-frontend@sha256:<64 hex>  (a tag is refused: the image is pinned by digest)
 # Needs bash + sed only. Never talks to a cluster.
 set -euo pipefail
@@ -69,7 +70,11 @@ base() {
   if [[ "$entry" == a ]]; then echo '---'; cat "$here/templates/access.yaml"; else echo '---'; cat "$here/templates/entry-b.yaml"; fi
 }
 
-volume() { cat "$here/templates/volume.yaml"; }
+volume() {
+  local sc="${LENSA_STORAGE_CLASS:-rd-retain-essd}"
+  [[ "$sc" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || die "LENSA_STORAGE_CLASS '$sc' is not a StorageClass name"
+  sed "s#storageClassName: rd-retain-essd#storageClassName: $sc#" "$here/templates/volume.yaml"
+}
 
 app() {
   local img="${LENSA_IMAGE:-}"
