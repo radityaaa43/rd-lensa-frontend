@@ -14,6 +14,7 @@ function fake(opts: { report?: string; records?: Record<string, Rec[]>; balances
     if (args.includes('committer-db-0')) {
       return opts.ledger ?? `k|\\000tr\\000${TX}\\000|32|${'11'.repeat(32)}\nk|\\000${TX}\\0000\\000|274|${'22'.repeat(32)}\nk|\\000${TX}\\0001\\000|274|${'33'.repeat(32)}\ns|1|016f00|\n`;
     }
+    if (args.includes('-c') && args.includes('db')) return ''; // a bank's own committer DB: run() lists it before a transfer (recoverCut), not a driver command
     const cmd = args.slice(args.indexOf('api') + 1);
     calls.push(cmd);
     if (cmd[0] === 'balance') return JSON.stringify({ amount: opts.balances?.[`${cmd[1]}/${cmd[2]}`] ?? '5000' });

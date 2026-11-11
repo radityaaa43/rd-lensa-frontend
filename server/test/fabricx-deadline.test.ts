@@ -1,7 +1,7 @@
 // Fabric-X with BI down: the gateway answers after ~261 s (submit 130973 ms + final 998 + report 128897, report "not delivered: ...
 // connection timed out"; fabric's bound, rdbi/cmd/driver/api.go:76-100). Envoy caps a gateway call at 300 s (scripts/k8s.py:299).
 // The Lensa side must wait at least as long as the gateway can: server default 120 s (app.ts:21) and CALL_MS 180 s (fabricx.ts:22) cut a
-// tx that commits. RED until fe raises the fabricx adapter's txDeadlineMs (310_000) and CALL_MS (305_000), lead's decision 2026-11-11.
+// tx that commits. Fixed in fabricx.ts: txDeadlineMs 340_000 (305 s fetch + 30 s lens reads + 5 s) and GW_CALL_MS 305_000 (lead, 2026-11-11).
 import { describe, expect, it, vi } from 'vitest';
 import { createFabricxAdapter, fxGateway, type Exec, type GwCall } from '../src/adapters/fabricx.ts';
 import { withDeadline } from '../src/deadline.ts';
