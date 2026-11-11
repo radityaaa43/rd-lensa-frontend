@@ -9,7 +9,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { gwEndpoint, gwFetch, gwUrl, paladinUrl } from '../src/gateway.ts';
+import { assertGatewayEnv, gwEndpoint, gwFetch, gwUrl, paladinUrl } from '../src/gateway.ts';
 import { fxGateway } from '../src/adapters/fabricx.ts';
 import { probeNodes } from '../src/health.ts';
 
@@ -126,5 +126,53 @@ describe('per-party mTLS client cert (LENSA_GW_MTLS_DIR/<party>/)', () => {
       vi.stubEnv('LENSA_GW_MTLS_DIR', half);
       expect(() => gwUrl('http://127.0.0.1:31648', 'A')).toThrow();
     } finally { rmSync(half, { recursive: true, force: true }); }
+  });
+});
+
+describe('assertGatewayEnv (startup check)', () => {
+  it('nothing set: passes (today\'s loopback ports are distinct)', () => {
+    expect(() => assertGatewayEnv()).not.toThrow();
+  });
+
+  it('all eight set to distinct host:port: passes', () => {
+    for (const [i, p] of ['BI', 'A', 'B', 'C'].entries()) {
+      vi.stubEnv(`LENSA_GW_PALADIN_${p}`, `https://10.0.0.${i + 1}:30548`);
+      vi.stubEnv(`LENSA_GW_FABRICX_${p}`, `https://10.0.1.${i + 1}:30549`);
+    }
+    expect(() => assertGatewayEnv()).not.toThrow();
+  });
+
+  it('a set value that is not an http(s) URL names the variable and refuses', () => {
+    vi.stubEnv('LENSA_GW_PALADIN_C', '10.0.0.3:30548');
+    expect(() => assertGatewayEnv()).toThrow(/LENSA_GW_PALADIN_C/);
+  });
+
+  it('two parties on the same host:port name both variables and refuse (partyOfUrl would be ambiguous)', () => {
+    vi.stubEnv('LENSA_GW_PALADIN_A', 'https://10.0.0.2:30548');
+    vi.stubEnv('LENSA_GW_PALADIN_B', 'https://10.0.0.2:30548/'); // trailing slash and same host:port
+    expect(() => assertGatewayEnv()).toThrow(/LENSA_GW_PALADIN_A.*LENSA_GW_PALADIN_B/);
+  });
+
+  it('paladin and fabricx on the same host:port also refuse', () => {
+    vi.stubEnv('LENSA_GW_PALADIN_A', 'https://10.0.0.2:30548');
+    vi.stubEnv('LENSA_GW_FABRICX_A', 'https://10.0.0.2:30548');
+    expect(() => assertGatewayEnv()).toThrow(/LENSA_GW_FABRICX_A.*LENSA_GW_PALADIN_A|LENSA_GW_PALADIN_A.*LENSA_GW_FABRICX_A/);
+  });
+
+  it('a configured URL that equals another party\'s unset default (loopback port) refuses', () => {
+    vi.stubEnv('LENSA_GW_PALADIN_A', 'http://127.0.0.1:31548'); // BI's default Paladin port, BI unset
+    expect(() => assertGatewayEnv()).toThrow(/LENSA_GW_PALADIN_A/);
+  });
+
+  it('a gateway URL equal to LENSA_BESU_RPC refuses (the Besu door belongs to BI)', () => {
+    vi.stubEnv('LENSA_BESU_RPC', 'https://10.0.0.9:30545');
+    vi.stubEnv('LENSA_GW_FABRICX_B', 'https://10.0.0.9:30545');
+    expect(() => assertGatewayEnv()).toThrow(/LENSA_BESU_RPC/);
+  });
+
+  it('the error never prints a URL value', () => {
+    vi.stubEnv('LENSA_GW_PALADIN_A', 'https://secret-host.example:30548');
+    vi.stubEnv('LENSA_GW_PALADIN_B', 'https://secret-host.example:30548');
+    expect(() => assertGatewayEnv()).toThrow(/^(?!.*secret-host)/s);
   });
 });

@@ -44,16 +44,40 @@ export const BESU_RPC = gwUrl(process.env.LENSA_BESU_RPC ?? 'http://127.0.0.1:85
 // kubeconfig. Unset: today's loopback forward (lensa-pf@*). A set value that is not an http(s) URL is an error, not a default.
 export type GwKind = 'paladin' | 'fabricx';
 const gwDefault = (kind: GwKind, p: PartyId) => (kind === 'paladin' ? 31548 + 100 * (PARTIES[p].node - 1) : 39440 + PARTIES[p].node);
-export function gwEndpoint(kind: GwKind, p: PartyId): string {
-  const name = `LENSA_GW_${kind.toUpperCase()}_${p}`;
+const gwVar = (kind: GwKind, p: PartyId) => `LENSA_GW_${kind.toUpperCase()}_${p}`;
+// The configured value of a gateway variable as a URL, or undefined when unset. A set value that is not an http(s) URL throws, naming the variable only.
+function gwConfigured(kind: GwKind, p: PartyId): URL | undefined {
+  const name = gwVar(kind, p);
   const v = process.env[name];
-  if (v) {
-    let u: URL | undefined;
-    try { u = new URL(v); } catch { /* reported below */ }
-    if (!u || (u.protocol !== 'http:' && u.protocol !== 'https:')) throw new Error(`${name} is not an http(s) URL`);
-    return gwUrl(v.replace(/\/+$/, ''), p);
+  if (!v) return undefined;
+  let u: URL | undefined;
+  try { u = new URL(v); } catch { /* reported below */ }
+  if (!u || (u.protocol !== 'http:' && u.protocol !== 'https:')) throw new Error(`${name} is not an http(s) URL`);
+  return u;
+}
+export function gwEndpoint(kind: GwKind, p: PartyId): string {
+  const u = gwConfigured(kind, p);
+  return u ? gwUrl(process.env[gwVar(kind, p)]!.replace(/\/+$/, ''), p) : gwUrl(`http://127.0.0.1:${gwDefault(kind, p)}`, p);
+}
+// Startup check (main.ts): every set gateway variable is an http(s) URL, and all gateway endpoints (configured, else the loopback default) plus
+// LENSA_BESU_RPC have pairwise distinct host:port. This closes the first-match ambiguity of partyOfUrl: a URL then belongs to exactly one party,
+// so it can never present another party's client cert. Messages name variables, never values.
+export function assertGatewayEnv(): void {
+  const seen = new Map<string, string>();
+  const add = (label: string, host: string) => {
+    const prev = seen.get(host);
+    if (prev) throw new Error(`${prev} and ${label} point at the same host:port; every party needs its own gateway endpoint`);
+    seen.set(host, label);
+  };
+  for (const p of Object.keys(PARTIES) as PartyId[]) {
+    for (const kind of ['paladin', 'fabricx'] as const) {
+      const u = gwConfigured(kind, p);
+      add(u ? gwVar(kind, p) : `default ${gwVar(kind, p)}`, u ? u.host : `127.0.0.1:${gwDefault(kind, p)}`);
+    }
   }
-  return gwUrl(`http://127.0.0.1:${gwDefault(kind, p)}`, p);
+  if (process.env.LENSA_BESU_RPC) {
+    try { add('LENSA_BESU_RPC', new URL(process.env.LENSA_BESU_RPC).host); } catch (e) { if (e instanceof TypeError) throw new Error('LENSA_BESU_RPC is not a URL'); throw e; }
+  }
 }
 export const paladinUrl = (p: PartyId) => gwEndpoint('paladin', p);
 

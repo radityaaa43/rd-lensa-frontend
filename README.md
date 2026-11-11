@@ -84,6 +84,7 @@ kalau mati. Semuanya hanya di `127.0.0.1`.
   alih setelah port itu bebas. Jangan `systemctl enable` `lensa-pf@*`: template tidak punya `[Install]`; sebuah forward
   naik saat boot hanya jika terdaftar di `Wants=`/`After=` pada `lensa.service`.
 - Konfigurasi di `~/.config/lensa/lensa.env` (mode 600, tidak masuk git; contoh: `deploy/lensa.env.example`).
+- Gateway per pihak tanpa port-forward dan tanpa kubeconfig: `LENSA_GW_PALADIN_<BI|A|B|C>` dan `LENSA_GW_FABRICX_<BI|A|B|C>` (URL `https://<ip>:<port>`), sertifikat klien per pihak di `LENSA_GW_MTLS_DIR/<BI|A|B|C>/{ca.crt,lensa.crt,lensa.key}`. Server menolak start bila nilai bukan URL http(s) atau dua endpoint memakai host:port yang sama. Setelah zeto S19 file datar (`ca.crt`, `lensa.crt`, `lensa.key`) di `LENSA_GW_MTLS_DIR` dihapus; hanya empat subfolder pihak yang tinggal.
 
 ```bash
 deploy/install.sh                       # sekali: pasang unit, buat lensa.env bila belum ada, enable; tidak menjalankan apa pun
