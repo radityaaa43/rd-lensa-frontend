@@ -116,6 +116,8 @@ npm run test:live -w server -- test/live/iroha3.live.ts    # butuh port-forward 
 
 Peragaan otomatis di browser (tur, transaksi nyata, Lensa, dengan keterangan di layar) dan modenya tanpa chain: lihat `demo/README.md`.
 
+Worktree git di `frontend/.worktrees/` (diabaikan git) tidak menemukan repo sibling lewat impor relatif `../../../../besu`; buat symlink `frontend/.worktrees/besu` dan `frontend/.worktrees/iroha3` ke folder aslinya.
+
 Tes live Paladin (zeto, noto) jalan di bawah lock supaya tidak bertabrakan:
 
 ```bash

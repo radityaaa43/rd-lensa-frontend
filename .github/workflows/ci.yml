@@ -54,4 +54,5 @@ jobs:
           --exclude test/zeto-counterparty.test.ts
           --exclude test/zeto-gate.test.ts
           --exclude test/zeto-history.test.ts
+          --exclude test/zeto-stress-parties.test.ts
           --exclude test/zeto-warmup.test.ts

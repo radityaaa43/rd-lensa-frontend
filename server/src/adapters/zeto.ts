@@ -12,7 +12,7 @@ import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
 import { REPORT_PAGE, ZETO_MOVEMENT_TOPICS, buildReport } from '../../../../besu/zeto/src/bi-report.ts';
 import {
-  AtomFactory, BiLedger, PaladinClient, ZetoInstance, chainIO, mintUtxos, nodeConnections, party, reportTo, swap, transfer, within,
+  AtomFactory, BiLedger, IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X, PaladinClient, ZetoInstance, algorithmZetoSnarkBJJ, chainIO, mintUtxos, nodeConnections, party, reportTo, swap, transfer, within,
   type Party, type Settled,
 } from '../../../../besu/zeto/src/flows.ts';
 
@@ -46,11 +46,20 @@ export function ledgerParties(
   if (!seen.length) return null;
   const reporters = new Set(seen.flatMap((v) => [...v.reporters]));
   const fromId = issuer ? LOOKUP.BI : reporters.size === 1 ? [...reporters][0] : undefined;
-  const owners = new Set(seen.map((v) => ledger.ownerOf(v.output.owner)).filter((o) => o !== fromId));
-  const from = fromId === undefined ? null : PARTY_OF.get(fromId) ?? null;
-  const to = owners.size === 1 ? PARTY_OF.get([...owners][0]!) ?? null : null;
+  const from = fromId === undefined ? null : partyOf(fromId) ?? null;
+  const owners = new Set(seen.map((v) => { const o = ledger.ownerOf(v.output.owner); return partyOf(o) ?? o; }).filter((o) => o !== fromId && o !== from));
+  const only = owners.size === 1 ? [...owners][0]! : undefined;
+  const to = only !== undefined && PARTY_IDS.includes(only as PartyId) ? (only as PartyId) : null;
   return from === null && to === null ? null : { from, to };
 }
+// A stress load user (stress-nN-ii@nodeN, adapter.ts loadLookup) is a throwaway identity of the bank on node N: BI's column names the bank.
+export function partyOf(id: string): PartyId | undefined {
+  const n = /^stress-n(\d+)-\d+@node(\d+)$/.exec(id);
+  return PARTY_OF.get(id) ?? (n && n[1] === n[2] ? BANKS.find((b) => LOOKUP[b].endsWith(`@node${n[1]}`)) : undefined);
+}
+// A load user's UTXO counts for its bank's key, so zetoBiItem sums the amount the bank received.
+export const seenAsBanks = (seen: Held[], ownerOf: (key: string) => string, ownerKey: Record<PartyId, string>): Held[] =>
+  seen.map((h) => { const p = partyOf(ownerOf(h.owner)); return p ? { ...h, owner: ownerKey[p] } : h; });
 // BI's read of one tx from its ledger (bank reports + its own states); null until every output is verified. An award is a DvP whose RD
 // leg went to BI's own key: BI is then the issuer-side party, so the ledger names BI as the sender.
 export function biRead(io: Io[], ledger: { verified: Map<string, { output: { owner: string; amount: string }; reporters: Set<string> }>; ownerOf(key: string): string }, biKey: string): { seen: Held[]; cp: Counterparty | null } | null {
@@ -273,11 +282,12 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
   const address: Record<Token, string> = { RD: state.rd, DFABI: state.dfabi };
   const zeto = (t: Token, p: Party) => new ZetoInstance(p.c, address[t]).using(p.c);
   const factory = new AtomFactory(P.BI.c, state.atomFactory);
+  const ownerBook = new Map(PARTY_IDS.map((id): [string, string] => [lower(state.owners[id]), LOOKUP[id]])); // key -> identity; load users join it
   const ledger = new BiLedger(
     P.BI.c,
     new Map([[lower(state.rd), 'RD'], [lower(state.dfabi), 'DFABI']]),
     new Map(PARTY_IDS.map((id) => [lower(state.addresses[id]), LOOKUP[id]])),
-    new Map(PARTY_IDS.map((id) => [lower(state.owners[id]), LOOKUP[id]])),
+    ownerBook,
     state.fromBlock,
   );
 
@@ -483,7 +493,7 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
       })),
       heldOf: party === 'BI' ? undefined : (hash, io) => held(party, hash, io),
       syncBi: party === 'BI' ? async () => { await within(syncBi(), DEADLINE_MS, 'Sinkron ledger BI'); } : undefined,
-      biOf: party !== 'BI' ? undefined : (io) => biRead(io, ledger, ownerKey.BI),
+      biOf: party !== 'BI' ? undefined : (io) => { const r = biRead(io, ledger, ownerKey.BI); return r && { ...r, seen: seenAsBanks(r.seen, ledger.ownerOf, ownerKey) }; },
     });
   }
 
@@ -496,9 +506,18 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
     if (!x) loadUsers.set(lookup, x = party(clients, lookup));
     return x;
   };
+  // BI's ledger names a UTXO owner by its BabyJubJub key: put each load user's key in the owner book once (every run starts with loadCapacity).
+  const booked = new Set<string>();
+  const bookKey = async (id: string) => {
+    if (booked.has(id)) return;
+    ownerBook.set(lower(await within(P.BI.c.ptx.resolveVerifier(id, algorithmZetoSnarkBJJ('zeto'), IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X), DEADLINE_MS, `Kunci ${id}`)), id);
+    booked.add(id);
+  };
   const loadUnits = async (u: LoadUser) => {
     const x = loadParty(u);
-    return Number(BigInt((await within(zeto('RD', x).balanceOf(x.v, { account: x.lookup }), DEADLINE_MS, `Saldo ${x.lookup}`)).totalBalance) / LOAD_AMOUNT);
+    const units = Number(BigInt((await within(zeto('RD', x).balanceOf(x.v, { account: x.lookup }), DEADLINE_MS, `Saldo ${x.lookup}`)).totalBalance) / LOAD_AMOUNT);
+    if (units > 0) await bookKey(x.lookup); // resolveVerifier can create a key (besu, Paladin key_resolver.go:233): only for a user that already holds UTXOs
+    return units;
   };
   const loadAll = (users: number) => BANKS.flatMap((bank) => Array.from({ length: users }, (_, i): LoadUser => ({ bank, i })));
 
@@ -531,6 +550,7 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
         for (const s of await exclusive(['BI'], () => mintUtxos(P.BI, zeto('RD', P.BI), x, short, LOAD_AMOUNT))) {
           await reportTo(state.groups[u.bank], x, 'RD', address.RD, s.receipt);
         }
+        await bookKey(x.lookup); // minted just now, so the key exists
       }
     },
     loadCirculates: true,
