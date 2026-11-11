@@ -79,3 +79,13 @@ test('Fabric-X: a sealed row in BI\'s view is a tx not yet reported by a bank; n
 test('a missing timestamp is stated, not sealed', () => {
   expect(cells({ ...base, at: null }, name).time).toBe('Tanpa cap waktu');
 });
+
+// RED until fe adds the iroha3 fee to the history row. Shape proposed by qa (lead to confirm): cells(item).fee is a text cell "Rp 1" when
+// HistoryItem.fee is "1", and absent (undefined) when the item has no fee or fee "0": the row shows fee text only when set.
+type WithFee = ReturnType<typeof cells> & { fee?: unknown };
+test('a history item with fee "1" shows the fee; no fee or fee "0" shows nothing', () => {
+  const withFee = (fee?: string) => cells({ ...base, ...(fee === undefined ? {} : { fee }) } as HistoryItem, name) as WithFee;
+  expect(withFee('1').fee).toEqual({ t: 'text', text: 'Rp 1' });
+  expect(withFee('0').fee).toBeUndefined();
+  expect(withFee().fee).toBeUndefined();
+});
