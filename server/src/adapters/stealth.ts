@@ -33,6 +33,10 @@ export interface StealthState {
   // The sending bank's own record of whom it paid (lower-case tx hash -> recipient). The chain cannot tell a sender this later:
   // the memo is encrypted to the recipient. Written by run() for every transfer a bank sends; stress-test transfers are not recorded.
   sent?: Record<string, PartyId>;
+  // DvP escrows that were created and then did not settle in this run (the buyer's funding or the settle failed). DvPEscrow.cancel() returns
+  // the funded legs to their owners once the escrow's `expiry` has passed (anyone may call it); until then the funds sit in the escrow
+  // and are in no bank's balance. A record means "look at this escrow", not "funds are stuck". The adapter never removes one.
+  escrowed?: { escrow: string; seller: string; bondAmount: string; expiry: string }[];
 }
 
 const LABELS: [string, string, string, string] = ['Alamat stealth & enkripsi memo', 'Tanda tangan & kirim transaksi', 'Masuk block Besu', 'BI memindai dengan view key'];
@@ -340,6 +344,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
       taken.push(lc(own.stealthAddress));
       return own;
     };
+    let escrowed: NonNullable<StealthState['escrowed']>[number] | undefined; // set once the escrow exists, cleared once its settle tx is in a block
     try {
       const rcv = banks[req.to as BankId];
       let kind: 'rd' | 'bond';
@@ -377,6 +382,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
           const settleCert = await cert(provider, d, state.deployerKey, 'transferByPartitionStealth', predicted, settleArgs, { expiry });
           const refundCert = await cert(provider, d, state.deployerKey, 'transferByPartition', predicted, [TRANCHE_A, terms.seller, amount], { expiry: expiry + ESCROW_TTL });
           await confirm(await serial(() => asBi.factory.create(terms, settleCert, refundCert)));
+          escrowed = { escrow: predicted, seller: terms.seller, bondAmount: amount.toString(), expiry: expiry.toString() };
           const fundCert = await cert(provider, d, state.deployerKey, 'transferByPartition', sellerSrc.stealthAddress, [TRANCHE_A, predicted, amount]);
           await confirm(await contracts(d, sellerW).bond.transferByPartition(TRANCHE_A, predicted, amount, fundCert, { gasPrice: gp }));
           await confirm(await contracts(d, buyerW).rd.transfer(predicted, price, { gasPrice: gp }));
@@ -408,6 +414,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
       }
 
       const rc = await step(2, () => confirm(tx));
+      escrowed = undefined; // settled
       if (!flow.issuer) { (state.sent ??= {})[lc(rc.hash)] = req.to; writeState('stealth', state); }
       await step(3, async () => {
         const anns = await txAnnouncements(rc.blockNumber, rc.hash, kind);
@@ -415,6 +422,9 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
       });
       const context: Ctx = { kind, stealthAddress: leg.s.stealthAddress, ephemeralPubKey: leg.s.ephemeralPubKey, memo: leg.memo, amount };
       return { txHash: rc.hash, block: rc.blockNumber, steps, context };
+    } catch (e) {
+      if (escrowed) { (state.escrowed ??= []).push(escrowed); writeState('stealth', state); }
+      throw e;
     } finally {
       for (const a of taken) busy.delete(a);
     }
