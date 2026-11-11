@@ -1,6 +1,6 @@
 // One-off republish of the Kebijakan documents through the party SINKS (path A, analyst ruling 2026-11-12). Sink mode only, never signs on the host:
 //   npm run policy:publish -w server -- [--apply] [--expect-report-groups=A=0x..,B=0x..,C=0x..] [--state-dir=<policy store>] [--out=<dir for the candidate tars>]
-// - refuses to run without LENSA_SINK_TOKENS_DIR (dir 700, one token file per party) and refuses when OPA_KEYS_DIR is set: the opa binary is built WITHOUT signing keys,
+// - refuses to run without LENSA_SINK_TOKENS_DIR (dir 700, one token file per party) and refuses when OPA_KEYS_DIR or KUBECONFIG is set (no kube credential, ever): the opa binary is built WITHOUT signing keys,
 //   so every source goes up UNSIGNED and each party's bundle-server signs it in its own namespace; BI's signed `bi` bundle is fetched back from BI's sink and relayed
 //   byte-identical to the bank sinks (the same sink client as the running Publisher, policy/sink.ts).
 // - dry run by default (no write): per party the document names, versions and sha256, for bi the sha256 of policy + platforms, the nodes.*.report_group values of the
@@ -54,6 +54,7 @@ export async function runPublishCli(argv: string[], env: NodeJS.ProcessEnv, deps
   const out = (line: string) => { report.push(line); deps.out(line); };
   if (!env.LENSA_SINK_TOKENS_DIR) { out('refused: LENSA_SINK_TOKENS_DIR is required (sink mode only; this tool never signs on the host)'); return 2; }
   if (env.OPA_KEYS_DIR) { out('refused: OPA_KEYS_DIR is set (a host signing key path); unset it, this tool uploads UNSIGNED sources and the sinks sign'); return 2; }
+  if ('KUBECONFIG' in env) { out('refused: KUBECONFIG is set; this tool uses the Lensa party certs and sink tokens only, no kube credential (unset it)'); return 2; }
   const want = expected(argv);
   if (want === 'bad') { out('refused: --expect-report-groups must be A=0x<64 hex>,B=0x<64 hex>,C=0x<64 hex>'); return 2; }
   if (apply && !want) { out('refused: --apply needs --expect-report-groups (the new report-group ids)'); return 2; }

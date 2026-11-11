@@ -97,6 +97,13 @@ describe('refusals (the CLI can never sign on the host)', () => {
     expect(r.lines.join('\n')).toMatch(/OPA_KEYS_DIR/);
     expect(r.lines.join('\n')).not.toContain('/home/x');
   });
+  it('with KUBECONFIG set (analyst R19/P2: the publish uses party certs + sink tokens, NO kube credential): exit 2, nothing built, never reads it', async () => {
+    const r = await run([EXPECT], { KUBECONFIG: '/home/x/.kube/config' });
+    expect(r.rc).toBe(2);
+    expect(r.made).toEqual([]);
+    expect(r.lines.join('\n')).toMatch(/KUBECONFIG/);
+    expect(r.lines.join('\n')).not.toContain('/home/x');
+  });
   it('--apply without --expect-report-groups: exit 2', async () => {
     const r = await run(['--apply'], {});
     expect(r.rc).toBe(2);
@@ -156,7 +163,7 @@ describe('the real sink io is only the existing one', () => {
   it('the CLI module imports no kubectl implementation', async () => {
     expect(typeof realSinkIo).toBe('function');
     const src = await import('node:fs').then((fs) => fs.readFileSync(new URL('../src/cli/policy-publish.ts', import.meta.url), 'utf8'));
-    expect(src).not.toMatch(/kubectl|child_process|OPA_KEYS_DIR\]|readFileSync\([^)]*opa-keys/);
+    expect(src).not.toMatch(/kubectl|child_process|OPA_KEYS_DIR\]|KUBECONFIG\]|\.KUBECONFIG|readFileSync\([^)]*opa-keys/);
     vi.restoreAllMocks();
   });
 });
