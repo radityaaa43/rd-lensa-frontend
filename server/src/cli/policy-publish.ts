@@ -8,14 +8,18 @@
 // - documents come from the PolicyStore's LATEST versions only (store.latest never seeds); a missing version is exit 2. --state-dir picks the store (default: the checkout's server/state/policy).
 // - --out=<dir> (dry run or apply) copies the tars and summary.txt there, readable by others (the candidate for besu's policy-docs.py diff + regress.sh).
 // - --apply needs --expect-report-groups, and both modes refuse (exit 3) when the bundle's report groups differ: the old ids must not go out.
-// Exit codes: 0 ok, 1 failed, 2 refused (configuration), 3 report-group mismatch, 4 a built tar differs from the vendored tree (a rego file dropped or added). Never touches lensa.service or lensa.env.
+// Exit codes: 0 ok, 1 failed, 2 refused (configuration), 3 report-group mismatch, 4 a built tar differs from the vendored tree (a rego file dropped or added),
+// 5 candidate mode: the candidate dir/tars do not match the expect file (checked before any network call).
+// --candidate=<dir> --expect-sha256-file=<file> [--apply]: publish the exact verified tar bytes instead of building (see runCandidate). Never touches lensa.service or lensa.env.
 import { createHash } from 'node:crypto';
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PartyId } from '../domain.ts';
 import { Opa } from '../policy/opa.ts';
 import { buildBundles, revisionOf, versionOf, type PublisherTiming } from '../policy/publish.ts';
+import type { GatewayBundles } from '../policy/kube.ts';
 import { PLATFORMS } from '../policy/platforms.ts';
 import { sinkIo, sinkKube, type SinkIo } from '../policy/sink.ts';
 import { OPA_ROOT, POLICY_STATE_DIR, PolicyStore, SEEDS_DIR } from '../policy/store.ts';
@@ -47,6 +51,152 @@ function expected(argv: string[]): Record<string, string> | null | 'bad' {
   return BANKS.every((b) => out[b]) ? out : 'bad';
 }
 
+// Waits for one gateway to report `isActive`, printing the status line; false = the sink never reported it (the caller stops).
+async function waitActive(kube: ReturnType<typeof sinkKube>, node: number, who: PartyId, isActive: (g: GatewayBundles['bundles'] | undefined) => boolean, out: (l: string) => void, timing?: PublisherTiming): Promise<boolean> {
+  const { waitMs = 180_000, pollMs = 3_000 } = timing ?? {};
+  const deadline = Date.now() + waitMs;
+  let line = '';
+  for (;;) {
+    try {
+      const g = (await kube.bundleStatus())[LABEL(node)]?.bundles;
+      const ok = isActive(g) && !g?.bi?.code && !g?.bank?.code;
+      line = `status ${who} ${LABEL(node)} bi=${g?.bi?.revision ?? 'none'} bank=${g?.bank?.revision ?? 'none'} ${ok ? 'ok' : 'NOT-ACTIVE'}${g?.bi?.code ? ` bi-code=${g.bi.code}` : ''}${g?.bank?.code ? ` bank-code=${g.bank.code}` : ''}`;
+      if (ok) { out(line); return true; }
+    } catch (e) { line = `status ${who} ${LABEL(node)} unreadable: ${(e as Error).message}`; }
+    if (Date.now() >= deadline) { out(line); return false; }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+}
+
+// Minimal ustar reader for `opa build` output (regular files only): name -> bytes.
+function untar(gz: Buffer): Map<string, Buffer> {
+  const buf = gunzipSync(gz);
+  const files = new Map<string, Buffer>();
+  for (let off = 0; off + 512 <= buf.length && buf[off] !== 0;) {
+    const name = buf.toString('latin1', off, off + 100).replace(/\0.*$/s, '');
+    const size = parseInt(buf.toString('latin1', off + 124, off + 136).replace(/\0.*$/s, '').trim() || '0', 8);
+    if (buf[off + 156] === 0x30 || buf[off + 156] === 0) files.set(name, buf.subarray(off + 512, off + 512 + size));
+    off += 512 + Math.ceil(size / 512) * 512;
+  }
+  return files;
+}
+
+// `opa build` output is NOT reproducible (random build tmp dir in every rego entry + gzip time), so a rebuild can never equal the sha256 someone verified.
+// Candidate mode publishes the EXACT verified bytes: it reads node1..4/{bi,bank}.tar.gz once, checks them against an expect file (sha256sum format, exactly those 8 paths)
+// BEFORE any network call, and uploads the very buffers it hashed.
+const TARS = [1, 2, 3, 4].flatMap((n) => ['bi', 'bank'].map((f) => `node${n}/${f}.tar.gz`));
+async function runCandidate(dir: string, expectFile: string | undefined, apply: boolean, argv: string[], env: NodeJS.ProcessEnv, deps: CliDeps, out: (l: string) => void): Promise<number> {
+  const only = argv.find((x) => x.startsWith('--parties='))?.slice('--parties='.length).split(',');
+  const ORDER: PartyId[] = ['BI', 'A', 'B', 'C'];
+  if (only && (only.some((p) => !ORDER.includes(p as PartyId)) || only.join() !== ORDER.filter((p) => only.includes(p)).join())) { out('refused: --parties must be a subset of BI,A,B,C in that order'); return 2; }
+  const wantGroups = expected(argv);
+  if (wantGroups === 'bad') { out('refused: --expect-report-groups must be A=0x<64 hex>,B=0x<64 hex>,C=0x<64 hex>'); return 2; }
+  if (apply && !wantGroups) { out('refused: --apply needs --expect-report-groups (the full report-group ids)'); return 2; }
+  const wantSignedBi = argv.find((x) => x.startsWith('--expect-signed-bi-sha256='))?.slice('--expect-signed-bi-sha256='.length);
+  if (wantSignedBi !== undefined && !/^[0-9a-f]{64}$/.test(wantSignedBi)) { out('refused: --expect-signed-bi-sha256 must be 64 hex'); return 2; }
+  if (!expectFile) { out('refused: --candidate needs --expect-sha256-file=<file> (sha256sum format, the 8 verified tars)'); return 2; }
+  const want = new Map<string, string>();
+  for (const line of readFileSync(expectFile, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))) {
+    const m = /^([0-9a-f]{64}) [ *]([^\s]+)$/.exec(line);
+    if (!m || want.has(m[2]!.replace(/^\.\//, ''))) { out('refused: --expect-sha256-file must hold lines "<64 hex>  <path>", one per tar, no duplicates'); return 2; }
+    want.set(m[2]!.replace(/^\.\//, ''), m[1]!);
+  }
+  const fail = (msg: string) => { out(`refused: ${msg}`); return 5; };
+  if (want.size !== TARS.length || !TARS.every((t) => want.has(t))) return fail(`the expect file must list exactly: ${TARS.join(', ')}`);
+  let st; try { st = lstatSync(dir); } catch { return fail(`candidate directory ${dir} not found`); }
+  if (!st.isDirectory() || (st.mode & 0o077) !== 0) return fail('the candidate directory must be a real directory with mode 0700 (it must not change between the verdict and the apply)');
+  const allowed = new Set([...TARS.map((t) => t.split('/')[0]!), 'summary.txt']);
+  for (const e of readdirSync(dir)) if (!allowed.has(e)) return fail(`extra entry ${e} in the candidate directory`);
+  const bytes = new Map<string, Buffer>();
+  for (const t of TARS) {
+    const f = join(dir, t);
+    let s; try { s = lstatSync(f); } catch { return fail(`missing tar ${t}`); }
+    if (!s.isFile()) return fail(`${t} is not a regular file`);
+    bytes.set(t, readFileSync(f));
+  }
+  for (let n = 1; n <= 4; n++) for (const e of readdirSync(join(dir, `node${n}`))) if (!['bi.tar.gz', 'bank.tar.gz'].includes(e)) return fail(`extra entry node${n}/${e}`);
+  let bad = false;
+  for (const t of TARS) {
+    const got = sha(bytes.get(t)!);
+    out(`${got}  ${t}`);
+    if (got !== want.get(t)) { out(`MISMATCH ${t}: sha256 differs from the expect file (${want.get(t)})`); bad = true; }
+  }
+  if (bad) return fail('a tar differs from the expect file; nothing was sent');
+  const rev = new Map<string, string>();
+  for (const t of TARS) {
+    try { rev.set(t, /"revision":\s*"([^"]+)"/.exec(gunzipSync(bytes.get(t)!).toString('latin1'))![1]!); } catch { return fail(`${t} is not a bundle tar (no revision)`); }
+  }
+  const biRevs = new Set([1, 2, 3, 4].map((n) => rev.get(`node${n}/bi.tar.gz`)));
+  if (biRevs.size !== 1) return fail('the four bi tars carry different revisions (the signed bi from BI is relayed to all)');
+  out('all 8 sha256 equal the expect file; 4 bi tars share one revision');
+  // what the gateways will read: the documents and report groups INSIDE the tars (printed before any network call)
+  for (let n = 1; n <= 4; n++) {
+    for (const kind of ['bi', 'bank'] as const) {
+      const t = `node${n}/${kind}.tar.gz`;
+      let cfg: { policy?: Record<string, unknown>; nodes?: Record<string, { party?: string; report_group?: string }> } | undefined;
+      let files: Map<string, Buffer>;
+      try { files = untar(bytes.get(t)!); } catch { return fail(`${t} is not a readable tar.gz`); }
+      // a signature made anywhere but in the party's own namespace is a host-made signature (R1): refuse
+      if ([...files.keys()].some((k) => /signatures\.json$/.test(k))) return fail(`${t} already carries a signature (.signatures.json); the sinks sign, nothing may be pre-signed`);
+      try { cfg = (JSON.parse(files.get('/data.json')!.toString('utf8')) as Record<string, { config?: typeof cfg }>)[kind]?.config; } catch { cfg = undefined; }
+      if (!cfg?.policy) return fail(`${t} carries no readable data.json with ${kind}.config.policy`);
+      for (const p of PLATFORMS) {
+        if (cfg.policy[p] === undefined) return fail(`${t} has no ${p} document`);
+        out(`node${n} ${kind} policy.${p} sha256 ${sha(JSON.stringify(cfg.policy[p]))}`);
+      }
+      if (kind === 'bi') {
+        const groups = Object.values(cfg.nodes ?? {}).filter((x) => x.report_group);
+        if (groups.length !== 3) return fail(`${t} does not carry exactly 3 report_group ids`);
+        for (const g of groups) {
+          out(`node${n} bi report_group ${g.party} ${g.report_group}`);
+          if (wantGroups && wantGroups[g.party ?? ''] !== g.report_group) { out(`MISMATCH node${n} bi report_group ${g.party}: expected ${wantGroups[g.party ?? ''] ?? 'none'}`); return 3; }
+        }
+      }
+    }
+  }
+  if (!apply) { out('verify done: nothing was sent'); return 0; }
+
+  const io = deps.makeIo(env.LENSA_SINK_TOKENS_DIR!);
+  const party: Record<number, PartyId> = { 1: 'BI', 2: 'A', 3: 'B', 4: 'C' };
+  const run = ORDER.filter((p) => !only || only.includes(p));
+  // the status poll covers only the parties of this call; BI's signed bi is read with a direct GET (not an upload) in call 2
+  const kube = sinkKube(io, run.length ? run : io.parties);
+  let signedBi: Buffer | undefined;
+  for (const node of NODES) {
+    if (!run.includes(party[node]!)) continue;
+    const biT = `node${node}/bi.tar.gz`, bankT = `node${node}/bank.tar.gz`;
+    try {
+      if (node === 1) {
+        await kube.applyConfigMap(`${LABEL(node)}-bundles`, { 'bi.tar.gz': bytes.get(biT)!, 'bank.tar.gz': bytes.get(bankT)! });
+        out(`POST BI bi (signed_here true) and bank (signed_here true) ok`);
+      } else {
+        // the bank tars node2..4/bi.tar.gz are verified but never uploaded: BI's one signed bi is relayed byte-identical
+        signedBi ??= await kube.biLatest();
+        const h = sha(signedBi);
+        const r = /"revision":\s*"([^"]+)"/.exec(gunzipSync(signedBi).toString('latin1'))?.[1];
+        out(`BI signed bi sha256 ${h} revision ${r ?? 'unreadable'}`);
+        if (r !== rev.get('node1/bi.tar.gz')) throw new Error('BI signed bi has another revision than the candidate bi');
+        if (wantSignedBi !== undefined && h !== wantSignedBi) throw new Error('BI signed bi sha256 differs from --expect-signed-bi-sha256');
+        await kube.applyRelayed(`${LABEL(node)}-bundles`, signedBi, bytes.get(bankT)!);
+        out(`POST ${party[node]} bi (relayed, signed_here false) and bank (signed_here true) ok`);
+      }
+    } catch (e) { out(`FAILED ${party[node]} upload: ${(e as Error).message}`); return 1; }
+    const wantBi = rev.get('node1/bi.tar.gz');
+    if (!(await waitActive(kube, node, party[node]!, (g) => g?.bi?.revision === wantBi && g?.bank?.revision === rev.get(bankT), out, deps.timing))) {
+      out(`FAILED ${party[node]}: the sink did not report the new revisions as active`); return 1;
+    }
+    if (node === 1) {
+      try {
+        const sb = await kube.biLatest();
+        out(`BI signed bi sha256 ${sha(sb)} revision ${/"revision":\s*"([^"]+)"/.exec(gunzipSync(sb).toString('latin1'))?.[1] ?? 'unreadable'} (signed in BI's own namespace; ${sb.length} bytes)`);
+      } catch (e) { out(`FAILED BI signed bi read: ${(e as Error).message}`); return 1; }
+    }
+  }
+  if (only) { out(`stopped after --parties=${only.join(',')}`); return 0; }
+  out('apply done: all four sinks report the new revisions active');
+  return 0;
+}
+
 export async function runPublishCli(argv: string[], env: NodeJS.ProcessEnv, deps: CliDeps): Promise<number> {
   const apply = argv.includes('--apply');
   const outDir = argv.find((x) => x.startsWith('--out='))?.slice('--out='.length);
@@ -55,6 +205,8 @@ export async function runPublishCli(argv: string[], env: NodeJS.ProcessEnv, deps
   if (!env.LENSA_SINK_TOKENS_DIR) { out('refused: LENSA_SINK_TOKENS_DIR is required (sink mode only; this tool never signs on the host)'); return 2; }
   if (env.OPA_KEYS_DIR) { out('refused: OPA_KEYS_DIR is set (a host signing key path); unset it, this tool uploads UNSIGNED sources and the sinks sign'); return 2; }
   if ('KUBECONFIG' in env) { out('refused: KUBECONFIG is set; this tool uses the Lensa party certs and sink tokens only, no kube credential (unset it)'); return 2; }
+  const candidate = argv.find((x) => x.startsWith('--candidate='))?.slice('--candidate='.length);
+  if (candidate !== undefined) return runCandidate(candidate, argv.find((x) => x.startsWith('--expect-sha256-file='))?.slice('--expect-sha256-file='.length), apply, argv, env, deps, out);
   const want = expected(argv);
   if (want === 'bad') { out('refused: --expect-report-groups must be A=0x<64 hex>,B=0x<64 hex>,C=0x<64 hex>'); return 2; }
   if (apply && !want) { out('refused: --apply needs --expect-report-groups (the new report-group ids)'); return 2; }
@@ -137,27 +289,16 @@ export async function runPublishCli(argv: string[], env: NodeJS.ProcessEnv, deps
     // ---- apply: node by node, BI first (node 1), stop at the first error
     const io = deps.makeIo(env.LENSA_SINK_TOKENS_DIR);
     const kube = sinkKube(io, io.parties);
-    const { waitMs = 180_000, pollMs = 3_000 } = deps.timing ?? {};
     const party: Record<number, PartyId> = { 1: 'BI', 2: 'A', 3: 'B', 4: 'C' };
     for (const node of NODES) {
       const b = built.get(node)!;
       try {
         await kube.applyConfigMap(`${LABEL(node)}-bundles`, { 'bi.tar.gz': readFileSync(join(b.dir, 'bi.tar.gz')), 'bank.tar.gz': readFileSync(join(b.dir, 'bank.tar.gz')) });
       } catch (e) { out(`FAILED ${party[node]} upload: ${(e as Error).message}`); return 1; }
-      const deadline = Date.now() + waitMs;
-      let line = '';
-      for (;;) {
-        try {
-          const g = (await kube.bundleStatus())[LABEL(node)]?.bundles;
-          const bi = versionOf(g?.bi?.revision), bank = versionOf(g?.bank?.revision);
-          const same = PLATFORMS.every((p) => bi[p] === b.v.bi[p] && bank[p] === b.v.bank[p]);
-          line = `status ${party[node]} ${LABEL(node)} bi=${g?.bi?.revision ?? 'none'} bank=${g?.bank?.revision ?? 'none'} ${same && !g?.bi?.code && !g?.bank?.code ? 'ok' : 'NOT-ACTIVE'}${g?.bi?.code ? ` bi-code=${g.bi.code}` : ''}${g?.bank?.code ? ` bank-code=${g.bank.code}` : ''}`;
-          if (same && !g?.bi?.code && !g?.bank?.code) break;
-        } catch (e) { line = `status ${party[node]} ${LABEL(node)} unreadable: ${(e as Error).message}`; }
-        if (Date.now() >= deadline) { out(line); out(`FAILED ${party[node]}: the sink did not report the new revisions as active`); return 1; }
-        await new Promise((r) => setTimeout(r, pollMs));
-      }
-      out(line);
+      if (!(await waitActive(kube, node, party[node]!, (g) => {
+        const bi = versionOf(g?.bi?.revision), bank = versionOf(g?.bank?.revision);
+        return PLATFORMS.every((p) => bi[p] === b.v.bi[p] && bank[p] === b.v.bank[p]);
+      }, out, deps.timing))) { out(`FAILED ${party[node]}: the sink did not report the new revisions as active`); return 1; }
     }
     out('apply done: all four sinks report the new revisions active');
     return 0;

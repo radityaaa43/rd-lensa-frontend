@@ -22,7 +22,13 @@ const PARTY_OF_NODE = Object.fromEntries((Object.keys(PARTIES) as PartyId[]).map
 
 // `parties` = the parties whose sink Lensa can reach (those with a token file). Errors name the party and the bundle only: never the token,
 // the URL or the sink's own text (which can carry opa's stderr).
-export function sinkKube(io: SinkIo, parties: PartyId[]): Kube {
+export type SinkKube = Kube & {
+  // BI's current signed bi bundle, fetched without uploading anything to BI (candidate mode, call 2)
+  biLatest(): Promise<Buffer>;
+  // uploads an already signed bi (signed_here must be false) and the party's own bank bundle (signed_here must be true)
+  applyRelayed(name: string, signedBi: Buffer, bank: Buffer): Promise<void>;
+};
+export function sinkKube(io: SinkIo, parties: PartyId[]): SinkKube {
   const enabled = new Set(parties);
   const call = async (party: PartyId, path: string, init: { method: 'GET' | 'POST'; body?: Buffer }) => {
     const headers: Record<string, string> = { authorization: `Bearer ${io.token(party)}` };
@@ -70,6 +76,18 @@ export function sinkKube(io: SinkIo, parties: PartyId[]): Kube {
       if (!bi || !bank) throw new Error(`${name}: bi.tar.gz and bank.tar.gz are both needed`);
       const signed = await biSigned(bi);
       if (party !== 'BI') await upload(party, 'bi', signed, false);
+      await upload(party, 'bank', bank, true);
+    },
+    async biLatest() {
+      const r = await call('BI', '/sink/bundles/bi/latest', { method: 'GET' });
+      if (r.status !== 200 || r.body.length === 0) throw new Error(`sink BI did not return the signed bundle bi (HTTP ${r.status})`);
+      return r.body;
+    },
+    async applyRelayed(name, signedBi, bank) {
+      const n = Number(/^bank-gw-([1-4])-bundles$/.exec(name)?.[1]);
+      const party = PARTY_OF_NODE[n];
+      if (!party || party === 'BI' || !enabled.has(party)) throw new Error(`no relay sink for ${name}`);
+      await upload(party, 'bi', signedBi, false);
       await upload(party, 'bank', bank, true);
     },
     async bundleStatus() {
