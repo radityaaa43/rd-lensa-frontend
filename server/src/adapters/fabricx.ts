@@ -26,6 +26,7 @@ const CALL_MS = 180_000; // one driver call: ~4 s of work, generous because a sl
 const GW_CALL_MS = 305_000;
 const TX_DEADLINE_MS = 340_000;
 const LEDGER_WAIT_MS = 20_000;
+const CUT_POLL_MS = 5_000; // see recoverCut
 const RECORDS_WAIT_MS = 10_000;
 const MAX_TX = 3; // overall in-flight operations
 const NODE: Record<PartyId, string> = { BI: 'issuer', A: 'bank2', B: 'bank3', C: 'bank4' };
@@ -99,6 +100,8 @@ export const kubectl = (s: FabricxState): Exec => async (args) => {
 // One JSON request to party's gateway (fxapi ops, serve.go). A deny by OPA is a 403 with an empty body; fxapi's own refusals and
 // view failures come as text ("FAIL ..." for a failed view).
 export type GwCall = (party: PartyId, body: Record<string, unknown>) => Promise<unknown>;
+// The gateway call was cut by Envoy's route timeout (HTTP 504) or by our own fetch timeout: the tx may still commit (see recoverCut).
+const isGatewayCut = (e: unknown) => e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError' || /\(HTTP 504\)/.test(e.message));
 export const fxGateway: GwCall = async (party, body) => {
   const name = PARTIES[party].name;
   const res = await gwFetch(gwUrl(`http://127.0.0.1:${39440 + PARTIES[party].node}/`), {
@@ -205,6 +208,25 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall) {
   const issue = (to: BankId, asset: 'RD' | 'DFABI', amount: bigint) =>
     exclusive(['BI'], () => api<TxOut>(['issue', NODE[to], TOKEN[asset], amount.toString()]));
 
+  // BI down: a transfer takes ~261 s, Envoy cuts the route at 300 s (fabric-x/panurus-itest/scripts/k8s.py:299) and our fetch at GW_CALL_MS, but
+  // the gateway still commits the tx (its handler ignores the request context). On such a cut, look for a tx id on the sender's own committer
+  // DB that was not there before the call; the BI report is then still pending, as when the driver itself answers "not delivered".
+  // No snapshot (the read failed) means no recovery: the gateway error stands. Any other error is rethrown unchanged.
+  async function recoverCut(party: PartyId, call: () => Promise<TxOut>): Promise<TxOut> {
+    let before: Set<string> | null = null;
+    try { before = new Set((await ledgerTxs(party)).map((t) => t.txId)); } catch { /* no snapshot, no recovery */ }
+    const t0 = Date.now();
+    try { return await call(); } catch (e) {
+      if (!before || !isGatewayCut(e)) throw e;
+      const elapsed = Date.now() - t0;
+      for (const end = Date.now() + LEDGER_WAIT_MS; ; await sleep(CUT_POLL_MS)) {
+        const fresh = (await ledgerTxs(party)).find((t) => !before.has(t.txId));
+        if (fresh) return { txId: fresh.txId, report: `not delivered: gateway cut after ${Math.round(elapsed / 1000)} s, BI report pending`, steps: [{ name: 'submit', ms: elapsed }] };
+        if (Date.now() >= end) throw new Error('Transaksi mungkin sudah commit setelah batas gateway; cek riwayat');
+      }
+    }
+  }
+
   async function run(req: FlowRequest, amount: bigint, onStep: (s: StepEvent) => void): Promise<FlowResult> {
     const flow = FLOWS[req.flow];
     const steps: StepEvent[] = [];
@@ -215,7 +237,8 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall) {
       : flow.issuer ? [['issue', NODE[req.to], TOKEN[flow.asset], amount.toString()], ['BI']]
       : flow.dvp ? [['swap', NODE[req.from], NODE[req.to], TOKEN.DFABI, amount.toString(), TOKEN.RD, (amount * PRICE_PER_UNIT).toString()], [req.from, req.to]]
         : [['transfer', NODE[req.from], NODE[req.to], TOKEN[flow.asset], amount.toString()], [req.from]];
-    const out = await exclusive(senders, () => api<TxOut>(cmd));
+    const sent = cmd[0] === 'transfer' || cmd[0] === 'swap'; // issue and award: BI is the sender, the BI-down case does not apply
+    const out = await exclusive(senders, () => (sent ? recoverCut(req.from, () => api<TxOut>(cmd)) : api<TxOut>(cmd)));
 
     // The driver reports its own timings; the ZK proof and the 3-of-4 endorsement are not separable from the submit.
     const ms = (name: string) => out.steps.find((s) => s.name === name)?.ms ?? 0;
