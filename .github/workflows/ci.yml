@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm test -w web
+      # This repo is checked out alone, so server tests that import the sibling
+      # repos (../../../besu, ../../../../iroha3) cannot load here; they are excluded
+      # below. No typecheck: server and web tsc both import those siblings.
+      # A new server test that imports a sibling fails this job: add it to the list
+      # or cut the import. Full CI needs the sibling imports removed (parked).
+      - run: >
+          npm test -w server --
+          --exclude test/app.test.ts
+          --exclude test/besu-network.test.ts
+          --exclude test/bi-report-paging.test.ts
+          --exclude test/error-leaks.test.ts
+          --exclude test/gateway-mtls.test.ts
+          --exclude test/iroha3-cli.test.ts
+          --exclude test/iroha3-history.test.ts
+          --exclude test/iroha3.test.ts
+          --exclude test/noto-config.test.ts
+          --exclude test/noto-exclusive.test.ts
+          --exclude test/noto-history.test.ts
+          --exclude test/policy-boot.test.ts
+          --exclude test/policy-opa.test.ts
+          --exclude test/policy-platforms.test.ts
+          --exclude test/policy-publish.test.ts
+          --exclude test/policy-routes.test.ts
+          --exclude test/policy-store.test.ts
+          --exclude test/policy-usage.test.ts
+          --exclude test/policy-workflow.test.ts
+          --exclude test/stealth-bi.test.ts
+          --exclude test/stealth-scan.test.ts
+          --exclude test/stealth-verdict.test.ts
+          --exclude test/zeto-award-coldstart.test.ts
+          --exclude test/zeto-counterparty.test.ts
+          --exclude test/zeto-gate.test.ts
+          --exclude test/zeto-history.test.ts
+          --exclude test/zeto-warmup.test.ts
