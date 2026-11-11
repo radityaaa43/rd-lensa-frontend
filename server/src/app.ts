@@ -19,6 +19,7 @@ type Adapters = Partial<Record<ModelId, ModelAdapter>>;
 const MODELS = Object.keys(MODEL_NAMES) as ModelId[];
 const PARTY_IDS = Object.keys(PARTIES) as PartyId[];
 const TX_DEADLINE_MS = 120_000;
+const BUSY_HOLD_MAX_MS = 600_000; // longest a tx slot stays held after its deadline for a run that never settles
 const HISTORY_MS = 20_000;
 const NETWORK_MS = 5_000;
 const RECEIPT_MS = 20_000;
@@ -276,8 +277,9 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     })();
     // The slot is held until the adapter's run settles, not until the client's deadline: after the deadline the run keeps going and may
     // still hold chain-side resources (stealth.ts: one tx at a time, so two awards never race for the top-up). A run that never settles
-    // frees it at 2 x the deadline, so a hung adapter cannot wedge Lensa.
-    const cap = setTimeout(() => { app.log.error(`tx ${runId}: run did not settle in ${2 * deadlineMs / 1000} s, busy released`); release(); }, 2 * deadlineMs);
+    // frees it at 2 x the deadline, at most BUSY_HOLD_MAX_MS, so a hung adapter cannot wedge Lensa.
+    const holdMs = Math.min(2 * deadlineMs, BUSY_HOLD_MAX_MS);
+    const cap = setTimeout(() => { app.log.error(`tx ${runId}: run did not settle in ${holdMs / 1000} s, busy released`); release(); }, holdMs);
     cap.unref();
     work.then(() => {}, () => {}).finally(() => { clearTimeout(cap); release(); });
     try {

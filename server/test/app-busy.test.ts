@@ -1,6 +1,6 @@
 // app.ts frees the global tx slot only when the adapter's run() settles, not when the client's deadline fires: after a deadline the run
 // keeps going (stealth.ts "one tx at a time, so two awards never race for the top-up", a Fabric-X tx still committing). A run that never
-// settles frees the slot at 2 x txDeadlineMs so a hung adapter cannot wedge Lensa.
+// settles frees the slot at 2 x txDeadlineMs, at most 10 min, so a hung adapter cannot wedge Lensa.
 import { afterEach, expect, test, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
@@ -47,5 +47,18 @@ test('(b) a run that never settles frees the slot at 2 x txDeadlineMs', async ()
   await vi.advanceTimersByTimeAsync(2 * DEADLINE - 1_000);
   expect((await post(app)).statusCode).toBe(409);
   await vi.advanceTimersByTimeAsync(1_500);
+  expect((await post(app)).statusCode).toBe(202);
+});
+
+test('(c) the hold after a deadline is capped at 10 min even for a long txDeadlineMs (fabricx 745 s)', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const z = fakeAdapter('zeto');
+  z.txDeadlineMs = 400_000; // 2 x = 800 s, capped at 600 s
+  z.run = () => new Promise(() => {});
+  app = buildApp({ zeto: z }, { probe });
+  expect((await post(app)).statusCode).toBe(202);
+  await vi.advanceTimersByTimeAsync(599_000);
+  expect((await post(app)).statusCode).toBe(409);
+  await vi.advanceTimersByTimeAsync(2_000);
   expect((await post(app)).statusCode).toBe(202);
 });
