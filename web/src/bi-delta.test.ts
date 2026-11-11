@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BI_WANT, biVerdicts, need, type Flow, type Model } from '../e2e/flows/bi-delta.ts';
+import { BI_WANT, biVerdicts, need, short, type Flow, type Model } from '../e2e/flows/bi-delta.ts';
 
 const MODELS: Model[] = ['zeto', 'noto', 'stealth', 'fabricx', 'iroha3'];
 const FLOWS: Flow[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp', 'award'];
@@ -34,8 +34,11 @@ describe('biVerdicts', () => {
     expect(biVerdicts('noto', 'dfabi-issue', bal(0n, 3n), bal(0n, 0n))[1].status).toBe('PASS');
     expect(biVerdicts('noto', 'dfabi-issue', bal(0n, 3n), bal(0n, 1n))[1].status).toBe('FAIL');
   });
-  it('need: noto award needs custodian DFABI 1, noto dfabi-issue 3; other platforms and flows 0', () => {
-    expect([need('noto', 'award'), need('noto', 'dfabi-issue'), need('noto', 'dvp'), need('zeto', 'award'), need('iroha3', 'dfabi-issue')]).toEqual([1n, 3n, 0n, 0n, 0n]);
+  it('need: noto and iroha3 award / dfabi-issue need the amount; zeto, stealth and other flows 0', () => {
+    expect([need('noto', 'award'), need('noto', 'dfabi-issue'), need('iroha3', 'dfabi-issue'), need('iroha3', 'award'), need('noto', 'dvp'), need('zeto', 'award')]).toEqual([1n, 3n, 3n, 1n, 0n, 0n]);
+  });
+  it('short: noto skips when stock < need, iroha3 when stock <= need (one note strictly > amount)', () => {
+    expect([short('noto', 'dfabi-issue', 2n), short('noto', 'dfabi-issue', 3n), short('iroha3', 'dfabi-issue', 3n), short('iroha3', 'dfabi-issue', 4n), short('zeto', 'award', 0n)]).toEqual([true, false, true, false, false]);
   });
   it('fabricx award: DFABI 0 is asserted even with zero stock (no precondition)', () => {
     expect(biVerdicts('fabricx', 'award', bal(0n, 0n), bal(1_000_000n, 0n)).map((x) => x.status)).toEqual(['PASS', 'PASS']);
@@ -49,9 +52,8 @@ describe('biVerdicts', () => {
     expect(biVerdicts('iroha3', 'rd-issue', bal(5000n, 5n), bal(4000n, 5n))[0]).toMatchObject({ status: 'FAIL', note: 'delta -1000, want -1001' });
     expect(biVerdicts('iroha3', 'dfabi-transfer', bal(5n, 5n), bal(5n, 5n))[0]).toMatchObject({ status: 'FAIL', note: 'delta 0, want -1' });
   });
-  it('iroha3 dfabi-issue: RD -1 and DFABI -3 PASS; DFABI stock 2 is SKIP', () => {
+  it('iroha3 dfabi-issue: RD -1 and DFABI -3 PASS', () => {
     expect(biVerdicts('iroha3', 'dfabi-issue', bal(10n, 10n), bal(9n, 7n)).map((x) => x.status)).toEqual(['PASS', 'PASS']);
-    expect(biVerdicts('iroha3', 'dfabi-issue', bal(10n, 2n), bal(9n, 2n))[1].status).toBe('SKIP');
   });
   it('noto dfabi-issue also asserts BI RD 0', () => {
     expect(biVerdicts('noto', 'dfabi-issue', bal(7n, 3n), bal(8n, 0n))[0]).toMatchObject({ cell: 'RD', status: 'FAIL', note: 'delta 1, want 0' });

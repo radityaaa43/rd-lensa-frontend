@@ -1,7 +1,7 @@
 // Shared live flow runner: drives the real Lensa UI the way a person does (route, asset tab, form, send),
 // waits for the four process steps, opens the lens and checks who reads what. One test per flow.
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { biVerdicts, need, type Bal } from './bi-delta.ts';
+import { AMOUNT, biVerdicts, need, short, type Bal } from './bi-delta.ts';
 
 export type Model = 'zeto' | 'noto' | 'stealth' | 'fabricx' | 'iroha3';
 type P = 'BI' | 'A' | 'B' | 'C';
@@ -10,12 +10,12 @@ type Seen = 'clear' | 'partial' | 'sealed';
 
 interface Case { flow: Flow; from: P; to: P; amount: string; asset: 'RD' | 'DFABI'; dvp: boolean; button: string }
 const CASES: Case[] = [
-  { flow: 'rd-issue', from: 'BI', to: 'C', amount: '1000', asset: 'RD', dvp: false, button: 'Terbitkan' },
-  { flow: 'rd-transfer', from: 'A', to: 'B', amount: '1000', asset: 'RD', dvp: false, button: 'Kirim transaksi' },
-  { flow: 'dfabi-issue', from: 'BI', to: 'C', amount: '3', asset: 'DFABI', dvp: false, button: 'Terbitkan' },
-  { flow: 'dfabi-transfer', from: 'A', to: 'B', amount: '2', asset: 'DFABI', dvp: false, button: 'Kirim transaksi' },
-  { flow: 'dvp', from: 'A', to: 'B', amount: '1', asset: 'DFABI', dvp: true, button: 'Jalankan DvP' },
-  { flow: 'award', from: 'BI', to: 'C', amount: '1', asset: 'DFABI', dvp: true, button: 'Jalankan penjualan' },
+  { flow: 'rd-issue', from: 'BI', to: 'C', amount: String(AMOUNT['rd-issue']), asset: 'RD', dvp: false, button: 'Terbitkan' },
+  { flow: 'rd-transfer', from: 'A', to: 'B', amount: String(AMOUNT['rd-transfer']), asset: 'RD', dvp: false, button: 'Kirim transaksi' },
+  { flow: 'dfabi-issue', from: 'BI', to: 'C', amount: String(AMOUNT['dfabi-issue']), asset: 'DFABI', dvp: false, button: 'Terbitkan' },
+  { flow: 'dfabi-transfer', from: 'A', to: 'B', amount: String(AMOUNT['dfabi-transfer']), asset: 'DFABI', dvp: false, button: 'Kirim transaksi' },
+  { flow: 'dvp', from: 'A', to: 'B', amount: String(AMOUNT['dvp']), asset: 'DFABI', dvp: true, button: 'Jalankan DvP' },
+  { flow: 'award', from: 'BI', to: 'C', amount: String(AMOUNT['award']), asset: 'DFABI', dvp: true, button: 'Jalankan penjualan' },
 ];
 const RETRIES = 5; // "Coba lagi" presses on a busy node, 15 s apart
 const PRICE_PER_UNIT = 1_000_000n; // server/src/domain.ts: 1 DFABI unit costs this many RD
@@ -56,8 +56,8 @@ export function defineFlows(model: Model) {
       const name = (id: P) => meta.parties[id].name as string;
       const errors = watchErrors(page);
       const biBefore = await biState(request, model);
-      // noto rejects award / dfabi-issue before any lock when BI's custodian holds less DFABI than the flow sells (see `need`)
-      test.skip(!!biBefore.bal && biBefore.bal.dfabi < need(model, c.flow), `precondition: custodian DFABI=${biBefore.bal?.dfabi} < need ${need(model, c.flow)}`);
+      // noto and iroha3 cannot run award / dfabi-issue when BI holds too little DFABI (see `short`): skip, not a delta FAIL
+      test.skip(!!biBefore.bal && short(model, c.flow, biBefore.bal.dfabi), `precondition: BI DFABI=${biBefore.bal?.dfabi} does not cover ${need(model, c.flow)}`);
 
       // 1. compose, like a user: the sender is the route party, the asset is a tab, recipient and amount are form fields
       await page.goto(route(model, c.dvp ? 'dvp' : 'transfer', c.from));
