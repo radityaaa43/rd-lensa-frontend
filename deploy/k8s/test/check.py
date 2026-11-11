@@ -99,6 +99,11 @@ vol = docs(["volume"])
 pvc = name(vol, "PersistentVolumeClaim", "lensa-state")
 check(pvc["spec"].get("storageClassName") == "rd-retain-essd" and pvc["spec"]["resources"]["requests"]["storage"] == "5Gi" and pvc["spec"]["accessModes"] == ["ReadWriteOnce"], f"pvc spec {pvc['spec']}")
 check(len(vol) == 1, "volume renders only the PVC (Secrets are created by their owners, never rendered)")
+fb = name(docs(["volume"], {"LENSA_STORAGE_CLASS": "alicloud-essd-wffc"}), "PersistentVolumeClaim", "lensa-state")
+check(fb["spec"].get("storageClassName") == "alicloud-essd-wffc", "LENSA_STORAGE_CLASS overrides the class (cluster 1 runs the alicloud-essd-wffc fallback + PV patched Retain)")
+for bad in ["", "Bad Class", "a/b", "x;y"]:
+    if bad == "": continue
+    check(run(["volume"], {"LENSA_STORAGE_CLASS": bad}).returncode != 0, f"LENSA_STORAGE_CLASS {bad!r} must be refused")
 
 # ---- app (S6)
 check(run(["app"], {"LENSA_IMAGE": "ghcr.io/radityaaa43/rd-lensa-frontend:latest"}).returncode != 0, "app: an image without @sha256 digest is refused")

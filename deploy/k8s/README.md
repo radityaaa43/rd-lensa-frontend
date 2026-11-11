@@ -5,7 +5,7 @@ Source of truth: `final-design/lensa/PLAN.md` in platform-exploration. These fil
 ```bash
 deploy/k8s/test.sh                        # offline test: bash + python3 + PyYAML
 deploy/k8s/render.sh base                 # namespace, default-deny, DNS and gateway egress policies, SAs and Roles (entry A)
-deploy/k8s/render.sh volume               # PVC lensa-state 5Gi, StorageClass rd-retain-essd
+deploy/k8s/render.sh volume               # PVC lensa-state 5Gi, StorageClass rd-retain-essd (LENSA_STORAGE_CLASS overrides)
 LENSA_IMAGE=ghcr.io/radityaaa43/rd-lensa-frontend@sha256:<digest> LENSA_ENV_FILE=<file> deploy/k8s/render.sh app
 ```
 
@@ -16,3 +16,5 @@ LENSA_IMAGE=ghcr.io/radityaaa43/rd-lensa-frontend@sha256:<digest> LENSA_ENV_FILE
 - The image must be a ghcr digest reference of `ghcr.io/radityaaa43/rd-lensa-frontend`; a tag is refused.
 
 Not verified offline [unverified until S4a/S6 run]: that the cluster CNI lets `kubectl port-forward` reach a pod under `default-deny-all` (kubelet-originated traffic is normally exempt); the CoreDNS label `k8s-app=kube-dns`; the pod's real CPU and memory (the numbers in `templates/app.yaml` are starting values).
+
+Cluster 1 today: `rd-retain-essd` does not exist there, so `lensa-state` runs on `alicloud-essd-wffc` (applied with `LENSA_STORAGE_CLASS=alicloud-essd-wffc`). That class deletes the disk with the claim, so after the first bind (the S6 pod) only that PV's `spec.persistentVolumeReclaimPolicy` is patched to `Retain`.
