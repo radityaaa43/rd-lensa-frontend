@@ -515,8 +515,9 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
   };
   const loadUnits = async (u: LoadUser) => {
     const x = loadParty(u);
-    await bookKey(x.lookup);
-    return Number(BigInt((await within(zeto('RD', x).balanceOf(x.v, { account: x.lookup }), DEADLINE_MS, `Saldo ${x.lookup}`)).totalBalance) / LOAD_AMOUNT);
+    const units = Number(BigInt((await within(zeto('RD', x).balanceOf(x.v, { account: x.lookup }), DEADLINE_MS, `Saldo ${x.lookup}`)).totalBalance) / LOAD_AMOUNT);
+    if (units > 0) await bookKey(x.lookup); // resolveVerifier can create a key (besu, Paladin key_resolver.go:233): only for a user that already holds UTXOs
+    return units;
   };
   const loadAll = (users: number) => BANKS.flatMap((bank) => Array.from({ length: users }, (_, i): LoadUser => ({ bank, i })));
 
@@ -549,6 +550,7 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
         for (const s of await exclusive(['BI'], () => mintUtxos(P.BI, zeto('RD', P.BI), x, short, LOAD_AMOUNT))) {
           await reportTo(state.groups[u.bank], x, 'RD', address.RD, s.receipt);
         }
+        await bookKey(x.lookup); // minted just now, so the key exists
       }
     },
     loadCirculates: true,
