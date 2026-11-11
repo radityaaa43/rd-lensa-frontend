@@ -62,6 +62,11 @@ export class PolicyStore {
     return [v1];
   }
 
+  // The highest stored version, or null. Unlike history()/current() it never seeds and never writes (the publish CLI must not publish a seed v1).
+  latest(owner: Owner, platform: Platform): Version | null {
+    return this.read(owner, platform)[0] ?? null;
+  }
+
   current(owner: Owner, platform: Platform): Version {
     return this.history(owner, platform)[0]!;
   }
