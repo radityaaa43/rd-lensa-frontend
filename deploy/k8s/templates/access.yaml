@@ -1,0 +1,36 @@
+# Entry option A (README user answer L1): viewers reach Lensa with `kubectl -n rd-lensa port-forward svc/lensa 8790:8790` under a token of this SA.
+# It can list its pod, read the Service and open a port-forward: nothing else (no secrets, no exec, no create).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lensa-access
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lensa-access
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa}
+rules:
+  - apiGroups: [""]
+    resources: [pods, services]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [pods/portforward]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lensa-access
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: lensa-access}
+subjects:
+  - {kind: ServiceAccount, name: lensa-access, namespace: rd-lensa}
