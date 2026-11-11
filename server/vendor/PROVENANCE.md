@@ -14,4 +14,4 @@ paladin-sdk is not a git checkout: the line above is the sha256 of the sorted pe
 
 Owned file, not copied: server/src/zeto/IZetoFungible_V1.abi.json is the abi array of IZetoFungible_V1 compiled from solidity/contracts/domains/interfaces/IZetoFungible_V1.sol at the head of Paladin PR #1189 (28c72b76fda49d0e7c317432880f167a60da2f78). It is a PR-origin artifact (the file is absent at paladin v1.0.0 and at main 559567e38), the wire contract of the running fork image, NOT a zeto v0.5.1 artifact. sha256 9d96e3dcf37849ba6ebeeca0cc593c6b72017a8158be21975716402d792e2f37.
 
-Files: server/vendor/MANIFEST (138 entries).
+Files: server/vendor/MANIFEST (139 entries).

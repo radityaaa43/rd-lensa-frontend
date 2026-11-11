@@ -25,6 +25,14 @@ jobs:
       # (scripts/vendor-siblings.sh, server/test/vendor-layout.test.ts), so the whole suite and tsc run here.
       - run: npm run typecheck -w server
       - run: npm run check:load -w server # the real tsx loader, not vitest: every adapter and the app must import
+      # The sink contract test (server/test/sink-contract.test.ts) runs the REAL bundle-server sink.py with a throwaway key and a real opa. Official release, sha256 pinned;
+      # only SINK_CONTRACT_OPA is set (not OPA_BIN), so the other opa-binary tests stay skipped as before.
+      - name: opa v1.21.1 for the sink contract test
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/opa" https://github.com/open-policy-agent/opa/releases/download/v1.21.1/opa_linux_amd64_static
+          echo "668506eb17a2eaa1fce6cc0d1f42ef85125d4ac5bda5fc74d1152d0c77145031  $RUNNER_TEMP/opa" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/opa"
+          echo "SINK_CONTRACT_OPA=$RUNNER_TEMP/opa" >> "$GITHUB_ENV"
       - run: npm test -w server
       - run: deploy/k8s/test.sh
       - run: deploy/mtls/test.sh

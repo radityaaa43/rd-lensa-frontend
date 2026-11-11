@@ -19,15 +19,16 @@ test('expectedFiles lists the sink, stealth and iroha3 doors for both bundles (b
   for (const name of ['bi', 'bank'] as const) {
     const files = opa.expectedFiles(name);
     for (const door of ['sink', 'stealth', 'iroha3', 'fabricx']) expect(files).toContain(`${name}/platform/${door}/${door}.rego`);
+    expect(files).toContain('.manifest'); expect(files).toContain(`${name}/config/data.json`);
   }
 });
 
-test.skipIf(need)('a real unsigned build carries exactly the expected files (nothing dropped, nothing added)', async () => {
+test.skipIf(need)('a real source bundle carries exactly the expected files (nothing dropped, nothing added)', async () => {
   const opa = new Opa(process.env.OPA_BIN!, OPA_ROOT);
   const dir = mkdtempSync(join(tmpdir(), 'lensa-parity-')); tmps.push(dir);
   opa.assemble(1, seed<BiPolicy>('bi'), seed<BankPolicy>('bank-a'), dir);
   for (const name of ['bi', 'bank'] as const) {
-    await opa.build(join(dir, name), 'r', join(dir, `${name}.tar.gz`));
+    opa.sourceBundle(join(dir, name), 'r', join(dir, `${name}.tar.gz`));
     expect(await opa.bundleParity(join(dir, `${name}.tar.gz`), name)).toEqual({ missing: [], extra: [] });
   }
 });
