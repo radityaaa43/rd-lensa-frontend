@@ -14,7 +14,57 @@ const agents = new Map<string, https.Agent>();
 // LENSA_GW_MTLS_DIR_FABRICX (optional, until fabricx S19; analyst Q15): the cert directory for Fabric-X gateway targets (TLS servername fx-gw-N). At the
 // zeto cutover the host moves to the per-party certs, but the OLD fx-gw trust the flat Lensa CA only. Unset = LENSA_GW_MTLS_DIR for every gateway as before.
 // mTLS itself stays on/off by LENSA_GW_MTLS_DIR; a set but unreadable directory is an error, never a fallback.
+// Iroha 3 (iroha S14.C): every request to a party's Iroha (driver routes and Torii reads) goes through that party's mTLS gateway, reached through a Lensa loopback
+// forward of svc/gateway:8443. LENSA_GW_IROHA_<P>=https://127.0.0.1:<port> (unset = today's plain loopback mode). The gateway certificate has a DNS SAN only
+// (gateway.rd-iroha3-<ns>.svc.cluster.local, no IP SAN): connect to the forward, SNI and hostname check on that name. LENSA_GW_MTLS_DIR_IROHA/<P>/ holds server-ca.pem
+// (the party's gateway SERVER CA, the only trust), lensa.crt (CN=lensa from that party's separate Iroha client CA) and lensa.key. Independent of LENSA_GW_MTLS_DIR.
+const IROHA_NS: Record<PartyId, string> = { BI: 'bi', A: 'bank-a', B: 'bank-b', C: 'bank-c' };
+export const irohaServername = (p: PartyId): string => `gateway.rd-iroha3-${IROHA_NS[p]}.svc.cluster.local`;
+const IROHA_SN = /^gateway\.rd-iroha3-(bi|bank-a|bank-b|bank-c)\.svc\.cluster\.local$/;
+export function irohaGateway(p: PartyId): string | undefined {
+  const name = `LENSA_GW_IROHA_${p}`;
+  const v = process.env[name];
+  if (!v) return undefined;
+  let u: URL | undefined;
+  try { u = new URL(v); } catch { /* reported below */ }
+  if (!u || (u.protocol !== 'http:' && u.protocol !== 'https:')) throw new Error(`${name} is not an http(s) URL`);
+  return u.href.endsWith('/') ? u.href : `${u.href}/`;
+}
+// The state of the Iroha adapter with the gateway as BOTH the Torii and the driver base of every configured party (a copy; the others keep the state values).
+export function withIrohaGateways<S extends { torii: Record<PartyId, string>; drivers?: Record<PartyId, string> }>(s: S): S {
+  const torii = { ...s.torii };
+  const drivers = s.drivers ? { ...s.drivers } : undefined;
+  for (const p of Object.keys(PARTIES) as PartyId[]) {
+    const g = irohaGateway(p);
+    if (!g) continue;
+    torii[p] = g;
+    if (drivers) drivers[p] = g;
+  }
+  return { ...s, torii, ...(drivers ? { drivers } : {}) };
+}
+function irohaAgent(party: PartyId | undefined, servername: string): https.Agent | undefined {
+  const root = process.env.LENSA_GW_MTLS_DIR_IROHA;
+  if (!root || !party) return undefined; // no directory = plain mode (the URL stays http)
+  const dir = join(root, party);
+  const key = `${dir}|${servername}`;
+  let agent = agents.get(key);
+  if (!agent) {
+    const f = (n: string) => readFileSync(join(dir, n)); // a missing directory or file throws: no silent downgrade
+    agent = new https.Agent({ ca: f('server-ca.pem'), cert: f('lensa.crt'), key: f('lensa.key'), keepAlive: true, servername });
+    agents.set(key, agent);
+  }
+  return agent;
+}
+// fetch for every Iroha HTTP call: a URL that is a configured LENSA_GW_IROHA_<P> gateway goes through gwFetch (that party's client cert, gateway server name); anything
+// else (today's plain loopback Torii/driver URLs) stays a plain fetch, whatever LENSA_GW_MTLS_DIR says for the other gateways.
+export const irohaFetch: typeof fetch = async (input, init) => {
+  const url = String(input);
+  const t = gwTarget(url);
+  if (!t || !IROHA_SN.test(t.servername)) return fetch(input, init);
+  return gwFetch(url, { method: init?.method, headers: init?.headers as Record<string, string> | undefined, body: init?.body as string | undefined, signal: init?.signal ?? undefined, party: t.party });
+};
 export function gwAgent(party?: PartyId, servername?: string): https.Agent | undefined {
+  if (servername && IROHA_SN.test(servername)) return irohaAgent(party, servername);
   const main = process.env.LENSA_GW_MTLS_DIR;
   if (!main) return undefined;
   const root = (servername?.startsWith('fx-gw-') && process.env.LENSA_GW_MTLS_DIR_FABRICX) || main;
@@ -46,6 +96,9 @@ export function gwTarget(u: string): GwTarget | undefined {
         return kind === 'paladin' ? bank(p) : { party: p, servername: `fx-gw-${PARTIES[p].node}` };
       }
     }
+  }
+  for (const p of Object.keys(PARTIES) as PartyId[]) {
+    if (host(process.env[`LENSA_GW_IROHA_${p}`]) === key) return { party: p, servername: irohaServername(p) };
   }
   if (host(process.env.LENSA_BESU_RPC) === key) return bank('BI');
   const doors = bankDoors();
@@ -101,6 +154,10 @@ export function assertGatewayEnv(): void {
       const u = gwConfigured(kind, p);
       add(u ? gwVar(kind, p) : `default ${gwVar(kind, p)}`, u ? u.host : `127.0.0.1:${gwDefault(kind, p)}`);
     }
+  }
+  for (const p of Object.keys(PARTIES) as PartyId[]) {
+    const g = irohaGateway(p);
+    if (g) add(`LENSA_GW_IROHA_${p}`, new URL(g).host);
   }
   const hostOf = (label: string, v: string) => { try { return new URL(v).host; } catch { throw new Error(`${label} is not a URL`); } };
   if (process.env.LENSA_BESU_RPC) add('LENSA_BESU_RPC', hostOf('LENSA_BESU_RPC', process.env.LENSA_BESU_RPC));

@@ -1,4 +1,5 @@
 import type { PartyId } from '../domain.ts';
+import { irohaFetch } from '../gateway.ts';
 
 // Client of the per-party Iroha 3 drivers (iroha3 plan S16; contract: iroha3-rd-node-build main fbfbdf3 driver/src/server.rs, http.rs).
 // Each driver (ns rd-iroha3-<party>, port 8091) signs with ITS OWN account: Lensa signs nothing here, it only posts the public terms of the
@@ -32,7 +33,7 @@ function amount(a: Amount, what: string): string {
 }
 
 export function driverClient(c: DriverConfig): DriverClient {
-  const http = c.http ?? fetch;
+  const http = c.http ?? irohaFetch;
   const timeoutMs = c.timeoutMs ?? DRIVER_TIMEOUT_MS;
   const chain = new Map<PartyId, Promise<unknown>>(); // one request at a time per driver (a second one would wait behind the first, /healthz included)
   const active = new Map<PartyId, number>();

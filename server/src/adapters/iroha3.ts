@@ -6,6 +6,7 @@ import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, Model
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, type LoadUser } from '../adapter.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
+import { irohaFetch, withIrohaGateways } from '../gateway.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
 import { loadAuth, partyKey, signedHeaders, type Auth } from './iroha3-auth.ts';
@@ -159,7 +160,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   // (routing.rs handle_v1_account_assets_with_visibility; [unverified until a NON-ZERO answer is observed: no live sample exists, and the empty list is returned even for minted accounts]).
   // The row of `asset` is the one whose id starts with the asset definition; in a non-empty list no such row is a zero balance.
   async function keylessBalance(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
-    const r = await (read?.fetch ?? fetch)(new URL(`v1/accounts/${encodeURIComponent(acct[party])}/assets`, s.torii[party]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+    const r = await (read?.fetch ?? irohaFetch)(new URL(`v1/accounts/${encodeURIComponent(acct[party])}/assets`, s.torii[party]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
     if (!r.ok) throw new Error(`Torii ${PARTIES[party].name} menjawab HTTP ${r.status}`);
     const body = (await r.json()) as { items?: { asset?: unknown; quantity?: unknown }[] };
     if (!Array.isArray(body.items)) throw new Error('Saldo: jawaban Torii tidak dikenali');
@@ -245,7 +246,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   // pre-check, tx detail, lens) are not available in window A: the chain's own refusal reaches the user (502 reason), the R1 lens rows are NOT-RUN.
   async function appliedBlock(signer: PartyId, hash: string): Promise<number> {
     try {
-      const r = await (read?.fetch ?? fetch)(new URL(`v1/pipeline/transactions/status?hash=${hash}`, s.torii[signer]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+      const r = await (read?.fetch ?? irohaFetch)(new URL(`v1/pipeline/transactions/status?hash=${hash}`, s.torii[signer]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return ((await r.json()) as Status).status.block_height ?? 0;
     } catch (e) { // the driver's own `Applied` answer is the settlement; the height is only display
@@ -480,7 +481,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     const code = (e as { code?: unknown }).code;
     throw new Error(`Kunci operator Iroha 3 tidak dapat dimuat: ${typeof code === 'string' ? `berkas tidak terbaca (${code})` : errMsg(e)}`);
   }));
-  const http = read?.fetch ?? fetch;
+  const http = read?.fetch ?? irohaFetch;
   async function toriiGet<T>(party: PartyId, path: string, query: URLSearchParams): Promise<T> {
     const { auth } = await deps();
     for (let attempt = 1; ; attempt++) {
@@ -721,7 +722,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
       let blocks = 0;
       await Promise.all((Object.keys(s.torii) as PartyId[]).map(async (p) => {
         try {
-          const r = await fetch(new URL('status', s.torii[p]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(3_000) });
+          const r = await irohaFetch(new URL('status', s.torii[p]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(3_000) });
           blocks = Math.max(blocks, ((await r.json()) as { blocks: number }).blocks);
         } catch { down.push(PARTIES[p].name); }
       }));
@@ -775,7 +776,9 @@ export async function load(stateDir?: string): Promise<ModelAdapter | null> {
     }
     // Keyless: no operator accounts on the new chain (analyst Q16). Signed reads are refused; the lens/history rows stay NOT-RUN in window A.
     const noSigned = async (): Promise<never> => { throw new Error('Pembacaan bertanda tangan tidak tersedia di rantai baru (jendela A: hanya baca tanpa kunci)'); };
-    return createIroha3Adapter(s, irohaCli(s.dir), { init: noSigned }, undefined, driverClient({ drivers: s.drivers, keys: s.keys }));
+    // New chain: a party with LENSA_GW_IROHA_<P> is reached ONLY through its mTLS gateway (Torii reads and driver routes); the others keep the state URLs.
+    const g = withIrohaGateways(s as Iroha3State & { drivers: Record<PartyId, string> });
+    return createIroha3Adapter(g, irohaCli(s.dir), { init: noSigned }, undefined, driverClient({ drivers: g.drivers, keys: s.keys }));
   }
   const adapter = createIroha3Adapter(s, irohaCli(s.dir), {
     init: async () => {
