@@ -155,8 +155,21 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
 
   // In the party's lane with the history scan: a Torii answers one query at a time, a balance read racing a scan got HTTP 429.
   // Read as the party's node operator: bank C has no CanReadRestrictedDataspace grant, so its own account is refused (HTTP 403) on ds-rd.
+  // NEW chain, keyless (analyst Q16): GET /v1/accounts/<I105>/assets, unsigned. Row keys asset, asset_name, asset_alias, quantity (a decimal STRING), from the Torii source
+  // (routing.rs handle_v1_account_assets_with_visibility; [unverified until the first mint: no live sample exists]). The row of `asset` is the one whose id starts with the
+  // asset definition; no such row is a zero balance.
+  async function keylessBalance(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
+    const r = await (read?.fetch ?? fetch)(new URL(`v1/accounts/${encodeURIComponent(acct[party])}/assets`, s.torii[party]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+    if (!r.ok) throw new Error(`Torii ${PARTIES[party].name} menjawab HTTP ${r.status}`);
+    const body = (await r.json()) as { items?: { asset?: unknown; quantity?: unknown }[] };
+    if (!Array.isArray(body.items)) throw new Error('Saldo: jawaban Torii tidak dikenali');
+    const row = body.items.find((i) => typeof i.asset === 'string' && i.asset.startsWith(s.assets[asset]));
+    if (!row) return 0n;
+    if (typeof row.quantity !== 'string' || !/^\d+$/.test(row.quantity)) throw new Error('Saldo: jumlah dari Torii tidak dikenali');
+    return BigInt(row.quantity);
+  }
   async function balanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
-    if (driver) throw new Error('Saldo belum tersedia di rantai baru (jendela A: pembacaan tanpa kunci belum dipasang)');
+    if (driver) return keylessBalance(party, asset);
     if (shared) return BigInt((await walletFor(party)).balances[asset === 'RD' ? 'rd' : 'dfabi']);
     return publicBalanceOf(party, asset);
   }

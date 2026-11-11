@@ -131,6 +131,30 @@ describe('iroha3 on the new chain: writes through the drivers', () => {
   });
 });
 
+describe('iroha3 on the new chain: keyless balance read', () => {
+  const asset = (a: string, q: string) => ({ asset: `${a}#acct-A#dataspace:1`, asset_name: 'x', asset_alias: null, quantity: q });
+  function readWith(items: unknown, status = 200) {
+    const seen: string[] = [];
+    const fetch = (async (u: URL | string, init?: RequestInit) => { seen.push(`${String(u)} ${JSON.stringify(init?.headers ?? {})}`); return new Response(JSON.stringify(items), { status }); }) as typeof globalThis.fetch;
+    return { seen, read: { init: async () => { throw new Error('no signed reads'); }, fetch } };
+  }
+  it('balanceOf reads GET /v1/accounts/<I105>/assets unsigned and takes the row of the asset (quantity is a decimal STRING)', async () => {
+    const r = readCli(); const { seen, read } = readWith({ items: [asset(DFABI, '7'), asset(RD, '1500')], total: 2 });
+    const a = createIroha3Adapter(state, r.cli, read, undefined, fakeDriver().driver);
+    expect(await a.balanceOf('A', 'RD')).toBe(1500n);
+    expect(await a.balanceOf('A', 'DFABI')).toBe(7n);
+    expect(seen[0]).toContain('http://127.0.0.1:1/v1/accounts/acct-A/assets');
+    expect(seen[0]).not.toMatch(/X-Iroha/i); // unsigned
+    expect(r.calls).toEqual([]);
+  });
+  it('no row for the asset is a zero balance; a malformed body or an HTTP error is an error', async () => {
+    const r = readCli();
+    expect(await createIroha3Adapter(state, r.cli, readWith({ items: [], total: 0 }).read, undefined, fakeDriver().driver).balanceOf('A', 'RD')).toBe(0n);
+    await expect(createIroha3Adapter(state, r.cli, readWith({ nope: 1 }).read, undefined, fakeDriver().driver).balanceOf('A', 'RD')).rejects.toThrow(/saldo/i);
+    await expect(createIroha3Adapter(state, r.cli, readWith({}, 500).read, undefined, fakeDriver().driver).balanceOf('A', 'RD')).rejects.toThrow(/HTTP 500/);
+  });
+});
+
 describe('iroha3 load(): the CLI with host keys is gated on the genesis hash', () => {
   const dirs: string[] = [];
   afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); vi.restoreAllMocks(); });
