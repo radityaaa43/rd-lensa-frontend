@@ -348,8 +348,9 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
         ]);
         leg = bondLeg;
         tx = await step(1, async () => {
-          const sellerSrc = award ? await biSeller() : await take(req.from as BankId, 'DFABI', amount);
+          // The buyer first: biSeller() may mint a DFABI top-up, which must not happen for a buyer that cannot pay.
           const buyerSrc = await take(req.to as BankId, 'RD', price);
+          const sellerSrc = award ? await biSeller() : await take(req.from as BankId, 'DFABI', amount);
           const sellerW = new Wallet(sellerSrc.privateKey, award ? provider : bankProvider[req.from as BankId]);
           const buyerW = new Wallet(buyerSrc.privateKey, bankProvider[req.to as BankId]);
           const expiry = (await chainNow(provider)) + ESCROW_TTL;

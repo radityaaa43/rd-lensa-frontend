@@ -47,6 +47,7 @@ jobs:
           --exclude test/policy-store.test.ts
           --exclude test/policy-usage.test.ts
           --exclude test/policy-workflow.test.ts
+          --exclude test/stealth-award-order.test.ts
           --exclude test/stealth-bi.test.ts
           --exclude test/stealth-claim.test.ts
           --exclude test/stealth-scan.test.ts
