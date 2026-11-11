@@ -43,6 +43,9 @@ besu opa/bundles/bank/bank/check/check.rego
 besu opa/bundles/bank/bank/ident/ident.rego
 besu opa/bundles/bank/bank/paladin/paladin.rego
 besu opa/bundles/bank/bank/platform/fabricx/fabricx.rego
+besu opa/bundles/bank/bank/platform/iroha3/iroha3.rego
+besu opa/bundles/bank/bank/platform/sink/sink.rego
+besu opa/bundles/bank/bank/platform/stealth/stealth.rego
 besu opa/bundles/bank/.manifest
 besu opa/bundles/bi/bi/atom/atom.rego
 besu opa/bundles/bi/bi/besu/besu.rego
@@ -56,6 +59,9 @@ besu opa/bundles/bi/bi/noto/noto.rego
 besu opa/bundles/bi/bi/notosetup/notosetup.rego
 besu opa/bundles/bi/bi/paladin/paladin.rego
 besu opa/bundles/bi/bi/platform/fabricx/fabricx.rego
+besu opa/bundles/bi/bi/platform/iroha3/iroha3.rego
+besu opa/bundles/bi/bi/platform/sink/sink.rego
+besu opa/bundles/bi/bi/platform/stealth/stealth.rego
 besu opa/bundles/bi/bi/zeto/zeto.rego
 besu opa/bundles/bi/gw/gw.rego
 besu opa/bundles/bi/.manifest
