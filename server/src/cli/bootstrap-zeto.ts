@@ -3,7 +3,7 @@ import { writeState } from '../state.ts';
 import { LOOKUP, createZetoAdapter, type ZetoState } from '../adapters/zeto.ts';
 import {
   IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X, PaladinClient, algorithmZetoSnarkBJJ, deployToken, newAtomFactory, newGroup, nodeConnections, party, within,
-} from '../../vendor/besu/zeto/src/flows.ts';
+} from '../zeto/flows.ts';
 
 // Fresh deployment owned by this app: bi@node1 deploys RD and DFABI (Zeto_AnonNullifier, never setERC20),
 // one Pente group {bank, BI} per bank, an AtomFactory, then private opening balances.

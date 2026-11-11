@@ -64,7 +64,7 @@ describe('gateway mTLS (LENSA_GW_MTLS_DIR)', () => {
   it('on: the Paladin client (zeto nodeConnections) presents the client cert, https replaces http', async () => {
     vi.stubEnv('LENSA_GW_MTLS_DIR', dir);
     vi.resetModules();
-    const { nodeConnections, PaladinClient } = await import('../vendor/besu/zeto/src/flows.ts');
+    const { nodeConnections, PaladinClient } = await import('../src/zeto/flows.ts');
     const o = nodeConnections[1]!.clientOptions;
     expect(o.url).toBe('https://127.0.0.1:31648');
     const client = new PaladinClient({ ...o, url: base });

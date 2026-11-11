@@ -8,8 +8,8 @@
 //   as the vendored SDK build carries it (zeto-lock-requests.test.ts pins it to that build).
 // - delegateLock.abi.json: the PUBLIC delegateLock entry of the official zeto v0.5.1 artifact Zeto_Anon (same test).
 // Tests record what the vendored SDK sends and require the same request (server/test/zeto-lock-requests.test.ts).
-import delegateLockAbi from './delegateLock.abi.json' with { type: 'json' };
-import v1Abi from './IZetoFungible_V1.abi.json' with { type: 'json' };
+import delegateLockAbi from './delegateLock.abi.json';
+import v1Abi from './IZetoFungible_V1.abi.json';
 
 export const ZETO_V1_PRIVATE_ABI = v1Abi as readonly Record<string, unknown>[];
 export const DELEGATE_LOCK_ABI = delegateLockAbi as readonly Record<string, unknown>[];

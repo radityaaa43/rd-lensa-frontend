@@ -14,7 +14,7 @@ import { REPORT_PAGE, ZETO_MOVEMENT_TOPICS, buildReport } from '../../vendor/bes
 import {
   AtomFactory, BiLedger, IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X, PaladinClient, ZetoInstance, algorithmZetoSnarkBJJ, chainIO, mintUtxos, nodeConnections, party, reportTo, swap, transfer, within,
   type Party, type Settled,
-} from '../../vendor/besu/zeto/src/flows.ts';
+} from '../zeto/flows.ts';
 
 // Zeto_AnonNullifier (V1) on Paladin, BI on node1. Issuance is private `mint` (spike: zeto/spike-private-mint.ts);
 // no setERC20 and no public tx to a Zeto contract, ever.
