@@ -94,6 +94,14 @@ check(ing["policyTypes"] == ["Ingress"] and ing["ingress"] == [{"from": [{"ipBlo
 check({d["metadata"]["name"] for d in of(b, "ServiceAccount")} == {"lensa", "lensa-admin"}, "entry=b: no lensa-access SA")
 check(run(["base"], {**GW, "LENSA_ENTRY": "x"}).returncode != 0, "LENSA_ENTRY other than a|b is refused")
 
+# the shipped gateways.conf (S5 fills it per platform as each gateway step lands)
+ship = docs(["base"])
+srules = name(ship, "NetworkPolicy", "egress-party-gateways")["spec"].get("egress", [])
+zeto = [r for r in srules if r["to"][0].get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name", "").startswith("rd-zeto-")]
+check(sorted(r["to"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"] for r in zeto) == ["rd-zeto-bank-a", "rd-zeto-bank-b", "rd-zeto-bi"], f"shipped gateways.conf: zeto party namespaces {len(zeto)}")
+check(all(r["to"][0]["podSelector"] == {"matchLabels": {"app": "bank-gw"}} and [p["port"] for p in r["ports"]] == [8548, 8545] for r in zeto), "shipped gateways.conf: zeto gateway pods app=bank-gw on 8548 (Paladin) and 8545 (Besu)")
+check(not any("ipBlock" in r["to"][0] for r in srules), "shipped gateways.conf: no bank C ipBlock until its load balancer exists")
+
 # ---- volume (S4b)
 vol = docs(["volume"])
 pvc = name(vol, "PersistentVolumeClaim", "lensa-state")
