@@ -61,7 +61,7 @@ spec:
             failureThreshold: 3
           # starting values: measured during the S6 shadow, then fixed here
           resources:
-            requests: {cpu: 250m, memory: 512Mi}
+            requests: {cpu: 100m, memory: 256Mi}
             limits: {cpu: "1", memory: 1Gi}
           volumeMounts:
             - {name: tmp, mountPath: /tmp}

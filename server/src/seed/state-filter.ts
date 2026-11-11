@@ -12,7 +12,7 @@ export interface SeedOptions { notoWrittenAfter: string; targetStateDir: string;
 export interface SeedFile { path: string; content: Buffer }
 export interface SeedPlan {
   files: SeedFile[]; notCarried: string[];
-  summary: { carried: number; notCarried: number; bytes: number; files: { path: string; bytes: number }[] };
+  summary: { carried: number; notCarried: number; bytes: number; files: { path: string; bytes: number }[]; sensitive: { path: string; field: string; count: number }[] };
 }
 
 // A field named like a key, seed, secret, token... is refused wherever it appears, in every carried file.
@@ -32,8 +32,9 @@ const HEX64_OK: Record<string, RegExp> = {
   'noto/trades.jsonl': /^(bondLockId|cashLockId)$/,
 };
 // Prepared Noto unlock calldata (noto/contract-data investors[].cashUnlockCall / bondUnlockCall, written by outright.ts `prepare`): a function selector plus
-// whole 32-byte ABI words, i.e. data of a chain call, not a key. Allowed ONLY at those two paths and ONLY with that shape. [unverified whether such a
-// calldata embeds an endorsement signature: noto-pente owner to confirm; if so these two fields become an exclusion instead.]
+// whole 32-byte ABI words, i.e. data of a chain call, not a key. Allowed ONLY at those two paths and ONLY with that shape.
+// The calldata is plain ABI copied from the Paladin domain receipt (noto owner, 2026-11-12: noto+pente/bond/src/index.ts:301,:332; paladin v1.0.0
+// domains/noto/internal/noto/receipts.go:242, empty `signature` placeholder): no endorsement signature, no secret, but bearer-style, so never printed.
 const CALLDATA_PATH = /^investors\[\]\.(cashUnlockCall|bondUnlockCall)$/;
 const CALLDATA = /^0x[0-9a-fA-F]{8}([0-9a-fA-F]{64})*$/;
 const ZETO_FIELDS = ['rd', 'dfabi', 'atomFactory', 'groups', 'owners', 'addresses', 'fromBlock', 'funded', 'privateMint'];
@@ -76,6 +77,7 @@ export function planSeed(srcDir: string, opts: SeedOptions): SeedPlan {
   if (Number.isNaN(after)) throw new SeedRefused('option notoWrittenAfter is not a date');
   const problems: Problems = [];
   const files: SeedFile[] = [];
+  const sensitive: { path: string; field: string; count: number }[] = [];
   const carriedTop = new Set<string>();
   const read = (rel: string) => readFileSync(join(srcDir, rel));
 
@@ -124,6 +126,11 @@ export function planSeed(srcDir: string, opts: SeedOptions): SeedPlan {
       const buf = read(`noto/${newest}`);
       const cd = parse(buf, `noto/${newest}`, problems);
       if (cd !== undefined) screen(cd, `noto/${newest}`, HEX64_OK['noto/contract-data'], problems, undefined, CALLDATA_PATH);
+      // Bearer-style calldata (noto owner): listed by field name and count only, never by value; carried only into the staging files (600).
+      for (const field of ['bondUnlockCall', 'cashUnlockCall']) {
+        const count = Array.isArray((cd as { investors?: unknown })?.investors) ? ((cd as { investors: Record<string, unknown>[] }).investors).filter((i) => typeof i?.[field] === 'string').length : 0;
+        if (count > 0) sensitive.push({ path: `noto/${newest}`, field: `investors[].${field}`, count });
+      }
       files.push({ path: `noto/${newest}`, content: buf });
     }
     if (existsSync(join(dir, 'trades.jsonl'))) {
@@ -187,7 +194,16 @@ export function planSeed(srcDir: string, opts: SeedOptions): SeedPlan {
     .map((e) => (e.isDirectory() ? `${e.name}/` : e.name)).sort();
   files.sort((a, b) => (a.path < b.path ? -1 : 1));
   const bytes = files.reduce((n, f) => n + f.content.length, 0);
-  return { files, notCarried, summary: { carried: files.length, notCarried: notCarried.length, bytes, files: files.map((f) => ({ path: f.path, bytes: f.content.length })) } };
+  return { files, notCarried, summary: { carried: files.length, notCarried: notCarried.length, bytes, files: files.map((f) => ({ path: f.path, bytes: f.content.length })), sensitive } };
+}
+
+// The dry-run text: names, sizes and counts, never a value.
+export function dryRunLines(plan: SeedPlan): string[] {
+  return [
+    ...plan.summary.files.map((f) => `  carry     ${f.path} (${f.bytes} bytes)`),
+    ...plan.summary.sensitive.map((x) => `  bearer-style calldata: ${x.path} ${x.field} x${x.count}: carried only into the staging files (600); never printed`),
+    ...plan.notCarried.map((n) => `  not carried  ${n}`),
+  ];
 }
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
