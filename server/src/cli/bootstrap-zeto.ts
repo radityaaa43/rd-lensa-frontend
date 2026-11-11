@@ -2,14 +2,15 @@ import { BANKS, type PartyId } from '../domain.ts';
 import { writeState } from '../state.ts';
 import { LOOKUP, createZetoAdapter, type ZetoState } from '../adapters/zeto.ts';
 import {
-  IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X, PaladinClient, algorithmZetoSnarkBJJ, deployToken, newAtomFactory, newGroup, nodeConnections, party, within,
+  IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X, PaladinClient, algorithmZetoSnarkBJJ, deployToken, newAtomFactory, newGroup, party, within,
 } from '../zeto/flows.ts';
+import { zetoConnections } from '../adapters/zeto-connections.ts';
 
 // Fresh deployment owned by this app: bi@node1 deploys RD and DFABI (Zeto_AnonNullifier, never setERC20),
 // one Pente group {bank, BI} per bank, an AtomFactory, then private opening balances.
 // Run under the cluster lock: flock /tmp/lensa-paladin.lock npm run bootstrap -- zeto
 export async function bootstrap(): Promise<void> {
-  const clients = nodeConnections.map((n) => new PaladinClient(n.clientOptions));
+  const clients = zetoConnections().map((n) => new PaladinClient(n.clientOptions));
   const P = Object.fromEntries((Object.keys(LOOKUP) as PartyId[]).map((id) => [id, party(clients, LOOKUP[id])])) as Record<PartyId, ReturnType<typeof party>>;
   const fromBlock = await P.BI.c.bidx.getConfirmedBlockHeight();
 

@@ -26,3 +26,4 @@ jobs:
       - run: npm run typecheck -w server
       - run: npm test -w server
       - run: deploy/k8s/test.sh
+      - run: deploy/mtls/test.sh

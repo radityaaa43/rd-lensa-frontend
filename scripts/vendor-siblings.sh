@@ -26,6 +26,10 @@ done < "$vendor/MANIFEST"
 # Under server/ ("type": "module") they would be read as ESM and break, so each gets a package.json stub that keeps the CommonJS scope.
 printf '{ "private": true, "description": "scope stub written by scripts/vendor-siblings.sh: keeps this tree CommonJS like in the sibling repo" }\n' > "$vendor/besu/noto+pente/bond/package.json"
 printf '{ "private": true, "description": "scope stub written by scripts/vendor-siblings.sh: keeps this tree CommonJS like in the sibling repo" }\n' > "$vendor/besu/zeto/package.json"
+# Patch 2: besu/zeto/src/common.ts read the flat mTLS files (ca.crt, lensa.crt, lensa.key in LENSA_GW_MTLS_DIR) when the module is loaded, which would break
+# the server as soon as that directory holds only per-party subfolders (zeto S19). Lensa builds its Paladin clients itself (src/adapters/zeto-connections.ts).
+perl -0pi -e 's/const mtls = mtlsDir && \{.*?\n\};/const mtls = undefined as undefined | { ca: Buffer; cert: Buffer; key: Buffer }; \/\/ patched by scripts\/vendor-siblings.sh: Lensa builds its Paladin clients in src\/adapters\/zeto-connections.ts/s' "$vendor/besu/zeto/src/common.ts"
+grep -q 'const mtls = undefined' "$vendor/besu/zeto/src/common.ts" || { echo "vendor-siblings: patch 2 (common.ts mtls block) did not apply" >&2; exit 2; }
 # The one patch: zeto must use the Paladin SDK build in server/vendor/paladin-sdk (it has the V1 lock calls), while noto (bond) uses the npm 1.0.0 SDK,
 # as in the sibling repo where each package has its own node_modules. A relative import avoids two packages with one name in one node_modules.
 grep -rl '"@lfdecentralizedtrust/paladin-sdk"' "$vendor/besu/zeto/src" | xargs sed -i 's#"@lfdecentralizedtrust/paladin-sdk"#"../../../paladin-sdk"#'
@@ -40,7 +44,7 @@ grep -rl '"@lfdecentralizedtrust/paladin-sdk"' "$vendor/besu/zeto/src" | xargs s
   echo
   echo "besu/stealth-address/out/* is Foundry build output (git-ignored in besu): it is the forge build on the machine that ran this script, not a tracked file at the commit above."
   echo
-  echo "One patch to copied files: besu/zeto/src/*.ts import \"../../../paladin-sdk\" (server/vendor/paladin-sdk) instead of \"@lfdecentralizedtrust/paladin-sdk\"; nothing else is changed."
+  echo "Two patches to copied files: (1) besu/zeto/src/*.ts import \"../../../paladin-sdk\" (server/vendor/paladin-sdk) instead of \"@lfdecentralizedtrust/paladin-sdk\"; (2) besu/zeto/src/common.ts no longer reads the flat mTLS files at load (the mtls block is replaced by undefined; Lensa builds its Paladin clients in server/src/adapters/zeto-connections.ts). Nothing else is changed."
   echo
   echo "paladin-sdk is not a git checkout: the line above is the sha256 of the sorted per-file sha256 list of its build/ directory. Source (traced 2026-11-11): the local repo ~/eksplorasi-paladin/build-v1/paladin (origin LFDT-Paladin/paladin), sdk/typescript at local merge commit 82fbd49ce1dd866e9f73eb7a3b6832907a0181aa = upstream main 559567e38c386b8c89b1ae414fee6ce76dd3fe61 + the head of the still-open PR #1189 (28c72b76fda49d0e7c317432880f167a60da2f78), conflicts hand-resolved in scripts/abi.mjs and src/domains/zeto.ts (the other 34 tracked files equal upstream main). Not an upstream commit; no public ref can rebuild it (deviation report to lead, options pending)."
   echo

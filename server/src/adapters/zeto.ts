@@ -8,11 +8,12 @@ import { besuTrace, nameFrom } from './besu-trace.ts';
 import { besuNetwork, besuReceipt, holdBack, joinInFlight, paladinNodeReceipt, receiptPage, type ReceiptLike } from './besu-network.ts';
 import type { EventLike } from './noto.ts';
 import { afterLock } from '../deadline.ts';
+import { zetoConnections } from './zeto-connections.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
 import { REPORT_PAGE, ZETO_MOVEMENT_TOPICS, buildReport } from '../../vendor/besu/zeto/src/bi-report.ts';
 import {
-  AtomFactory, BiLedger, IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X, PaladinClient, ZetoInstance, algorithmZetoSnarkBJJ, chainIO, mintUtxos, nodeConnections, party, reportTo, swap, transfer, within,
+  AtomFactory, BiLedger, IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X, PaladinClient, ZetoInstance, algorithmZetoSnarkBJJ, chainIO, mintUtxos, party, reportTo, swap, transfer, within,
   type Party, type Settled,
 } from '../zeto/flows.ts';
 
@@ -276,7 +277,7 @@ async function lockSenders<T>(senders: string[], fn: () => Promise<T>): Promise<
   } finally { releases.forEach((r) => r()); }
 }
 
-export function createZetoAdapter(state: ZetoState, connections = nodeConnections) { // connections: tests point one node at a dead port
+export function createZetoAdapter(state: ZetoState, connections: { name: string; id: string; clientOptions: any }[] = zetoConnections()) { // connections: tests point one node at a dead port
   const clients = connections.map((n) => new PaladinClient(n.clientOptions));
   const P = Object.fromEntries(PARTY_IDS.map((id) => [id, party(clients, LOOKUP[id])])) as Record<PartyId, Party>;
   const address: Record<Token, string> = { RD: state.rd, DFABI: state.dfabi };

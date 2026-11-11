@@ -14,10 +14,10 @@ import { fxGateway } from '../src/adapters/fabricx.ts';
 import { probeNodes } from '../src/health.ts';
 
 // Certs are made here with openssl (no sibling-repo script, so this test also runs in CI): a CA, a server cert for 127.0.0.1 (gw-2.*) and a
-// client cert (lensa.*), written under the same file names the real generator (besu/opa/mtls/gen-certs.sh) uses.
+// client cert (lensa.*); the server cert also carries the service names the per-party client verifies (bank-gw-N, fx-gw-N), written under the same file names the real generator (besu/opa/mtls/gen-certs.sh) uses.
 function makeCerts(dir: string) {
   const sh = (...a: string[]) => execFileSync('openssl', a, { cwd: dir, stdio: 'ignore' });
-  writeFileSync(join(dir, 'ext.cnf'), 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth,clientAuth\n');
+  writeFileSync(join(dir, 'ext.cnf'), 'subjectAltName=IP:127.0.0.1,DNS:bank-gw-2,DNS:bank-gw-3,DNS:fx-gw-2,DNS:fx-gw-3\nextendedKeyUsage=serverAuth,clientAuth\n');
   sh('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.crt', '-days', '2', '-subj', '/CN=test-ca');
   for (const [name, cn] of [['gw-2', 'gw-2'], ['lensa', 'lensa']] as const) {
     sh('req', '-newkey', 'rsa:2048', '-nodes', '-keyout', `${name}.key`, '-out', `${name}.csr`, '-subj', `/CN=${cn}`);
