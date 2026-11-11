@@ -520,6 +520,20 @@ describe('fabricx gateway transport', () => {
     } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
   });
 
+  it('BI down: the gateway fetch outlives Envoy\'s 300 s route cap (fabric: answer seen at 260868 ms) and the tx deadline outlives the fetch', async () => {
+    const ms: number[] = [];
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((t: number) => { ms.push(t); return timeout(t); });
+    vi.stubGlobal('fetch', async () => new Response('{}', { status: 200 }));
+    vi.stubEnv('LENSA_GW_MTLS_DIR', '');
+    try {
+      await fxGateway('A', { op: 'balance', type: 'RD' });
+      expect(ms[0]).toBeGreaterThan(300_000);
+      expect(createFabricxAdapter(fake().exec).txDeadlineMs).toBeGreaterThan(ms[0]!);
+      expect(createFabricxAdapter(fake().exec).txDeadlineMs).toBe(310_000);
+    } finally { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
+  });
+
   it('usage: today from 00:00 WIB per token from the bank gateway, limits passed through', async () => {
     const sent: Record<string, unknown>[] = [];
     const gw: GwCall = async (_p, body) => { sent.push(body); return { amount: body.type === 'RD' ? '900' : '0' }; };
