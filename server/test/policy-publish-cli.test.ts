@@ -266,7 +266,7 @@ describe('candidate parity with the vendored tree (nothing dropped)', () => {
 describe('--candidate: verify, then publish the exact verified bytes', () => {
   const REV = 'bi-zeto.1-noto.1-fabricx.1-iroha3.1', BREV = 'bank-zeto.1-noto.1-fabricx.1-iroha3.1';
   const DOC = (p: string, who: string) => ({ platform: p, who });
-  const GROUPS = { A: '0x' + 'a1'.repeat(32), B: '0x' + 'b2'.repeat(32), C: '0x' + 'c3'.repeat(32) };
+  const GROUPS = G;
   function tarEntry(name: string, body: Buffer): Buffer {
     const h = Buffer.alloc(512); h.write(name); h.write('0000644\0', 100); h.write('0000000\0', 108); h.write('0000000\0', 116);
     h.write(body.length.toString(8).padStart(11, '0') + '\0', 124); h.write('00000000000\0', 136); h.write('        ', 148); h.write('0', 156); h.write('ustar\0', 257);
@@ -295,7 +295,7 @@ describe('--candidate: verify, then publish the exact verified bytes', () => {
     write(shas);
     return { dir, file, shas, write };
   }
-  const args = (c: { dir: string; file: string }, ...more: string[]) => [`--candidate=${c.dir}`, `--expect-sha256-file=${c.file}`, ...more];
+  const args = (c: { dir: string; file: string }, ...more: string[]) => [`--candidate=${c.dir}`, `--expect-sha256-file=${c.file}`, EXPECT, ...more];
 
   it('without --expect-sha256-file, or with a malformed one: exit 2, no call', async () => {
     const c = mk();
@@ -394,6 +394,26 @@ describe('--candidate: verify, then publish the exact verified bytes', () => {
       expect(out).toContain(`node3 bank policy.${p} sha256 ${sha(JSON.stringify(DOC(p, 'bank')))}`);
     }
     for (const [party, g] of Object.entries(GROUPS)) expect(out).toContain(`node1 bi report_group ${party} ${g}`);
+  });
+  it('report groups read from the tars must equal --expect-report-groups (full hex): a different C id = exit 3, no network call; --apply without the flag = exit 2', async () => {
+    const c = mk();
+    const wrong = `--expect-report-groups=A=${G.A},B=${G.B},C=0x3f989983${G.C.slice(10)}`;
+    const r = await run([`--candidate=${c.dir}`, `--expect-sha256-file=${c.file}`, wrong, '--apply'], {});
+    expect(r.rc).toBe(3);
+    expect(r.lines.join('\n')).toMatch(/MISMATCH.*report_group C/);
+    expect(r.io.calls).toEqual([]);
+    const r2 = await run([`--candidate=${c.dir}`, `--expect-sha256-file=${c.file}`, '--apply'], {});
+    expect(r2.rc).toBe(2); expect(r2.io.calls).toEqual([]);
+  });
+  it('a tar that already carries a signature (.signatures.json: made on a host) is refused (R1): exit 5, no network call', async () => {
+    const c = mk();
+    const unsigned = readFileSync(join(c.dir, 'node3/bank.tar.gz'));
+    const b = gzipSync(Buffer.concat([gunzipSync(unsigned).subarray(0, -1024), tarEntry('/.signatures.json', Buffer.from('{"signatures":["x"]}')), Buffer.alloc(1024)]));
+    writeFileSync(join(c.dir, 'node3/bank.tar.gz'), b); c.write({ ...c.shas, 'node3/bank.tar.gz': sha(b) });
+    const r = await run(args(c, '--apply'), {});
+    expect(r.rc).toBe(5);
+    expect(r.lines.join('\n')).toMatch(/node3\/bank\.tar\.gz.*signature/i);
+    expect(r.io.calls).toEqual([]);
   });
   it('a tar whose data.json cannot be read (no documents): exit 5, no network call', async () => {
     const c = mk();

@@ -89,6 +89,9 @@ async function runCandidate(dir: string, expectFile: string | undefined, apply: 
   const only = argv.find((x) => x.startsWith('--parties='))?.slice('--parties='.length).split(',');
   const ORDER: PartyId[] = ['BI', 'A', 'B', 'C'];
   if (only && (only.some((p) => !ORDER.includes(p as PartyId)) || only.join() !== ORDER.filter((p) => only.includes(p)).join())) { out('refused: --parties must be a subset of BI,A,B,C in that order'); return 2; }
+  const wantGroups = expected(argv);
+  if (wantGroups === 'bad') { out('refused: --expect-report-groups must be A=0x<64 hex>,B=0x<64 hex>,C=0x<64 hex>'); return 2; }
+  if (apply && !wantGroups) { out('refused: --apply needs --expect-report-groups (the full report-group ids)'); return 2; }
   const wantSignedBi = argv.find((x) => x.startsWith('--expect-signed-bi-sha256='))?.slice('--expect-signed-bi-sha256='.length);
   if (wantSignedBi !== undefined && !/^[0-9a-f]{64}$/.test(wantSignedBi)) { out('refused: --expect-signed-bi-sha256 must be 64 hex'); return 2; }
   if (!expectFile) { out('refused: --candidate needs --expect-sha256-file=<file> (sha256sum format, the 8 verified tars)'); return 2; }
@@ -131,7 +134,11 @@ async function runCandidate(dir: string, expectFile: string | undefined, apply: 
     for (const kind of ['bi', 'bank'] as const) {
       const t = `node${n}/${kind}.tar.gz`;
       let cfg: { policy?: Record<string, unknown>; nodes?: Record<string, { party?: string; report_group?: string }> } | undefined;
-      try { cfg = (JSON.parse(untar(bytes.get(t)!).get('/data.json')!.toString('utf8')) as Record<string, { config?: typeof cfg }>)[kind]?.config; } catch { cfg = undefined; }
+      let files: Map<string, Buffer>;
+      try { files = untar(bytes.get(t)!); } catch { return fail(`${t} is not a readable tar.gz`); }
+      // a signature made anywhere but in the party's own namespace is a host-made signature (R1): refuse
+      if ([...files.keys()].some((k) => /signatures\.json$/.test(k))) return fail(`${t} already carries a signature (.signatures.json); the sinks sign, nothing may be pre-signed`);
+      try { cfg = (JSON.parse(files.get('/data.json')!.toString('utf8')) as Record<string, { config?: typeof cfg }>)[kind]?.config; } catch { cfg = undefined; }
       if (!cfg?.policy) return fail(`${t} carries no readable data.json with ${kind}.config.policy`);
       for (const p of PLATFORMS) {
         if (cfg.policy[p] === undefined) return fail(`${t} has no ${p} document`);
@@ -140,7 +147,10 @@ async function runCandidate(dir: string, expectFile: string | undefined, apply: 
       if (kind === 'bi') {
         const groups = Object.values(cfg.nodes ?? {}).filter((x) => x.report_group);
         if (groups.length !== 3) return fail(`${t} does not carry exactly 3 report_group ids`);
-        for (const g of groups) out(`node${n} bi report_group ${g.party} ${g.report_group}`);
+        for (const g of groups) {
+          out(`node${n} bi report_group ${g.party} ${g.report_group}`);
+          if (wantGroups && wantGroups[g.party ?? ''] !== g.report_group) { out(`MISMATCH node${n} bi report_group ${g.party}: expected ${wantGroups[g.party ?? ''] ?? 'none'}`); return 3; }
+        }
       }
     }
   }
