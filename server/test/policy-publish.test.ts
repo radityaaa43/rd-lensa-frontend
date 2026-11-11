@@ -28,6 +28,7 @@ const bankSeeds: ByPlatform<BankPolicy> = {
 
 // Fake opa: assemble writes the two documents, build packs "revision + document" into the tarball path.
 const fakeOpa = {
+  signsOnHost: true, // these tests are about the Publisher's flow with host-built (signed) bundles; the keyless source tar has its own tests (source-tar, sink-contract)
   assemble: (_n: number, bi: ByPlatform<BiPolicy>, bank: ByPlatform<BankPolicy>, dir: string) => {
     for (const [name, doc] of [['bi', bi], ['bank', bank]] as const) {
       mkdirSync(join(dir, name), { recursive: true });

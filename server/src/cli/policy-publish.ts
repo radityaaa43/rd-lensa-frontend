@@ -13,7 +13,7 @@
 // --candidate=<dir> --expect-sha256-file=<file> [--apply]: publish the exact verified tar bytes instead of building (see runCandidate). Never touches lensa.service or lensa.env.
 import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { gunzipSync } from 'node:zlib';
+import { readSourceTar } from '../policy/source-tar.ts';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PartyId } from '../domain.ts';
@@ -68,22 +68,11 @@ async function waitActive(kube: ReturnType<typeof sinkKube>, node: number, who: 
   }
 }
 
-// Minimal ustar reader for `opa build` output (regular files only): name -> bytes.
-function untar(gz: Buffer): Map<string, Buffer> {
-  const buf = gunzipSync(gz);
-  const files = new Map<string, Buffer>();
-  for (let off = 0; off + 512 <= buf.length && buf[off] !== 0;) {
-    const name = buf.toString('latin1', off, off + 100).replace(/\0.*$/s, '');
-    const size = parseInt(buf.toString('latin1', off + 124, off + 136).replace(/\0.*$/s, '').trim() || '0', 8);
-    if (buf[off + 156] === 0x30 || buf[off + 156] === 0) files.set(name, buf.subarray(off + 512, off + 512 + size));
-    off += 512 + Math.ceil(size / 512) * 512;
-  }
-  return files;
-}
-
 // `opa build` output is NOT reproducible (random build tmp dir in every rego entry + gzip time), so a rebuild can never equal the sha256 someone verified.
 // Candidate mode publishes the EXACT verified bytes: it reads node1..4/{bi,bank}.tar.gz once, checks them against an expect file (sha256sum format, exactly those 8 paths)
 // BEFORE any network call, and uploads the very buffers it hashed.
+// the revision in the .manifest of a signed bundle (`opa build` output: rooted names)
+const revisionOfSigned = (b: Buffer): string | undefined => { try { return (JSON.parse(readSourceTar(b, true).get('.manifest')!.toString()) as { revision?: string }).revision; } catch { return undefined; } };
 const TARS = [1, 2, 3, 4].flatMap((n) => ['bi', 'bank'].map((f) => `node${n}/${f}.tar.gz`));
 async function runCandidate(dir: string, expectFile: string | undefined, apply: boolean, argv: string[], env: NodeJS.ProcessEnv, deps: CliDeps, out: (l: string) => void): Promise<number> {
   const only = argv.find((x) => x.startsWith('--parties='))?.slice('--parties='.length).split(',');
@@ -122,9 +111,14 @@ async function runCandidate(dir: string, expectFile: string | undefined, apply: 
     if (got !== want.get(t)) { out(`MISMATCH ${t}: sha256 differs from the expect file (${want.get(t)})`); bad = true; }
   }
   if (bad) return fail('a tar differs from the expect file; nothing was sent');
+  // every tar must be a SOURCE archive the sink accepts (relative names, plain files: sink.py read_archive) with a revision in its .manifest
+  const sources = new Map<string, Map<string, Buffer>>();
   const rev = new Map<string, string>();
   for (const t of TARS) {
-    try { rev.set(t, /"revision":\s*"([^"]+)"/.exec(gunzipSync(bytes.get(t)!).toString('latin1'))![1]!); } catch { return fail(`${t} is not a bundle tar (no revision)`); }
+    try { sources.set(t, readSourceTar(bytes.get(t)!)); } catch (e) { return fail(`${t}: the sink would refuse this archive (${(e as Error).message})`); }
+    const r = (() => { try { return (JSON.parse(sources.get(t)!.get('.manifest')!.toString()) as { revision?: string }).revision; } catch { return undefined; } })();
+    if (!r) return fail(`${t} has no revision in its .manifest`);
+    rev.set(t, r);
   }
   const biRevs = new Set([1, 2, 3, 4].map((n) => rev.get(`node${n}/bi.tar.gz`)));
   if (biRevs.size !== 1) return fail('the four bi tars carry different revisions (the signed bi from BI is relayed to all)');
@@ -134,12 +128,11 @@ async function runCandidate(dir: string, expectFile: string | undefined, apply: 
     for (const kind of ['bi', 'bank'] as const) {
       const t = `node${n}/${kind}.tar.gz`;
       let cfg: { policy?: Record<string, unknown>; nodes?: Record<string, { party?: string; report_group?: string }> } | undefined;
-      let files: Map<string, Buffer>;
-      try { files = untar(bytes.get(t)!); } catch { return fail(`${t} is not a readable tar.gz`); }
+      const files = sources.get(t)!;
       // a signature made anywhere but in the party's own namespace is a host-made signature (R1): refuse
       if ([...files.keys()].some((k) => /signatures\.json$/.test(k))) return fail(`${t} already carries a signature (.signatures.json); the sinks sign, nothing may be pre-signed`);
-      try { cfg = (JSON.parse(files.get('/data.json')!.toString('utf8')) as Record<string, { config?: typeof cfg }>)[kind]?.config; } catch { cfg = undefined; }
-      if (!cfg?.policy) return fail(`${t} carries no readable data.json with ${kind}.config.policy`);
+      try { cfg = JSON.parse(files.get(`${kind}/config/data.json`)!.toString('utf8')) as typeof cfg; } catch { cfg = undefined; }
+      if (!cfg?.policy) return fail(`${t} carries no readable ${kind}/config/data.json with a policy`);
       for (const p of PLATFORMS) {
         if (cfg.policy[p] === undefined) return fail(`${t} has no ${p} document`);
         out(`node${n} ${kind} policy.${p} sha256 ${sha(JSON.stringify(cfg.policy[p]))}`);
@@ -173,7 +166,7 @@ async function runCandidate(dir: string, expectFile: string | undefined, apply: 
         // the bank tars node2..4/bi.tar.gz are verified but never uploaded: BI's one signed bi is relayed byte-identical
         signedBi ??= await kube.biLatest();
         const h = sha(signedBi);
-        const r = /"revision":\s*"([^"]+)"/.exec(gunzipSync(signedBi).toString('latin1'))?.[1];
+        const r = revisionOfSigned(signedBi);
         out(`BI signed bi sha256 ${h} revision ${r ?? 'unreadable'}`);
         if (r !== rev.get('node1/bi.tar.gz')) throw new Error('BI signed bi has another revision than the candidate bi');
         if (wantSignedBi !== undefined && h !== wantSignedBi) throw new Error('BI signed bi sha256 differs from --expect-signed-bi-sha256');
@@ -188,7 +181,7 @@ async function runCandidate(dir: string, expectFile: string | undefined, apply: 
     if (node === 1) {
       try {
         const sb = await kube.biLatest();
-        out(`BI signed bi sha256 ${sha(sb)} revision ${/"revision":\s*"([^"]+)"/.exec(gunzipSync(sb).toString('latin1'))?.[1] ?? 'unreadable'} (signed in BI's own namespace; ${sb.length} bytes)`);
+        out(`BI signed bi sha256 ${sha(sb)} revision ${revisionOfSigned(sb) ?? 'unreadable'} (signed in BI's own namespace; ${sb.length} bytes)`);
       } catch (e) { out(`FAILED BI signed bi read: ${(e as Error).message}`); return 1; }
     }
   }
@@ -271,7 +264,7 @@ export async function runPublishCli(argv: string[], env: NodeJS.ProcessEnv, deps
           out('refused: the candidate tar differs from the vendored tree (vendor refresh incomplete?)');
           return 4;
         }
-        out(`node${node} ${name}.tar.gz parity ok (every vendored rego file + merged data.json)`);
+        out(`node${node} ${name}.tar.gz parity ok (every vendored file)`);
       }
     }
     if (outDir) {

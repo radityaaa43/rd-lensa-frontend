@@ -3,6 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, stat
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PLATFORMS } from './platforms.ts';
+import { readSourceTar, sourceTar } from './source-tar.ts';
 import type { BankPolicy, BiPolicy, ByPlatform, Owner } from './types.ts';
 
 function run(bin: string, args: string[], allowFail = false): Promise<string> {
@@ -13,6 +14,13 @@ function run(bin: string, args: string[], allowFail = false): Promise<string> {
       else resolve(stdout);
     });
   });
+}
+
+// Python's json.dumps(x, sort_keys=True) for strings, numbers, arrays and objects (default separators ', ' and ': ')
+export function pyJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(pyJson).join(', ')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}: ${pyJson((v as Record<string, unknown>)[k])}`).join(', ')}}`;
+  return JSON.stringify(v);
 }
 
 // Drives the pinned `opa` binary over besu/opa. Lensa owns only the editable keys; everything else stays as in git.
@@ -61,22 +69,20 @@ export class Opa {
     }
   }
 
-  // Every rego file a bundle tar must carry, relative to the bundle root (all .rego of the vendored bundles/<name> tree). `opa build` stores a rego file under the
-  // absolute path it was built from and merges every data.json into one `/data.json`, so only rego files can be compared by name; data is checked for presence.
+  // Every file a SOURCE bundle tar must carry, relative to the bundle root: all files of the vendored bundles/<name> tree (rego, .manifest, bi/config/data.json)
+  // plus, for bank, the bank/config/data.json that assemble() writes.
   expectedFiles(name: 'bi' | 'bank'): string[] {
     const root = join(this.opaRoot, 'bundles', name);
-    return (readdirSync(root, { recursive: true }) as string[]).filter((f) => f.endsWith('.rego') && statSync(join(root, f)).isFile()).sort();
+    const files = (readdirSync(root, { recursive: true }) as string[]).filter((f) => statSync(join(root, f)).isFile());
+    if (name === 'bank' && !files.includes('bank/config/data.json')) files.push('bank/config/data.json');
+    return files.sort();
   }
 
-  // Compares a built tar with expectedFiles(name): `missing` = a vendored rego not in the tar (a dropped door; 'data.json' if the merged data is absent),
-  // `extra` = a rego in the tar that is not vendored.
-  async bundleParity(tar: string, name: 'bi' | 'bank'): Promise<{ missing: string[]; extra: string[] }> {
-    const entries = (await run('tar', ['tzf', tar])).split('\n').filter(Boolean);
-    const rego = entries.filter((e) => e.endsWith('.rego'));
+  // Compares a built source tar with expectedFiles(name): `missing` = a vendored file not in the tar (a dropped door), `extra` = in the tar but not vendored.
+  bundleParity(tar: string, name: 'bi' | 'bank'): Promise<{ missing: string[]; extra: string[] }> {
+    const have = [...readSourceTar(readFileSync(tar)).keys()];
     const want = this.expectedFiles(name);
-    const missing = want.filter((f) => !rego.some((e) => e.endsWith(`/${f}`)));
-    if (!entries.some((e) => /^\.?\/?data\.json$/.test(e))) missing.push('data.json');
-    return { missing, extra: rego.filter((e) => !want.some((f) => e.endsWith(`/${f}`))).sort() };
+    return Promise.resolve({ missing: want.filter((f) => !have.includes(f)), extra: have.filter((f) => !want.includes(f)).sort() });
   }
 
   async test(): Promise<{ passed: number; total: number }> {
@@ -84,6 +90,19 @@ export class Opa {
     const out = await run(this.bin, ['test', '--format', 'json', join(r, 'bundles/bi'), join(r, 'bundles/bank'), join(r, 'test')], true);
     const results = JSON.parse(out) as { fail?: boolean; error?: unknown; skip?: boolean }[];
     return { passed: results.filter((t) => !t.fail && !t.error && !t.skip).length, total: results.length };
+  }
+
+  // true when this Opa signs on the host (a keys dir): then bundles are `opa build` output, signed here. Without keys (sink mode) a bundle is the SOURCE archive
+  // the party's own sink builds and signs (source-tar.ts); `opa build` output is refused by the sink (400 unsafe member name).
+  get signsOnHost(): boolean { return this.keysDir !== undefined; }
+
+  // The unsigned SOURCE archive of an assembled bundle directory, reproducible byte for byte: the revision goes into the .manifest the sink keeps
+  // (Lensa reads the revision of a gateway's active bundle from it). Writes outFile.
+  sourceBundle(bundleDir: string, revision: string, outFile: string): void {
+    const mf = join(bundleDir, '.manifest');
+    const manifest = { ...(JSON.parse(readFileSync(mf, 'utf8')) as Record<string, unknown>), revision };
+    writeFileSync(mf, pyJson(manifest) + '\n'); // the same text as besu's reference builder: json.dumps(manifest, sort_keys=True)
+    writeFileSync(outFile, sourceTar(bundleDir), { mode: 0o600 });
   }
 
   // keyId names the owner's key: the gateway pins it per bundle (`signing.keyid`), so a bundle signed with another key is refused.

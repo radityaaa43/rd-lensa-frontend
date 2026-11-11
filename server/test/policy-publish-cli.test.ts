@@ -43,6 +43,10 @@ class FakeOpa extends Opa {
     this.built.push({ revision, keyId });
     writeFileSync(outFile, `tar:${revision}`);
   }
+  override sourceBundle(_dir: string, revision: string, outFile: string): void {
+    this.built.push({ revision });
+    writeFileSync(outFile, `tar:${revision}`);
+  }
 }
 
 // a stored body is either the old fake text (`tar:<revision>`) or a real gzip of {"revision": ...} as latin1 text, maybe behind the fake's SIGNED: prefix
@@ -273,14 +277,14 @@ describe('--candidate: verify, then publish the exact verified bytes', () => {
     h.write(h.reduce((a, b) => a + b, 0).toString(8).padStart(6, '0') + '\0 ', 148);
     return Buffer.concat([h, body, Buffer.alloc((512 - (body.length % 512)) % 512)]);
   }
-  // a bundle tar as `opa build` writes it: /.manifest (revision) + one merged /data.json; the salt makes every tar differ in bytes (the build is not reproducible)
+  // a SOURCE bundle tar as the sink accepts it: relative names, .manifest with the revision, <kind>/config/data.json; the salt makes every tar differ in bytes
   function tarOf(rev: string, salt: string, kind: 'bi' | 'bank' = rev.startsWith('bi-') ? 'bi' : 'bank'): Buffer {
     const plats = ['zeto', 'noto', 'fabricx', 'iroha3'];
     const policy = Object.fromEntries(plats.map((p) => [p, DOC(p, kind)]));
     const data = kind === 'bi'
-      ? { bi: { config: { nodes: { node1: { party: 'BI' }, node2: { party: 'A', report_group: GROUPS.A }, node3: { party: 'B', report_group: GROUPS.B }, node4: { party: 'C', report_group: GROUPS.C } }, policy } } }
-      : { bank: { config: { policy } } };
-    return gzipSync(Buffer.concat([tarEntry('/.manifest', Buffer.from(JSON.stringify({ revision: rev, salt }))), tarEntry('/data.json', Buffer.from(JSON.stringify(data))), Buffer.alloc(1024)]));
+      ? { nodes: { node1: { party: 'BI' }, node2: { party: 'A', report_group: GROUPS.A }, node3: { party: 'B', report_group: GROUPS.B }, node4: { party: 'C', report_group: GROUPS.C } }, policy }
+      : { policy };
+    return gzipSync(Buffer.concat([tarEntry('.manifest', Buffer.from(JSON.stringify({ revision: rev, roots: [kind], salt }))), tarEntry(`${kind}/config/data.json`, Buffer.from(JSON.stringify(data))), Buffer.alloc(1024)]));
   }
   function mk(opts: { dirMode?: number } = {}) {
     const dir = join(mkdtempSync(join(tmpdir(), 'pubcli-cand-')), 'cand');
@@ -408,7 +412,7 @@ describe('--candidate: verify, then publish the exact verified bytes', () => {
   it('a tar that already carries a signature (.signatures.json: made on a host) is refused (R1): exit 5, no network call', async () => {
     const c = mk();
     const unsigned = readFileSync(join(c.dir, 'node3/bank.tar.gz'));
-    const b = gzipSync(Buffer.concat([gunzipSync(unsigned).subarray(0, -1024), tarEntry('/.signatures.json', Buffer.from('{"signatures":["x"]}')), Buffer.alloc(1024)]));
+    const b = gzipSync(Buffer.concat([gunzipSync(unsigned).subarray(0, -1024), tarEntry('.signatures.json', Buffer.from('{"signatures":["x"]}')), Buffer.alloc(1024)]));
     writeFileSync(join(c.dir, 'node3/bank.tar.gz'), b); c.write({ ...c.shas, 'node3/bank.tar.gz': sha(b) });
     const r = await run(args(c, '--apply'), {});
     expect(r.rc).toBe(5);
@@ -417,7 +421,7 @@ describe('--candidate: verify, then publish the exact verified bytes', () => {
   });
   it('a tar whose data.json cannot be read (no documents): exit 5, no network call', async () => {
     const c = mk();
-    const b = gzipSync(Buffer.concat([tarEntry('/.manifest', Buffer.from('{"revision":"bank-zeto.1"}')), Buffer.alloc(1024)]));
+    const b = gzipSync(Buffer.concat([tarEntry('.manifest', Buffer.from('{"revision":"bank-zeto.1"}')), Buffer.alloc(1024)]));
     writeFileSync(join(c.dir, 'node2/bank.tar.gz'), b); c.write({ ...c.shas, 'node2/bank.tar.gz': sha(b) });
     const r = await run(args(c, '--apply'), {});
     expect(r.rc).toBe(5); expect(r.io.calls).toEqual([]);
@@ -459,8 +463,18 @@ describe('--candidate: verify, then publish the exact verified bytes', () => {
     expect(r.rc).toBe(1);
     expect(io.calls.filter((x) => x.method === 'POST')).toEqual([]);
   });
+  it('call 1 of 2026-11-12 got HTTP 400 from the real sink (opa build output, rooted names): such a tar is refused by the CLI (exit 5) before any network call', async () => {
+    const c = mk();
+    const rooted = gzipSync(Buffer.concat([tarEntry('/.manifest', Buffer.from('{"revision":"bank-zeto.1"}')), tarEntry('/data.json', Buffer.from('{}')), Buffer.alloc(1024)]));
+    writeFileSync(join(c.dir, 'node2/bank.tar.gz'), rooted); c.write({ ...c.shas, 'node2/bank.tar.gz': sha(rooted) });
+    const r = await run(args(c, '--apply'), {});
+    expect(r.rc).toBe(5);
+    expect(r.lines.join('\n')).toMatch(/node2\/bank\.tar\.gz.*sink would refuse.*unsafe member name/);
+    expect(r.io.calls).toEqual([]);
+  });
   it('--parties with an unknown party or a wrong order is refused (exit 2)', async () => {
     const c = mk();
     expect((await run(args(c, '--apply', '--parties=BI,X'), {})).rc).toBe(2);
   });
 });
+

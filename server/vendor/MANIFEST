@@ -138,3 +138,4 @@ paladin-sdk build/verifier.js
 paladin-sdk build/websocket.d.ts
 paladin-sdk build/websocket.js
 paladin-sdk package.json
+besu opa/bundle-server/sink.py
