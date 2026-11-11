@@ -9,7 +9,28 @@
 // - delegateLock.abi.json: the PUBLIC delegateLock entry of the official zeto v0.5.1 artifact Zeto_Anon (same test).
 // Tests record what the vendored SDK sends and require the same request (server/test/zeto-lock-requests.test.ts).
 import delegateLockAbi from './delegateLock.abi.json';
+import { createHash } from 'node:crypto';
 import v1Abi from './IZetoFungible_V1.abi.json';
+
+// The private V1 ABI is pinned by content (zeto analyst audit 9). Paladin PR #1189 (branch zeto-v1) does not commit an ABI JSON; its source of truth is
+// the Solidity interface at the PR head, sha256 below (read by besu on 2026-11-12; the fork the node is built from has the same .sol bytes). File bytes
+// differ per copy, so the pin is the canonical ABI sha256: JSON of the abi array with object keys sorted and no whitespace.
+export const ZETO_V1_ABI_PIN = {
+  solPath: 'solidity/contracts/domains/interfaces/IZetoFungible_V1.sol',
+  solCommit: '28c72b76fda49d0e7c317432880f167a60da2f78',
+  solSha256: '686adfa17b5033962a57d49732c9804a36ab9638966395d237332626ed748109',
+  abiSha256: '8a55e0dfd3e34b37a67f313044a528b329a8b2bf010c2fa7d4f3572197e40a1b',
+  functions: ['balanceOf', 'cancelLock', 'createLock', 'deposit', 'mint', 'setERC20', 'spendLock', 'transfer', 'withdraw'],
+} as const;
+
+const sortKeys = (v: unknown): unknown => Array.isArray(v) ? v.map(sortKeys)
+  : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, x]) => [k, sortKeys(x)])) : v;
+export const canonicalAbiSha256 = (abi: unknown): string => createHash('sha256').update(JSON.stringify(sortKeys(abi))).digest('hex');
+// Fail closed: a changed or re-generated ABI file must not be used silently (a different ABI means different selectors on the node).
+export function assertPinnedAbi(abi: unknown): void {
+  if (canonicalAbiSha256(abi) !== ZETO_V1_ABI_PIN.abiSha256) throw new Error('IZetoFungible_V1 ABI differs from the pinned interface (Paladin PR #1189 28c72b76)');
+}
+assertPinnedAbi(v1Abi);
 
 export const ZETO_V1_PRIVATE_ABI = v1Abi as readonly Record<string, unknown>[];
 export const DELEGATE_LOCK_ABI = delegateLockAbi as readonly Record<string, unknown>[];
