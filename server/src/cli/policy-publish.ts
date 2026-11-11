@@ -1,14 +1,16 @@
 // One-off republish of the Kebijakan documents through the party SINKS (path A, analyst ruling 2026-11-12). Sink mode only, never signs on the host:
-//   npm run policy:publish -w server -- [--apply] [--expect-report-groups=A=0x..,B=0x..,C=0x..]
+//   npm run policy:publish -w server -- [--apply] [--expect-report-groups=A=0x..,B=0x..,C=0x..] [--state-dir=<policy store>] [--out=<dir for the candidate tars>]
 // - refuses to run without LENSA_SINK_TOKENS_DIR (dir 700, one token file per party) and refuses when OPA_KEYS_DIR is set: the opa binary is built WITHOUT signing keys,
 //   so every source goes up UNSIGNED and each party's bundle-server signs it in its own namespace; BI's signed `bi` bundle is fetched back from BI's sink and relayed
 //   byte-identical to the bank sinks (the same sink client as the running Publisher, policy/sink.ts).
 // - dry run by default (no write): per party the document names, versions and sha256, for bi the sha256 of policy + platforms, the nodes.*.report_group values of the
 //   bundle that would go up, and the sha256 of every tar. --apply writes: node by node, BI first, stop at the first error (a refused POST, a sink that did not sign its own name).
+// - documents come from the PolicyStore's LATEST versions only (store.latest never seeds); a missing version is exit 2. --state-dir picks the store (default: the checkout's server/state/policy).
+// - --out=<dir> (dry run or apply) copies the tars and summary.txt there, readable by others (the candidate for besu's policy-docs.py diff + regress.sh).
 // - --apply needs --expect-report-groups, and both modes refuse (exit 3) when the bundle's report groups differ: the old ids must not go out.
 // Exit codes: 0 ok, 1 failed, 2 refused (configuration), 3 report-group mismatch. Never touches lensa.service or lensa.env.
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PartyId } from '../domain.ts';
@@ -22,6 +24,7 @@ import { OWNER_OF_PARTY, type BankPolicy, type BiPolicy, type ByPlatform } from 
 export interface CliDeps {
   makeOpa: (bin: string) => Opa; // the real one has NO keys dir
   store: PolicyStore;
+  storeDir: string; // printed as evidence: which store the documents were read from
   makeIo: (tokensDir: string) => SinkIo & { parties: PartyId[] };
   out: (line: string) => void;
   timing?: PublisherTiming;
@@ -45,8 +48,10 @@ function expected(argv: string[]): Record<string, string> | null | 'bad' {
 }
 
 export async function runPublishCli(argv: string[], env: NodeJS.ProcessEnv, deps: CliDeps): Promise<number> {
-  const out = deps.out;
   const apply = argv.includes('--apply');
+  const outDir = argv.find((x) => x.startsWith('--out='))?.slice('--out='.length);
+  const report: string[] = [];
+  const out = (line: string) => { report.push(line); deps.out(line); };
   if (!env.LENSA_SINK_TOKENS_DIR) { out('refused: LENSA_SINK_TOKENS_DIR is required (sink mode only; this tool never signs on the host)'); return 2; }
   if (env.OPA_KEYS_DIR) { out('refused: OPA_KEYS_DIR is set (a host signing key path); unset it, this tool uploads UNSIGNED sources and the sinks sign'); return 2; }
   const want = expected(argv);
@@ -56,16 +61,20 @@ export async function runPublishCli(argv: string[], env: NodeJS.ProcessEnv, deps
   const opa = deps.makeOpa(env.OPA_BIN ?? 'opa');
   const store = deps.store;
 
-  // ---- evidence (dry run and apply): documents as the store holds them now
+  // ---- evidence (dry run and apply): documents as the store holds them now. latest() never seeds: a missing version is a refusal, never a silent seed v1.
   out(`mode ${apply ? 'APPLY (writes to the sinks)' : 'dry run (no write)'}`);
+  out(`store ${deps.storeDir}`);
+  for (const o of ['bi', 'bank-a', 'bank-b', 'bank-c'] as const) for (const p of PLATFORMS) {
+    if (!store.latest(o, p)) { out(`refused: no stored version for ${o} ${p} in ${deps.storeDir} (wrong --state-dir? seeds are never published)`); return 2; }
+  }
   const biDocs = {} as ByPlatform<BiPolicy>;
   const bankDocs = Object.fromEntries(BANKS.map((p) => [p, {} as ByPlatform<BankPolicy>])) as Record<(typeof BANKS)[number], ByPlatform<BankPolicy>>;
   for (const p of PLATFORMS) {
-    const v = store.current('bi', p);
+    const v = store.latest('bi', p)!;
     biDocs[p] = v.doc as BiPolicy;
     out(`BI ${p} v${v.n} sha256 ${sha(JSON.stringify(v.doc))}`);
     for (const b of BANKS) {
-      const bv = store.current(OWNER_OF_PARTY[b], p);
+      const bv = store.latest(OWNER_OF_PARTY[b], p)!;
       bankDocs[b][p] = bv.doc as BankPolicy;
       out(`${b} ${p} v${bv.n} sha256 ${sha(JSON.stringify(bv.doc))}`);
     }
@@ -102,7 +111,17 @@ export async function runPublishCli(argv: string[], env: NodeJS.ProcessEnv, deps
       out(`node${node} bi.tar.gz sha256 ${sha(readFileSync(join(dir, 'bi.tar.gz')))} (${revisionOf('bi', v.bi)})`);
       out(`node${node} bank.tar.gz sha256 ${sha(readFileSync(join(dir, 'bank.tar.gz')))}`);
     }
-    if (!apply) { out('dry run done: nothing was written'); return 0; }
+    if (outDir) {
+      mkdirSync(outDir, { recursive: true, mode: 0o755 });
+      chmodSync(outDir, 0o755);
+      for (const node of NODES) {
+        mkdirSync(join(outDir, `node${node}`), { recursive: true, mode: 0o755 });
+        for (const f of ['bi.tar.gz', 'bank.tar.gz']) { copyFileSync(join(built.get(node)!.dir, f), join(outDir, `node${node}`, f)); chmodSync(join(outDir, `node${node}`, f), 0o644); }
+      }
+      writeFileSync(join(outDir, 'summary.txt'), report.join('\n') + '\n', { mode: 0o644 });
+      deps.out(`candidate written to ${outDir} (node1..4/{bi,bank}.tar.gz, summary.txt)`);
+    }
+    if (!apply) { out('dry run done: nothing was written to the sinks'); return 0; }
 
     // ---- apply: node by node, BI first (node 1), stop at the first error
     const io = deps.makeIo(env.LENSA_SINK_TOKENS_DIR);
@@ -135,8 +154,9 @@ export async function runPublishCli(argv: string[], env: NodeJS.ProcessEnv, deps
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const store = new PolicyStore(POLICY_STATE_DIR, SEEDS_DIR);
+  const storeDir = process.argv.find((x) => x.startsWith('--state-dir='))?.slice('--state-dir='.length) ?? POLICY_STATE_DIR;
+  const store = new PolicyStore(storeDir, SEEDS_DIR);
   // no keys dir, ever: the Opa built here cannot sign
-  const rc = await runPublishCli(process.argv.slice(2), process.env, { makeOpa: (bin) => new Opa(bin, OPA_ROOT), store, makeIo: (dir) => sinkIo(dir), out: (l) => console.log(l) });
+  const rc = await runPublishCli(process.argv.slice(2), process.env, { makeOpa: (bin) => new Opa(bin, OPA_ROOT), store, storeDir, makeIo: (dir) => sinkIo(dir), out: (l) => console.log(l) });
   process.exit(rc);
 }

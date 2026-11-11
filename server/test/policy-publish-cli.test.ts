@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { runPublishCli, type CliDeps } from '../src/cli/policy-publish.ts';
 import { Opa } from '../src/policy/opa.ts';
 import { PLATFORMS } from '../src/policy/platforms.ts';
 import { sinkIo as realSinkIo, type SinkIo } from '../src/policy/sink.ts';
-import type { PolicyStore } from '../src/policy/store.ts';
+import { PolicyStore as RealStore, type PolicyStore } from '../src/policy/store.ts';
 
 // Path A (analyst, lead 2026-11-12): the one-off CLI republishes the Kebijakan documents through the party SINKS only: UNSIGNED sources, each party's bundle-server signs
 // with its own in-namespace key, BI first, the signed bi bundle relayed byte-identical to the bank sinks. It never signs on the host: it refuses to run without
@@ -21,10 +22,8 @@ const docs = {
   bank: { counterparties: ['bi@node1', 'bankB@node3'] },
 };
 // fake store: every owner and platform at v3 (BI v4)
-const store = {
-  current: (owner: string) => ({ n: owner === 'bi' ? 4 : 3, doc: owner === 'bi' ? docs.bi : docs.bank }),
-  history: (owner: string) => [{ n: owner === 'bi' ? 4 : 3, doc: owner === 'bi' ? docs.bi : docs.bank }],
-} as unknown as PolicyStore;
+const fakeVersion = (owner: string) => ({ n: owner === 'bi' ? 4 : 3, doc: owner === 'bi' ? docs.bi : docs.bank });
+const store = { latest: fakeVersion, current: fakeVersion, history: (owner: string) => [fakeVersion(owner)] } as unknown as PolicyStore;
 
 // fake opa: assemble writes the bi data.json with the nodes (report_group per bank party), build writes the revision as the tar content; records signing keys
 class FakeOpa extends Opa {
@@ -73,12 +72,12 @@ function fakeIo(opts: { refuse?: { party: string; name: string; status?: number 
   return { io, calls, stored };
 }
 
-function run(argv: string[], env: Record<string, string>, o: { groups?: Record<string, string>; io?: ReturnType<typeof fakeIo> } = {}) {
+function run(argv: string[], env: Record<string, string>, o: { groups?: Record<string, string>; io?: ReturnType<typeof fakeIo>; store?: PolicyStore } = {}) {
   const lines: string[] = [];
   const opa = new FakeOpa(o.groups ?? G);
   const io = o.io ?? fakeIo();
   const made: string[] = [];
-  const deps: CliDeps = { makeOpa: (bin) => { made.push(bin); return opa; }, store, makeIo: (dir) => { made.push('io:' + dir); return io.io; }, out: (l) => lines.push(l), timing: { waitMs: 50, pollMs: 5 } };
+  const deps: CliDeps = { makeOpa: (bin) => { made.push(bin); return opa; }, store: o.store ?? store, storeDir: '/live/state/policy', makeIo: (dir) => { made.push('io:' + dir); return io.io; }, out: (l) => lines.push(l), timing: { waitMs: 50, pollMs: 5 } };
   return runPublishCli(argv, { OPA_BIN: 'opa', LENSA_SINK_TOKENS_DIR: '/tokens', ...env }, deps).then((rc) => ({ rc, lines, opa, io, made }));
 }
 
@@ -157,5 +156,66 @@ describe('the real sink io is only the existing one', () => {
     const src = await import('node:fs').then((fs) => fs.readFileSync(new URL('../src/cli/policy-publish.ts', import.meta.url), 'utf8'));
     expect(src).not.toMatch(/kubectl|child_process|OPA_KEYS_DIR\]|readFileSync\([^)]*opa-keys/);
     vi.restoreAllMocks();
+  });
+});
+
+// besu warning: seeds/*.json are only the FIRST versions (RD max_per_tx 1000000000 there, 2000000000 live). PolicyStore.history() writes a seed v1 when a directory is
+// missing, so the CLI must read with latest() (never seeds) and refuse when a version is missing.
+describe('publishes from the store\'s latest versions only, never from seeds', () => {
+  const seedBi = { zeto: { ...docs.bi, max_per_tx: { RD: 1000000000 } } };
+  function realStore(withV2: boolean) {
+    const root = mkdtempSync(join(tmpdir(), 'pubcli-store-'));
+    const seeds = join(root, 'seeds'); mkdirSync(seeds);
+    writeFileSync(join(seeds, 'bi.json'), JSON.stringify({ zeto: seedBi.zeto, noto: seedBi.zeto, fabricx: seedBi.zeto, iroha3: seedBi.zeto }));
+    for (const o of ['bank-a', 'bank-b', 'bank-c']) writeFileSync(join(seeds, `${o}.json`), JSON.stringify({ zeto: docs.bank, noto: docs.bank, fabricx: docs.bank, iroha3: docs.bank }));
+    const st = new RealStore(join(root, 'policy'), seeds);
+    const t = new Date().toISOString();
+    const ver = (owner: 'bi' | 'bank-a' | 'bank-b' | 'bank-c', platform: 'zeto' | 'noto' | 'fabricx' | 'iroha3', n: number, doc: unknown) =>
+      st.saveVersion({ owner, platform, n, doc, maker: 'm', checker: 'c', reason: 'r', note: '', submittedAt: t, approvedAt: t } as never);
+    for (const o of ['bi', 'bank-a', 'bank-b', 'bank-c'] as const) for (const p of PLATFORMS) {
+      ver(o, p, 1, o === 'bi' ? seedBi.zeto : docs.bank);
+      if (withV2) ver(o, p, 2, o === 'bi' ? docs.bi : docs.bank);
+    }
+    return { st, root };
+  }
+  it('latest() returns the highest version and never writes; null when nothing is stored', () => {
+    const { st, root } = realStore(true);
+    expect(st.latest('bi', 'zeto')!.n).toBe(2);
+    const empty = new RealStore(join(root, 'nothing'), join(root, 'seeds'));
+    expect(empty.latest('bi', 'zeto')).toBeNull();
+    expect(existsSync(join(root, 'nothing'))).toBe(false); // history() would have created it with a seed v1
+  });
+  it('the bundle is built from v2 (max_per_tx RD 2000000000), not from the seed v1 (1000000000)', async () => {
+    const { st } = realStore(true);
+    const seen: unknown[] = [];
+    class SpyOpa extends FakeOpa { override assemble(n: 1 | 2 | 3 | 4, bi: unknown, bank: unknown, out: string) { seen.push(bi); super.assemble(n, bi, bank, out); } }
+    const lines: string[] = [];
+    const rc = await runPublishCli([EXPECT], { OPA_BIN: 'opa', LENSA_SINK_TOKENS_DIR: '/tokens' }, { makeOpa: () => new SpyOpa(G), store: st, storeDir: 'x', makeIo: () => fakeIo().io, out: (l) => lines.push(l) });
+    expect(rc).toBe(0);
+    expect(JSON.stringify(seen)).toContain('2000000000');
+    expect(JSON.stringify(seen)).not.toContain('1000000000"');
+    expect(lines.join('\n')).toContain(`BI zeto v2 sha256 ${sha(JSON.stringify(docs.bi))}`);
+  });
+  it('a missing stored version refuses with exit 2, names owner/platform, builds nothing and leaves the store untouched', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pubcli-empty-'));
+    const seeds = join(root, 'seeds'); mkdirSync(seeds);
+    writeFileSync(join(seeds, 'bi.json'), JSON.stringify({ zeto: seedBi.zeto }));
+    const st = new RealStore(join(root, 'policy'), seeds);
+    const r = await run([EXPECT], {}, { store: st });
+    expect(r.rc).toBe(2);
+    expect(r.lines.join('\n')).toMatch(/no stored version.*bi.*zeto/i);
+    expect(existsSync(join(root, 'policy'))).toBe(false);
+  });
+});
+
+describe('--out writes the candidate tars and the evidence for review (dry run)', () => {
+  it('writes node1..4 bi/bank tars and summary.txt, mode 755 dir, and still calls no sink', async () => {
+    const out = join(mkdtempSync(join(tmpdir(), 'pubcli-out-')), 'cand');
+    const r = await run([EXPECT, `--out=${out}`], {});
+    expect(r.rc).toBe(0);
+    expect(r.io.calls).toEqual([]);
+    for (const n of [1, 2, 3, 4]) for (const f of ['bi', 'bank']) expect(existsSync(join(out, `node${n}`, `${f}.tar.gz`))).toBe(true);
+    expect(readFileSync(join(out, 'summary.txt'), 'utf8')).toContain('nodes.node2.report_group');
+    expect(r.lines.join('\n')).toContain('store /live/state/policy');
   });
 });
