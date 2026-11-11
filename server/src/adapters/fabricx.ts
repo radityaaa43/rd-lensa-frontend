@@ -20,6 +20,11 @@ export interface FabricxState { kubeconfig: string; namespace: string; funded?: 
 export type Exec = (args: string[]) => Promise<string>; // kubectl arguments after --kubeconfig/-n; resolves with stdout
 
 const CALL_MS = 180_000; // one driver call: ~4 s of work, generous because a slow endorsement must not be cut off
+// BI down: a gateway answer took 260868 ms (fabric, submit 130973 + report 128897), and Envoy cuts a route at 300 s
+// (fabric-x/panurus-itest/scripts/k8s.py:299). So the gateway fetch waits 305 s. The tx deadline also covers the 4 lens reads after
+// run (LEDGER_WAIT_MS 20 s + RECORDS_WAIT_MS 10 s), so 305 + 30 + 5 s margin.
+const GW_CALL_MS = 305_000;
+const TX_DEADLINE_MS = 340_000;
 const LEDGER_WAIT_MS = 20_000;
 const RECORDS_WAIT_MS = 10_000;
 const MAX_TX = 3; // overall in-flight operations
@@ -97,7 +102,7 @@ export type GwCall = (party: PartyId, body: Record<string, unknown>) => Promise<
 export const fxGateway: GwCall = async (party, body) => {
   const name = PARTIES[party].name;
   const res = await gwFetch(gwUrl(`http://127.0.0.1:${39440 + PARTIES[party].node}/`), {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(CALL_MS),
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(GW_CALL_MS),
   });
   const text = (await res.text()).trim();
   if (res.status === 403) throw new Error(`Ditolak kebijakan di gateway ${name}${text ? `: ${text.slice(0, 300)}` : ''}`);
@@ -373,6 +378,7 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall) {
 
   const adapter: ModelAdapter & { fund: typeof issue } = {
     id: 'fabricx',
+    txDeadlineMs: TX_DEADLINE_MS,
     stepLabels: ['Bukti ZK & endorsement 3-of-4', 'Final di ledger', 'Laporan ke BI', 'Cek ledger publik'],
     capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
     async health() {
