@@ -133,7 +133,7 @@ export function runDvpShared(run: ApsRunner, c: ApsConfig, p: { seller: PartyId;
 }
 
 // What one party's note keys open in both pools, rebuilt by the driver from the bundle receipts on the party's own Torii.
-export interface WalletItem { bundle_id: string; height: number; asset: 'rd' | 'dfabi'; direction: 'in' | 'out'; amount: string }
+export interface WalletItem { bundle_id: string; height: number; asset: 'rd' | 'dfabi'; direction: 'in' | 'out'; amount: string; fee?: string } // fee: sponsor reimbursement, "1" on the leg-0 payer's RD out item (iroha3-rd-node-build driver/src/pools.rs:446-449); old drivers omit it
 export interface Wallet { balances: { rd: string; dfabi: string }; items: WalletItem[] }
 export async function walletOf(run: ApsRunner, c: ApsConfig, party: PartyId): Promise<Wallet> {
   let w: Wallet | undefined;

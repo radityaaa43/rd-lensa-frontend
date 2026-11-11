@@ -337,6 +337,29 @@ describe('iroha3 private shared pools (APS, every flow)', () => {
     expect(h[1]).toMatchObject({ id: other, flow: null, asset: 'RD', role: 'receiver', amount: '7', counterparty: { from: null, to: 'C' } });
   });
 
+  // RED until fe maps the driver's wallet item `fee` (node-build pools.rs:446-449: "1" or "0") onto HistoryItem.fee: "1" is shown, "0" or absent is no fee.
+  it('history: a wallet item with fee "1" gives HistoryItem.fee "1"; fee "0" or no fee field gives no fee', async () => {
+    const fee = (h: unknown) => (h as { fee?: string }).fee;
+    const items = [{ bundle_id: 'bc'.repeat(32), height: 60, asset: 'rd', direction: 'out', amount: '7', fee: '1' },
+      { bundle_id: 'cd'.repeat(32), height: 61, asset: 'rd', direction: 'out', amount: '8', fee: '0' },
+      { bundle_id: 'de'.repeat(32), height: 62, asset: 'rd', direction: 'out', amount: '9' }];
+    const a = createIroha3Adapter(sharedState, fake().cli, undefined, driver({ 'bank-c': wallet('bank-c', '7', '0', items) }).run);
+    const h = await a.history('C', 10);
+    expect(h.map((x) => x.block)).toEqual([62, 61, 60]);
+    expect(fee(h[2])).toBe('1');
+    expect(fee(h[1])).toBeUndefined();
+    expect(fee(h[0])).toBeUndefined();
+  });
+
+  it('history: a bundle with an RD item (fee "1") and a DFABI item (fee "0") is one row with fee "1"', async () => {
+    const id = 'ef'.repeat(32);
+    const items = [{ bundle_id: id, height: 70, asset: 'rd', direction: 'out', amount: '1000000', fee: '1' }, { bundle_id: id, height: 70, asset: 'dfabi', direction: 'in', amount: '1', fee: '0' }];
+    const a = createIroha3Adapter(sharedState, fake().cli, undefined, driver({ 'bank-b': wallet('bank-b', '5', '0', items) }).run);
+    const h = await a.history('B', 10);
+    expect(h).toHaveLength(1);
+    expect((h[0] as { fee?: string }).fee).toBe('1');
+  });
+
   it('history: a bank lists its own movements from the chain, BI every finalized bundle from its audit records', async () => {
     writeFileSync(join(dir, 'pools.json'), JSON.stringify({ rd: { bundles: [{ id: BUNDLE, height: 50 }, { id: 'aa'.repeat(32), height: 0 }] }, dfabi: { bundles: [] } }));
     const items = [{ bundle_id: BUNDLE, height: 50, asset: 'rd', direction: 'out', amount: '300' }];
