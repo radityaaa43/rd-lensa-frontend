@@ -1,5 +1,5 @@
 // Owned code since sdk D step 2 (final-design/lensa): moved from the vendored besu/zeto/src/flows.ts. The lock calls now come from ./zeto-v1.ts
-// (plain ptx requests); mint, transfer, deploy and the Atom calls still use the vendored Paladin SDK build and are replaced one by one.
+// (plain ptx requests), mint since step 3 (./token-requests.ts); transfer, deploy and the Atom calls still use the vendored Paladin SDK build and are replaced one by one.
 // Zeto flow helpers for the Lensa Privasi app, parameterised (no module globals). Same calls as
 // spike-zeto-e2e.ts (createLock/prepareSpendLock/delegateLockV1/Atom/report), plus private mint.
 // Zeto V1 (Paladin main + PR #1189, zeto-contracts v0.5.1). Issuance is private `mint` by the token owner
@@ -19,7 +19,8 @@ import PaladinClient, {
 import { AtomFactory } from '../../vendor/besu/zeto/src/atom.ts';
 import { REPORT_TOPIC, Report, buildReport } from '../../vendor/besu/zeto/src/bi-report.ts';
 import { LONG_POLL_TIMEOUT, nodeConnections } from '../../vendor/besu/zeto/src/common.ts';
-import { ZETO_V1, createLock, delegateLock, prepareSpend } from './zeto-v1.ts';
+import { mintRequest } from './token-requests.ts';
+import { PtxClient, ZETO_V1, createLock, delegateLock, prepareSpend } from './zeto-v1.ts';
 
 export { PaladinClient, ZetoInstance, AtomFactory, nodeConnections, IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X, algorithmZetoSnarkBJJ };
 export { newAtomFactory } from "../../vendor/besu/zeto/src/atom.ts";
@@ -78,8 +79,8 @@ export async function deployToken(issuer: Party): Promise<ZetoInstance> {
 export async function mintUtxos(issuer: Party, zeto: ZetoInstance, to: Party, count: number, amount: bigint): Promise<Settled[]> {
   const out: Settled[] = [];
   for (let left = count; left > 0; left -= 10) {
-    const mints = Array.from({ length: Math.min(10, left) }, () => ({ to: to.v, amount: Number(amount), data: "0x" }));
-    out.push(await settle(issuer.c, zeto.using(issuer.c).mint(issuer.v, { mints }), `mint untuk ${to.lookup}`));
+    const mints = Array.from({ length: Math.min(10, left) }, () => ({ to: to.lookup, amount, data: "0x" }));
+    out.push(await settle(issuer.c, { id: (issuer.c as PtxClient).ptx.sendTransaction(mintRequest(zeto.address, issuer.lookup, mints)) }, `mint untuk ${to.lookup}`));
   }
   return out;
 }
