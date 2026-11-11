@@ -33,6 +33,7 @@ export function cells(it: HistoryItem, name: (p: PartyId) => string) {
     // a BI top-up mint for the award (ARCHITECTURE.md §7.1 "BI inventory") is a dfabi-issue BI -> BI
     flow: it.flow === null ? SEALED : text(it.flow === 'dfabi-issue' && cp?.from === 'BI' && cp.to === 'BI' ? MINT_TO_BI : FLOW_NAME[it.flow]),
     amount: it.amount === null ? SEALED : text(money(it.amount, it.asset)),
+    ...(it.fee && it.fee !== '0' ? { fee: text(money(it.fee, 'RD')) } : {}), // only Iroha 3 reports a fee; nothing when absent
     rd: it.rdAmount !== null ? text(money(it.rdAmount, 'RD')) : isDvpFlow(it.flow) || it.flow === null ? SEALED : ({ t: 'na' } as Cell),
     from: side(it.counterparty?.from),
     to: side(it.counterparty?.to),
@@ -96,7 +97,7 @@ export function HistoryTable({ items, meta, route, caption }: { items: HistoryIt
                   <>
                     <td data-label="Transaksi"><b>{show(c.flow, 'flow')}</b><small>{roleLabel(it.role, isDvpFlow(it.flow))}</small></td>
                     <td data-label="Pihak"><span className="cp">{show(c.from, 'party')}<span aria-label="ke">→</span>{show(c.to, 'party')}</span></td>
-                    <td data-label="Nominal" className="right amt">{show(c.amount, 'amount')}</td>
+                    <td data-label="Nominal" className="right amt">{show(c.amount, 'amount')}{c.fee?.t === 'text' && <small>+ biaya {c.fee.text}</small>}</td>
                     <td data-label="Kaki RD" className="right">{show(c.rd, 'amount')}</td>
                     <td data-label="Status"><Verdict v={it.verdict} />{notReported(route.model, route.party, it) && <small className="pending">{NOT_REPORTED}</small>}</td>
                   </>

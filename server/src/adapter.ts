@@ -23,6 +23,7 @@ export interface HistoryItem {
   amount: string | null; // dvp => DFABI units
   rdAmount: string | null; // dvp and award: the RD leg
   counterparty: Counterparty | null;
+  fee?: string; // RD fee the party paid on top of the amount (Iroha 3 sponsor reimbursement); absent = none or not reported
 }
 export type NodeKind = 'besu-validator' | 'paladin' | 'fsc-node' | 'fabricx-committer' | 'fabricx-orderer' | 'iroha-peer';
 export interface NetworkNode { id: string; label: string; kind: NodeKind; owner: PartyId | null; status: 'up' | 'down' | 'unknown'; detail: string }

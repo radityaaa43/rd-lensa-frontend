@@ -357,8 +357,8 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
       }).sort((a, b) => (b.block ?? 0) - (a.block ?? 0)).slice(0, want);
     }
     const w = await walletFor(party);
-    const bundles = new Map<string, { height: number; rd?: string; dfabi?: string; rdDir?: string; dfabiDir?: string }>();
-    for (const i of w.items) bundles.set(i.bundle_id, { ...bundles.get(i.bundle_id), height: i.height, [i.asset]: i.amount, [`${i.asset}Dir`]: i.direction });
+    const bundles = new Map<string, { height: number; rd?: string; dfabi?: string; rdDir?: string; dfabiDir?: string; fee?: string }>();
+    for (const i of w.items) bundles.set(i.bundle_id, { ...bundles.get(i.bundle_id), height: i.height, [i.asset]: i.amount, [`${i.asset}Dir`]: i.direction, ...(i.asset === 'rd' && i.fee && i.fee !== '0' ? { fee: i.fee } : {}) });
     return [...bundles].map(([id, b]): HistoryItem => {
       const j = journal[id];
       const flow = j?.flow ?? (b.rd && b.dfabi ? 'dvp' : null);
@@ -368,7 +368,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
       const out = (asset === 'RD' ? b.rdDir : b.dfabiDir) === 'out';
       const counterparty = j ? { from: j.from, to: j.to } : { from: out ? party : null, to: out ? null : party };
       const role = roleFromParties(party, counterparty, !!j && FLOWS[j.flow].issuer);
-      return { id: j?.tx ?? id, at: null, block: b.height, flow, asset, role, verdict: 'clear', amount: (asset === 'RD' ? b.rd : b.dfabi) ?? null, rdAmount: dvp ? b.rd ?? null : null, counterparty };
+      return { id: j?.tx ?? id, at: null, block: b.height, flow, asset, role, verdict: 'clear', amount: (asset === 'RD' ? b.rd : b.dfabi) ?? null, rdAmount: dvp ? b.rd ?? null : null, counterparty, ...(b.fee ? { fee: b.fee } : {}) };
     }).sort((a, b) => (b.block ?? 0) - (a.block ?? 0)).slice(0, want);
   }
 
