@@ -47,17 +47,17 @@ Server runtime (`server/src`):
 CLI / demo only (not the server): `RPC_URL`, `DEPLOYER_KEY` (**Secret**, `cli/bootstrap-stealth.ts:19-22`), `LENSA_PORTS` (`cli/stealth-bi-key.ts:6`), `OPA_BIN`/`OPA_KEYS_DIR` (`cli/policy-build.ts`), `FABRICX_KUBECONFIG` (`cli/bootstrap-fabricx.ts:12`), and `DEMO_*` (`demo/`, test tooling). The `mock-main.ts` dev server reads `PORT`, `OPA_BIN`.
 Not environment but config files the server reads: `state/*.json` (section 2), `deploy/forwards.conf` (only the forward units read it).
 
-## 4. The 17 `lensa-pf@*` units (`deploy/forwards.conf`, `lensa-pf@.service`, `pf.sh`)
-Each is `kubectl port-forward -n <ns> svc/<svc> <local>:<remote> --address 127.0.0.1`, started by `lensa.service` `Wants=`/`After=` (all 17 listed there; never `systemctl enable`d). Needs a kubeconfig on the host (`KUBECONFIG`).
+## 4. The 15 `lensa-pf@*` units (`deploy/forwards.conf`, `lensa-pf@.service`, `pf.sh`)
+Each is `kubectl port-forward -n <ns> svc/<svc> <local>:<remote> --address 127.0.0.1`, started by `lensa.service` `Wants=`/`After=` (all 15 listed there; never `systemctl enable`d). Needs a kubeconfig on the host (`KUBECONFIG`).
 | Unit | ns / service : port | Local | Replaced by L5 env (#19/#20) |
 |---|---|---|---|
-| `paladin-node1..4` | `paladin` / `bank-gw-1..4` : 8548 | 31548, 31648, 31748, 31848 | **yes**: `LENSA_GW_PALADIN_<BI,A,B,C>` |
-| `besu` | `paladin` / `bank-gw-1` : 8545 | 38545 | env URL `LENSA_BESU_RPC` (already a URL, not `LENSA_GW_*`) |
-| `besu-bank-a/b/c` | `paladin` / `bank-gw-2..4` : 8545 | 38546, 38547, 38548 | env URL `LENSA_BESU_RPC_BANKS` |
+| `paladin-node1..3` | `rd-zeto-bi`, `rd-zeto-bank-a`, `rd-zeto-bank-b` / `bank-gw-1..3` : 8548 | 31548, 31648, 31748 | **yes**: `LENSA_GW_PALADIN_<BI,A,B>` (bank C: no host forward, cluster 2) |
+| `besu` | `rd-zeto-bi` / `bank-gw-1` : 8545 | 38545 | env URL `LENSA_BESU_RPC` (already a URL, not `LENSA_GW_*`) |
+| `besu-bank-a/b` | `rd-zeto-bank-a`, `rd-zeto-bank-b` / `bank-gw-2..3` : 8545 | 38546, 38547 | env URL `LENSA_BESU_RPC_BANKS` |
 | `fabricx-gw-1..4` | `fabricx` / `fx-gw-1..4` : 8443 | 39441..39444 | **yes**: `LENSA_GW_FABRICX_<BI,A,B,C>` (needs `LENSA_FABRICX_GW=1`) |
 | `iroha-bi`, `iroha-bank-a/b/c` | `iroha3` / `bi`, `bank-a..c` : 8080 | 38080..38083 | **no**: the torii URL per party is a field of `state/iroha3.json` (`torii`, `Iroha3State` in `iroha3.ts:27`), not an env var |
 | `iroha-auditor` | `iroha3` / `bi-auditor` : 8090 | 38090 | **no**: `aps.auditor` in `state/iroha3.json` |
-So with L5 env set, 8 of 17 are replaced by env (Paladin 4, Fabric-X 4), 4 more are replaced by editing existing env URLs (Besu), 5 (Iroha) need a state-file change (iroha3 S16) [not done]. Namespace references per unit: `final-design/LENSA.md` section 6.
+So with L5 env set, 7 of 15 are replaced by env (Paladin 3, Fabric-X 4), 3 more are replaced by editing existing env URLs (Besu), 5 (Iroha) need a state-file change (iroha3 S16) [not done]. Namespace references per unit: `final-design/LENSA.md` section 6.
 Reads that still need a kube credential, independent of the forwards: Publisher sink status (`policy/kube.ts`, `NS='paladin'`), Besu validator pod list (`besu-network.ts:20`), and while `LENSA_FABRICX_GW` is unset the Fabric-X `kubectl exec`/psql path (`fabricx.ts:85-102`).
 
 ## 5. Ports, health, startup, restart
