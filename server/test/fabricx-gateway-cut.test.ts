@@ -11,11 +11,16 @@ const row = (tx: string, block: number) => `${tx}|01${block.toString(16).padStar
 
 // Bank A's own committer DB (deploy/rdbi-bank2) lists OLD, and NEW from its `newFrom`-th listing on (1 = the snapshot before the call).
 // BI's committer DB serves NEW's ledger rows (readLedger).
-function fake(newFrom: number) {
+function fake(newFrom: number, bad: { throwOn?: (n: number) => boolean; hangFirst?: boolean } = {}) {
   let lists = 0;
   const exec: Exec = async (args) => {
     if (args.includes('committer-db-0')) return `k|\\000tr\\000${NEW}\\000|32|${'11'.repeat(32)}\nk|\\000${NEW}\\0000\\000|274|${'22'.repeat(32)}\ns|1|016f00|\n`;
-    if (args.includes('deploy/rdbi-bank2')) { lists++; return lists >= newFrom ? `${row(NEW, 0x70)}\n${row(OLD, 0x6f)}` : row(OLD, 0x6f); }
+    if (args.includes('deploy/rdbi-bank2')) {
+      lists++;
+      if (bad.hangFirst && lists === 1) return new Promise<string>(() => {}); // the snapshot never answers
+      if (bad.throwOn?.(lists)) throw new Error('kubectl: connection refused');
+      return lists >= newFrom ? `${row(NEW, 0x70)}\n${row(OLD, 0x6f)}` : row(OLD, 0x6f);
+    }
     return '{}';
   };
   return { exec, lists: () => lists };
@@ -84,6 +89,45 @@ describe('fabricx run() when the gateway cuts a transfer', () => {
       const r = await got;
       expect(r).not.toHaveProperty('err');
       expect((r as { ok: { context: { report: string } } }).ok.context.report).toMatch(/^not delivered: gateway cut after 301 s/);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('(f) a poll read that throws once does not end the recovery: the next poll finds the tx', async () => {
+    vi.useFakeTimers();
+    try {
+      const got = settle(createFabricxAdapter(fake(3, { throwOn: (n) => n === 2 }).exec, cut('504', 300_000)).run(transfer, 1000n, () => {}));
+      await vi.advanceTimersByTimeAsync(300_000 + 10_000);
+      const r = await got;
+      expect(r).not.toHaveProperty('err');
+      expect((r as { ok: { txHash: string } }).ok.txHash).toBe(NEW);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('(g) poll reads that always throw end with the "mungkin sudah commit" message, not the raw read error', async () => {
+    vi.useFakeTimers();
+    try {
+      const got = settle(createFabricxAdapter(fake(1, { throwOn: (n) => n >= 2 }).exec, cut('504', 300_000)).run(transfer, 1000n, () => {}));
+      await vi.advanceTimersByTimeAsync(300_000 + 25_000);
+      expect(((await got) as { err: Error }).err?.message).toContain('mungkin sudah commit');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('(h) a snapshot read that never answers is given up after 10 s: the gateway call still starts, without recovery', async () => {
+    vi.useFakeTimers();
+    try {
+      let startedAt = -1;
+      const gw: GwCall = async (_p, body) => {
+        if (body.op !== 'transfer') return {};
+        startedAt = Date.now();
+        return { txId: NEW, report: 'recorded', steps: [{ name: 'submit', ms: 1 }, { name: 'final', ms: 1 }, { name: 'report', ms: 1 }] };
+      };
+      const t0 = Date.now();
+      const got = settle(createFabricxAdapter(fake(1, { hangFirst: true }).exec, gw).run(transfer, 1000n, () => {}));
+      await vi.advanceTimersByTimeAsync(10_000 + 1_000);
+      const r = await got;
+      expect(startedAt - t0).toBeGreaterThanOrEqual(10_000);
+      expect(startedAt - t0).toBeLessThanOrEqual(10_500);
+      expect(r).not.toHaveProperty('err');
     } finally { vi.useRealTimers(); }
   });
 });

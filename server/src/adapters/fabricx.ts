@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, StepEvent, Verdict } from '../adapter.ts';
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, type LoadUser } from '../adapter.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
+import { withDeadline } from '../deadline.ts';
 import { gwFetch, gwUrl } from '../gateway.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
@@ -27,6 +28,7 @@ const GW_CALL_MS = 305_000;
 const TX_DEADLINE_MS = 340_000;
 const LEDGER_WAIT_MS = 20_000;
 const CUT_POLL_MS = 5_000; // see recoverCut
+const CUT_READ_MS = 10_000; // one ledger listing inside recoverCut: a hung kubectl must not hold the transfer or the recovery
 const RECORDS_WAIT_MS = 10_000;
 const MAX_TX = 3; // overall in-flight operations
 const NODE: Record<PartyId, string> = { BI: 'issuer', A: 'bank2', B: 'bank3', C: 'bank4' };
@@ -211,16 +213,19 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall) {
   // BI down: a transfer takes ~261 s, Envoy cuts the route at 300 s (fabric-x/panurus-itest/scripts/k8s.py:299) and our fetch at GW_CALL_MS, but
   // the gateway still commits the tx (its handler ignores the request context). On such a cut, look for a tx id on the sender's own committer
   // DB that was not there before the call; the BI report is then still pending, as when the driver itself answers "not delivered".
-  // No snapshot (the read failed) means no recovery: the gateway error stands. Any other error is rethrown unchanged.
+  // No snapshot (the read failed or took over CUT_READ_MS) means no recovery: the gateway error stands. A poll read that fails is retried until
+  // LEDGER_WAIT_MS is over, then the "mungkin sudah commit" error is thrown, never the read error. Any other error is rethrown unchanged.
   async function recoverCut(party: PartyId, call: () => Promise<TxOut>): Promise<TxOut> {
     let before: Set<string> | null = null;
-    try { before = new Set((await ledgerTxs(party)).map((t) => t.txId)); } catch { /* no snapshot, no recovery */ }
+    const listed = () => withDeadline(ledgerTxs(party), CUT_READ_MS, 'Baca ledger');
+    try { before = new Set((await listed()).map((t) => t.txId)); } catch { /* no snapshot (failed or timed out), no recovery */ }
     const t0 = Date.now();
     try { return await call(); } catch (e) {
       if (!before || !isGatewayCut(e)) throw e;
       const elapsed = Date.now() - t0;
       for (const end = Date.now() + LEDGER_WAIT_MS; ; await sleep(CUT_POLL_MS)) {
-        const fresh = (await ledgerTxs(party)).find((t) => !before.has(t.txId));
+        let fresh: { txId: string } | undefined;
+        try { fresh = (await listed()).find((t) => !before.has(t.txId)); } catch { /* a failed read: keep polling until the wait is over */ }
         if (fresh) return { txId: fresh.txId, report: `not delivered: gateway cut after ${Math.round(elapsed / 1000)} s, BI report pending`, steps: [{ name: 'submit', ms: elapsed }] };
         if (Date.now() >= end) throw new Error('Transaksi mungkin sudah commit setelah batas gateway; cek riwayat');
       }
