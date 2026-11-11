@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { SeedRefused, planSeed, writeSeed } from '../src/seed/state-filter.ts';
+import { SeedRefused, dryRunLines, planSeed, writeSeed } from '../src/seed/state-filter.ts';
 
 // Lensa S8 state seed (final-design/lensa/PLAN.md): which files of the host `server/state` may be copied into the shadow PVC at the cutover.
 // An allow-list in code, fail closed, names and counts only (never values). The tool never contacts a cluster.
@@ -67,6 +67,22 @@ describe('planSeed: what is carried', () => {
     expect(p.summary.notCarried).toBeGreaterThan(0);
     expect(text).not.toContain('0xaaaa');
     expect(text).not.toMatch(/0x[0-9a-f]{40}/);
+  });
+});
+
+describe('noto unlock calldata: bearer-style, never printed', () => {
+  it('the dry run names the two fields with a count and never prints a value (stdout, summary, refusal text)', () => {
+    const p = planSeed(fixture(), opts);
+    expect(p.summary.sensitive).toEqual([
+      { path: 'noto/contract-data-2026-11-12T00-00-00-000Z.json', field: 'investors[].bondUnlockCall', count: 1 },
+      { path: 'noto/contract-data-2026-11-12T00-00-00-000Z.json', field: 'investors[].cashUnlockCall', count: 1 },
+    ]);
+    const out = dryRunLines(p).join('\n');
+    expect(out).toContain('investors[].cashUnlockCall');
+    expect(out).toContain('carried only into the staging files (600); never printed');
+    expect(out).not.toContain('0xbfc538bb');
+    const c = contract() as { investors: Record<string, string>[] }; c.investors[0]!.cashUnlockCall = '0xbfc538bb' + 'zz'.repeat(32);
+    try { planSeed(fixture({ contract: c }), opts); } catch (e) { expect((e as Error).message).not.toContain('0xbfc538bb'); }
   });
 });
 
