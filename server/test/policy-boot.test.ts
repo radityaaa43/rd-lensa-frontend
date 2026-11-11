@@ -1,3 +1,6 @@
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
 import { bootPolicy } from '../src/policy/boot.ts';
 import type { PolicyStore } from '../src/policy/store.ts';
@@ -50,5 +53,26 @@ test('the store is migrated to the per-platform layout before anything is recove
 test('a migration that throws: undefined and logged', () => {
   const broken = { migrate: () => { throw new Error('EACCES'); } } as unknown as PolicyStore;
   expect(bootPolicy(env, { makeStore: () => broken })).toBeUndefined();
+  expect(log).toHaveBeenCalledOnce();
+});
+
+test('sink mode (LENSA_SINK_TOKENS_DIR): no OPA_KEYS_DIR needed, the Opa is built without signing keys and the publisher gets a sink-backed Kube', async () => {
+  const made: { opaKeys: unknown; kube: unknown }[] = [];
+  const dir = mkdtempSync(join(tmpdir(), 'bootsink-')); chmodSync(dir, 0o700);
+  writeFileSync(join(dir, 'BI'), 'tok-bi', { mode: 0o600 });
+  try {
+    const deps = bootPolicy({ OPA_BIN: '/nonexistent/opa', LENSA_SINK_TOKENS_DIR: dir }, {
+      makeStore: () => store,
+      makePublisher: (_s, opa, kube) => { made.push({ opaKeys: (opa as unknown as { keysDir?: string }).keysDir, kube }); return { recoverInterrupted: () => {}, publish: async () => {}, status: async () => [] }; },
+    });
+    expect(deps).toBeDefined();
+    expect(made[0]!.opaKeys).toBeUndefined();
+    expect(await (made[0]!.kube as { deploymentExists(n: string): Promise<boolean> }).deploymentExists('bank-gw-1')).toBe(true); // BI has a token
+    expect(await (made[0]!.kube as { deploymentExists(n: string): Promise<boolean> }).deploymentExists('bank-gw-2')).toBe(false); // A has none
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('sink mode with an unreadable token directory: no policy deps, logged without the path content', () => {
+  expect(bootPolicy({ OPA_BIN: '/nonexistent/opa', LENSA_SINK_TOKENS_DIR: '/definitely/not/here' }, { makeStore: () => store })).toBeUndefined();
   expect(log).toHaveBeenCalledOnce();
 });

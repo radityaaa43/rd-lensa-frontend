@@ -106,11 +106,11 @@ export function assertGatewayEnv(): void {
 export const paladinUrl = (p: PartyId) => gwEndpoint('paladin', p);
 
 // fetch() for JSON-RPC to a gateway. Node's global fetch takes no client cert, so with mTLS on this goes through https.request.
-export const gwFetch = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal; party?: PartyId } = {}): Promise<Response> => {
+export const gwFetch = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string | Buffer; signal?: AbortSignal; party?: PartyId } = {}): Promise<Response> => {
   const t = gwTarget(url);
   const party = init.party ?? t?.party;
   const agent = gwAgent(party, t?.servername ?? (party ? `bank-gw-${PARTIES[party].node}` : undefined));
-  if (!agent) return fetch(url, init);
+  if (!agent) return fetch(url, { ...init, body: typeof init.body === 'object' ? new Uint8Array(init.body) : init.body });
   return new Promise((resolve, reject) => {
     const req = https.request(url, { method: init.method, headers: init.headers, agent, signal: init.signal }, (res) => {
       const chunks: Buffer[] = [];
