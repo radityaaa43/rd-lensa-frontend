@@ -142,7 +142,7 @@ check(c.get("startupProbe", {}).get("httpGet") == {"path": "/api/livez", "port":
 check(c.get("readinessProbe", {}).get("httpGet") == {"path": "/api/readyz", "port": "http"}, "readinessProbe /api/readyz")
 check(c.get("livenessProbe", {}).get("httpGet") == {"path": "/api/livez", "port": "http"} and c["livenessProbe"]["failureThreshold"] >= 3, "livenessProbe /api/livez")
 r = c.get("resources", {})
-check(r.get("requests") == {"cpu": "250m", "memory": "512Mi"} and r.get("limits") == {"cpu": "1", "memory": "1Gi"}, f"resources {r}")
+check(r.get("requests") == {"cpu": "100m", "memory": "256Mi"} and r.get("limits") == {"cpu": "1", "memory": "1Gi"}, f"resources {r}")
 mounts = {m["mountPath"]: m for m in c.get("volumeMounts", [])}
 check(set(mounts) == {"/tmp", "/app/frontend/server/state", "/certs"}, f"mounts {sorted(mounts)}")
 check(mounts.get("/certs", {}).get("readOnly") is True, "/certs read-only")
