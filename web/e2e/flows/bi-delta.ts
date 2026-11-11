@@ -15,7 +15,7 @@ export const BI_WANT: Record<Model, Record<Flow, Want>> = {
   // BI is not a party except for issues (mint, BI balance not debited) and award (sale from BI's DFABI inventory, zeto.ts topUpFor)
   zeto: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': ZERO, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-1n) },
   // DFABI issue is a transfer from BI's custodian (noto.ts:92), so BI DFABI -3; award sells from the custodian (noto.ts sellerFor)
-  noto: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': { rd: null, dfabi: -3n }, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-1n) },
+  noto: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': { rd: 0n, dfabi: -3n }, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-1n) },
   // stealth.ts: issues mint straight to the receiver (mintStealth / issueByPartitionStealth); award sells from BI inventory (planInventory)
   stealth: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': ZERO, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-1n) },
   // fabricx.ts:140/227: BI's DFABI leg of an award is an issue (BI holds no DFABI stock), so BI DFABI stays 0
@@ -23,8 +23,9 @@ export const BI_WANT: Record<Model, Record<Flow, Want>> = {
   // iroha3 fee cells: the RD (leg 0) payer pays SPONSOR_REIMBURSEMENT = 1 on top of the leg; with no RD leg, pay() adds a companion
   // BI->BI 1 RD leg, so BI loses the 1. Source: iroha3-rd-node-build@c1afa67, aps.rs:105 (constant), aps.rs:1143-1147 (change),
   // pools.rs:300-306 (companion leg); decided by lead 2026-11-11 from iroha's proof. rd-issue: BI is the RD payer, -(1000 + 1).
-  // The DFABI cells of these rows are not asserted. dvp/award: the buyer pays the 1, so BI shows the sale only.
-  iroha3: { 'rd-issue': { rd: -1001n, dfabi: null }, 'rd-transfer': ZERO, 'dfabi-issue': { rd: -1n, dfabi: null }, 'dfabi-transfer': { rd: -1n, dfabi: null }, dvp: ZERO, award: award(-1n) },
+  // DFABI: dfabi-issue -3 comes from BI's DFABI pool (stock precondition in biVerdicts); the other two rows move no BI DFABI.
+  // dvp/award: the buyer pays the 1, so BI shows the sale only.
+  iroha3: { 'rd-issue': { rd: -1001n, dfabi: 0n }, 'rd-transfer': ZERO, 'dfabi-issue': { rd: -1n, dfabi: -3n }, 'dfabi-transfer': { rd: -1n, dfabi: 0n }, dvp: ZERO, award: award(-1n) },
 };
 
 // A DFABI cell that expects BI to give away N needs BI stock >= N before the flow; otherwise report SKIP, not FAIL. What happens

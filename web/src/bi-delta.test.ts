@@ -41,11 +41,19 @@ describe('biVerdicts', () => {
     expect(biVerdicts('fabricx', 'award', bal(0n, 0n), bal(1_000_000n, 0n)).map((x) => x.status)).toEqual(['PASS', 'PASS']);
     expect(biVerdicts('fabricx', 'award', bal(0n, 0n), bal(1_000_000n, 1n))[1].status).toBe('FAIL');
   });
-  it('iroha3 fee cell: RD -1001 on rd-issue is PASS, -1000 is FAIL; the DFABI cell of that row is not asserted', () => {
-    expect(biVerdicts('iroha3', 'rd-issue', bal(5000n, 5n), bal(3999n, 9n))).toEqual([
+  it('iroha3 fee cell: RD -1001 on rd-issue is PASS, -1000 is FAIL; its DFABI cell is asserted as 0', () => {
+    expect(biVerdicts('iroha3', 'rd-issue', bal(5000n, 5n), bal(3999n, 5n))).toEqual([
       { cell: 'RD', status: 'PASS', note: 'delta -1001' },
-      { cell: 'DFABI', status: 'NOT-ASSERTED', note: 'not asserted (out of scope)' },
+      { cell: 'DFABI', status: 'PASS', note: 'delta 0' },
     ]);
+    expect(biVerdicts('iroha3', 'rd-issue', bal(5000n, 5n), bal(4000n, 5n))[0]).toMatchObject({ status: 'FAIL', note: 'delta -1000, want -1001' });
     expect(biVerdicts('iroha3', 'dfabi-transfer', bal(5n, 5n), bal(5n, 5n))[0]).toMatchObject({ status: 'FAIL', note: 'delta 0, want -1' });
+  });
+  it('iroha3 dfabi-issue: RD -1 and DFABI -3 PASS; DFABI stock 2 is SKIP', () => {
+    expect(biVerdicts('iroha3', 'dfabi-issue', bal(10n, 10n), bal(9n, 7n)).map((x) => x.status)).toEqual(['PASS', 'PASS']);
+    expect(biVerdicts('iroha3', 'dfabi-issue', bal(10n, 2n), bal(9n, 2n))[1].status).toBe('SKIP');
+  });
+  it('noto dfabi-issue also asserts BI RD 0', () => {
+    expect(biVerdicts('noto', 'dfabi-issue', bal(7n, 3n), bal(8n, 0n))[0]).toMatchObject({ cell: 'RD', status: 'FAIL', note: 'delta 1, want 0' });
   });
 });
