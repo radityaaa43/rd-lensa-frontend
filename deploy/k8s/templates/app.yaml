@@ -45,8 +45,10 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
+          # The startup probe protects a slow start, so it uses the liveness route: with an unseeded state no model loads and /api/readyz answers
+          # 503 by design, which must not get the pod killed. Readiness (below) keeps the Service without an endpoint until a model loaded.
           startupProbe:
-            httpGet: {path: /api/readyz, port: http}
+            httpGet: {path: /api/livez, port: http}
             periodSeconds: 5
             failureThreshold: 30
           readinessProbe:
