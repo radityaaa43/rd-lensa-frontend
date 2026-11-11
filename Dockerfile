@@ -11,6 +11,8 @@ COPY server/package.json server/package.json
 COPY web/package.json web/package.json
 COPY server/vendor server/vendor
 RUN npm ci --no-audit --no-fund
+# web type-checks against the shared types in server/src (adapter.ts, domain.ts, policy/types.ts)
+COPY server/src server/src
 COPY web web
 RUN npm run build -w web
 
