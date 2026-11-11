@@ -1,0 +1,16 @@
+# Entry option B only (not the default): ingress to Lensa from the CLB health-check and forwarding source on 8790 (TEAM.md section 5, LB rule).
+# The whitelist ACL on the CLB itself comes first and is a separate CLUSTER-OP.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-entry
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa}
+spec:
+  podSelector: {matchLabels: {app: lensa}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock: {cidr: 100.64.0.0/10}
+      ports:
+        - {protocol: TCP, port: 8790}

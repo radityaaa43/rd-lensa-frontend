@@ -1,0 +1,14 @@
+# S4b: the state volume. StorageClass rd-retain-essd (Retain, WaitForFirstConsumer; rd-besu #15): deleting the claim leaves the disk.
+# Secrets (ghcr-pull, lensa-gw-mtls-bi|a|b|c) are created by their owners, create-only: this directory never renders a Secret.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lensa-state
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: rd-retain-essd
+  resources:
+    requests:
+      storage: 5Gi
