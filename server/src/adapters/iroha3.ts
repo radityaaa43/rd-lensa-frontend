@@ -14,6 +14,7 @@ import { scrub } from './besu-trace.ts';
 import { decodeBox, type Decoded, type NoritoCtx } from './iroha3-norito.ts';
 import { APS_DEADLINE_MS, allAuditRecords, auditRecords, dockerRunner, runDvp, runDvpShared, runPay, walletOf, type ApsConfig, type ApsResult, type ApsRunner, type AuditRecord, type Wallet } from './iroha3-aps.ts';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { driverClient, type DriverClient } from './iroha3-driver.ts';
 
 // Iroha 3 (071e281e): 3-lane NPoS network with APS enabled; the frontend flows run on lane 1 (restricted dataspace ds-rd).
 // RD and DFABI are DataspaceRestricted assets with one shared home dataspace, ds-rd (id 1): a DvpIsi whose legs sit in two
@@ -29,7 +30,15 @@ export interface Iroha3State {
   assets: { RD: string; DFABI: string }; // canonical Base58 asset-definition ids
   funded?: boolean; // false while bootstrap runs: load() ignores it
   aps?: ApsConfig; // set: DvP and award settle privately through APS (iroha3-aps.ts); absent: the public DvpIsi on lane 1
+  // NEW chain (iroha3 S16): every write goes to the calling party's own driver; nothing is signed here. Public data only.
+  drivers?: Record<PartyId, string>; // driver base URL per party (window A: loopback forwards 127.0.0.1:38091..38094)
+  keys?: Record<PartyId, string>; // each party's account public key, ed0120<64 hex> (iroha3/network/public/accounts.json)
 }
+
+// Genesis hash (network id literal) of the OLD chain, as in the host's state/iroha3/genesis.expected_hash (public). The CLI with host keys is selectable
+// ONLY for this chain (analyst Q7): any other genesis needs drivers + public keys in the state, or the adapter does not load.
+export const OLD_CHAIN_GENESIS = 'hash:A3D75EEA3228F8C6C8AD05DD409FAB3CE861C25C0D5162044E7EA384856CE37B#AAF1';
+const NEW_CHAIN_NO_TRANSFER = 'Transfer RD/DFABI tidak tersedia di rantai baru (hanya mint dan DvP lewat driver bank)';
 
 // Runs `iroha --config <dir>/<config>.toml <args>`; resolves stdout, rejects with the CLI's own error message.
 export type Cli = (config: string, args: string[], stdin?: string) => Promise<string>;
@@ -117,7 +126,7 @@ const LANE_WAIT_MS = 15_000;
 const PAGE_ROWS = 100; // rows per account list request (Torii accepts up to 500); a small page needs more round trips because of non-movement rows
 const DECODE_BATCH = 5; // `transaction get` CLI spawns in flight
 
-export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, apsRun?: ApsRunner) {
+export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, apsRun?: ApsRunner, driver?: DriverClient) {
   const aps = s.aps;
   const apsRunner = aps ? apsRun ?? dockerRunner(aps) : undefined;
   // Shared long-lived pools (driver pool-init): EVERY flow settles privately; balances and history come from the party's own
@@ -146,7 +155,23 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
 
   // In the party's lane with the history scan: a Torii answers one query at a time, a balance read racing a scan got HTTP 429.
   // Read as the party's node operator: bank C has no CanReadRestrictedDataspace grant, so its own account is refused (HTTP 403) on ds-rd.
+  // NEW chain, keyless (analyst Q16): GET /v1/accounts/<I105>/assets, unsigned. Row keys asset, asset_name, asset_alias, quantity (a decimal STRING), from the Torii source
+  // (routing.rs handle_v1_account_assets_with_visibility; [unverified until a NON-ZERO answer is observed: no live sample exists, and the empty list is returned even for minted accounts]).
+  // The row of `asset` is the one whose id starts with the asset definition; in a non-empty list no such row is a zero balance.
+  async function keylessBalance(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
+    const r = await (read?.fetch ?? fetch)(new URL(`v1/accounts/${encodeURIComponent(acct[party])}/assets`, s.torii[party]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+    if (!r.ok) throw new Error(`Torii ${PARTIES[party].name} menjawab HTTP ${r.status}`);
+    const body = (await r.json()) as { items?: { asset?: unknown; quantity?: unknown }[] };
+    if (!Array.isArray(body.items)) throw new Error('Saldo: jawaban Torii tidak dikenali');
+    // iroha (2026-11-12): the unsigned read answers {items: [], total: 0} even for accounts that hold a balance (scope/visibility), so an EMPTY list is no proof of zero.
+    if (body.items.length === 0) throw new Error('Saldo belum tersedia di rantai baru (Torii tanpa tanda tangan mengembalikan daftar kosong; belum terbukti nol)');
+    const row = body.items.find((i) => typeof i.asset === 'string' && i.asset.startsWith(s.assets[asset]));
+    if (!row) return 0n;
+    if (typeof row.quantity !== 'string' || !/^\d+$/.test(row.quantity)) throw new Error('Saldo: jumlah dari Torii tidak dikenali');
+    return BigInt(row.quantity);
+  }
   async function balanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
+    if (driver) return keylessBalance(party, asset);
     if (shared) return BigInt((await walletFor(party)).balances[asset === 'RD' ? 'rd' : 'dfabi']);
     return publicBalanceOf(party, asset);
   }
@@ -216,10 +241,51 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     }
   }
 
+  // NEW chain (analyst Q7, Q16): writes through the parties' own drivers, reads keyless. The CLI is not used at all. Reads that needed an operator key (balance
+  // pre-check, tx detail, lens) are not available in window A: the chain's own refusal reaches the user (502 reason), the R1 lens rows are NOT-RUN.
+  async function appliedBlock(signer: PartyId, hash: string): Promise<number> {
+    try {
+      const r = await (read?.fetch ?? fetch)(new URL(`v1/pipeline/transactions/status?hash=${hash}`, s.torii[signer]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return ((await r.json()) as Status).status.block_height ?? 0;
+    } catch (e) { // the driver's own `Applied` answer is the settlement; the height is only display
+      console.error('[iroha3] tinggi blok tidak terbaca (status tanpa kunci):', errMsg(e));
+      return 0;
+    }
+  }
+  async function runViaDrivers(req: FlowRequest, amount: bigint, emit: (i: number, ms: number) => void, steps: StepEvent[]): Promise<FlowResult> {
+    const f = FLOWS[req.flow];
+    if (!f.dvp && !f.issuer) throw new Error(NEW_CHAIN_NO_TRANSFER);
+    const t0 = Date.now();
+    let hash: string;
+    let signer: PartyId;
+    if (!f.dvp) {
+      signer = 'BI';
+      hash = (await driver!.mint({ to: req.to, asset: s.assets[f.asset], amount })).txHash;
+    } else {
+      // Same economics as the other models: the seller (from; BI in an award) gives `amount` DFABI, the buyer (to) pays amount * PRICE_PER_UNIT RD. The buyer's
+      // driver grants (consents to this payment leg), then the seller's driver settles; both carry the same one-shot intent.
+      const price = amount * PRICE_PER_UNIT;
+      const intent = randomBytes(32).toString('hex');
+      if (f.issuer) await driver!.mint({ to: req.from, asset: s.assets.DFABI, amount }); // award: BI mints exactly what it sells (the batch rule needs a balance read)
+      await driver!.settleGrant(req.to, { to: req.from, give: { asset: s.assets.RD, amount: price }, take: { asset: s.assets.DFABI, amount }, intent });
+      signer = req.from;
+      hash = (await driver!.dvpNative(req.from, { counterparty: req.to, give: { asset: s.assets.DFABI, amount }, take: { asset: s.assets.RD, amount: price }, intent })).txHash;
+    }
+    emit(0, Date.now() - t0);
+    emit(1, 0);
+    emit(2, 0); // the driver answers once the tx is Applied
+    const t3 = Date.now();
+    const block = await appliedBlock(signer, hash);
+    emit(3, Date.now() - t3);
+    return { txHash: hash, block, steps, context: {} satisfies Ctx };
+  }
+
   async function run(req: FlowRequest, amount: bigint, onStep: (s: StepEvent) => void): Promise<FlowResult> {
     const steps: StepEvent[] = [];
     const emit = (index: number, ms: number) => { const st = { index, label: adapter.stepLabels[index]!, ms }; steps.push(st); onStep(st); };
     const dvp = FLOWS[req.flow].dvp;
+    if (driver) return runViaDrivers(req, amount, emit, steps);
     if (shared) {
       let last = Date.now();
       const step = (i: number) => { const now = Date.now(); emit(i, now - last); last = now; };
@@ -641,14 +707,15 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     return { nodes, links };
   }
 
-  const mint = async (to: PartyId, asset: 'RD' | 'DFABI', amount: bigint) =>
-    cli('bi', [...SUBMIT, 'ledger', 'asset', 'mint', '--definition', s.assets[asset], '--account', acct[to], '--quantity', amount.toString()]);
+  const mint = async (to: PartyId, asset: 'RD' | 'DFABI', amount: bigint): Promise<unknown> => driver
+    ? driver.mint({ to, asset: s.assets[asset], amount })
+    : cli('bi', [...SUBMIT, 'ledger', 'asset', 'mint', '--definition', s.assets[asset], '--account', acct[to], '--quantity', amount.toString()]);
 
   const adapter: ModelAdapter & { fund: typeof mint } = {
     id: 'iroha3',
     ...(aps ? { txDeadlineMs: APS_DEADLINE_MS } : {}),
     stepLabels: ['Tanda tangan & kirim ke Torii', 'Diterima pipeline', 'Commit di blok (3 dari 4 validator)', 'Tersalin ke 4 validator'],
-    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
+    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, driver && !FLOWS[f].dvp && !FLOWS[f].issuer ? { enabled: false, reason: NEW_CHAIN_NO_TRANSFER } : { enabled: true }])) as Record<FlowId, Capability>,
     async health() {
       const down: string[] = [];
       let blocks = 0;
@@ -685,6 +752,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     // A load user is a parallel session of the bank account on the bank's own Torii (tahap 2: one account per user).
     async transferForLoad({ bank: from }: LoadUser, { bank: to }: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
       if (signal?.aborted) throw new Error(CANCELLED);
+      if (driver) throw new Error(NEW_CHAIN_NO_TRANSFER);
       const submittedAt = Date.now();
       await cli(CONFIG[from], [...SUBMIT, 'ledger', 'asset', 'transfer', '--definition', s.assets.RD, '--account', acct[from], '--to', acct[to], '--quantity', amount.toString()]);
       return { submittedAt, confirmedAt: Date.now() }; // the CLI returns once applied
@@ -697,6 +765,18 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
 export async function load(stateDir?: string): Promise<ModelAdapter | null> {
   const s = readState<Iroha3State>('iroha3', stateDir);
   if (!s || s.funded === false) return null;
+  // The CLI with host keys is selectable ONLY for the old chain (analyst Q7). Any other genesis hash needs the drivers and the public keys in the state.
+  let genesis = '';
+  try { genesis = readFileSync(join(s.dir, 'genesis.expected_hash'), 'utf8').trim(); } catch { /* unknown chain: treated as not the old one */ }
+  if (genesis !== OLD_CHAIN_GENESIS) {
+    if (!s.drivers || !s.keys) {
+      console.error('[iroha3] genesis bukan rantai lama dan state tanpa drivers/keys publik: adapter tidak dimuat (CLI dengan kunci host tidak dipakai di rantai baru)');
+      return null;
+    }
+    // Keyless: no operator accounts on the new chain (analyst Q16). Signed reads are refused; the lens/history rows stay NOT-RUN in window A.
+    const noSigned = async (): Promise<never> => { throw new Error('Pembacaan bertanda tangan tidak tersedia di rantai baru (jendela A: hanya baca tanpa kunci)'); };
+    return createIroha3Adapter(s, irohaCli(s.dir), { init: noSigned }, undefined, driverClient({ drivers: s.drivers, keys: s.keys }));
+  }
   const adapter = createIroha3Adapter(s, irohaCli(s.dir), {
     init: async () => {
       const parties = Object.keys(CONFIG) as PartyId[];
