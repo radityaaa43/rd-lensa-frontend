@@ -35,15 +35,12 @@ describe('adapter error text never carries a path, a command line or a kubeconfi
     expect(logged).not.toMatch(/secret|alibaba\.yaml|--kubeconfig/); // ...but never the kubeconfig path or the command line
   });
 
-  it('besu-network: the default kubectl with FABRICX_KUBECONFIG pointing nowhere', async () => {
+  it('besu-network: a door whose failure text carries a path, a host and a kubeconfig name shows none of it', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const old = process.env.FABRICX_KUBECONFIG;
-    process.env.FABRICX_KUBECONFIG = `${SECRET}/alibaba.yaml`;
-    try {
-      const n = await besuNetwork({ paladin: false });
-      expect(n.nodes.every((x) => x.status === 'unknown')).toBe(true);
-      for (const x of n.nodes) expect(x.detail).not.toMatch(LEAK);
-    } finally { if (old === undefined) delete process.env.FABRICX_KUBECONFIG; else process.env.FABRICX_KUBECONFIG = old; }
+    const call = async () => { throw new Error(`connect ECONNREFUSED 10.0.0.9:8545 ${SECRET}/alibaba.yaml --kubeconfig`); };
+    const n = await besuNetwork({ paladin: false }, { call, door: () => 'https://gw:8545', rpc: async () => false });
+    expect(n.nodes.every((x) => x.status === 'down')).toBe(true);
+    for (const x of n.nodes) expect(x.detail).not.toMatch(LEAK);
   });
 
   it('iroha3: a CLI that prints a path on stderr (a real fake binary), a missing binary, and a missing operator toml', async () => {

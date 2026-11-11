@@ -1,25 +1,15 @@
 import { rpcUp } from '../health.ts';
-import { BESU_RPC, gwFetch, paladinUrl } from '../gateway.ts';
+import { BESU_RPC, besuDoor, gwFetch, paladinUrl } from '../gateway.ts';
 import type { Network, NetworkNode, Receipt, ReceiptPart } from '../adapter.ts';
 import { PARTIES, type PartyId } from '../domain.ts';
-import { readState } from '../state.ts';
 import { Interface } from '../../vendor/besu/stealth-address/ts/chain.ts';
 import { EVENT_ABI } from './chain-abi.ts';
-import { kubectl, type Exec, type FabricxState } from './fabricx.ts';
 
 // network() of the Besu-based models (zeto, noto, stealth; ARCHITECTURE.md §2.3 besu-network.ts).
-//   - 4 Besu validators, ns besu, pods besu-node-validator-N-0. The pods carry no owner label. Owner by wiring: the Paladin
-//     configmap paladin-nodeN (ns paladin) points its blockchain.http/ws url at besu-node-validator-N, so validator N belongs
-//     to the party whose PARTIES[*].node is N (BI=1, A=2, B=3, C=4). A convention of the deployment, not an on-chain fact.
+//   - 4 Besu validators, each read through its OWN party's Besu door (eth_blockNumber, net_peerCount, eth_syncing: no kubectl, no kubeconfig).
+//     Owner by wiring: validator N belongs to the party whose PARTIES[*].node is N (BI=1, A=2, B=3, C=4). A convention of the deployment, not an on-chain fact.
 //   - with `paladin`: the 4 Paladin nodes, probed on their port-forwarded RPC (31548/31648/31748/31848, as health.ts).
-export interface BesuNetworkDeps { exec: Exec; rpc: (url: string, method: string) => Promise<boolean> }
-
-// Same cluster as Fabric-X and the same kubeconfig source as its adapter (load() in fabricx.ts): state/fabricx.json, overridden by
-// FABRICX_KUBECONFIG. The generic KUBECONFIG of the shell is deliberately not read: fabricx ignores it, and a stale one broke this call.
-const defaults = (): BesuNetworkDeps => ({
-  exec: kubectl({ kubeconfig: process.env.FABRICX_KUBECONFIG ?? readState<FabricxState>('fabricx')?.kubeconfig ?? '', namespace: 'besu' }),
-  rpc: rpcUp,
-});
+export interface BesuNetworkDeps { rpc: (url: string, method: string) => Promise<boolean>; call: JsonRpc; door: (p: PartyId) => string | undefined }
 
 // A tx near the head of the scan that the party's own node cannot read yet is held back, neither listed nor claimed sealed, until this
 // process has seen it unreadable for RECORD_WAIT_MS (the private state / the bank report arrives a moment after the chain event).
@@ -44,28 +34,27 @@ export function holdBack(firstSeen: Map<string, number>, key: string, block: num
   return block >= newest - FRESH_BLOCKS && now - seen < RECORD_WAIT_MS;
 }
 
-interface Pod { metadata: { name: string; deletionTimestamp?: string }; status: { phase?: string; conditions?: { type: string; status: string }[]; containerStatuses?: { restartCount: number }[] } }
 const OWNER = (n: number): PartyId => (Object.keys(PARTIES) as PartyId[]).find((p) => PARTIES[p].node === n)!;
 
 export async function besuNetwork(opts: { paladin: boolean }, deps?: BesuNetworkDeps): Promise<Network> {
   const rpc = deps?.rpc ?? rpcUp;
   const nums = [1, 2, 3, 4];
-  const validators = (async (): Promise<NetworkNode[]> => {
-    const base = (n: number) => ({ id: `besu-validator-${n}`, label: `Validator Besu ${n}`, kind: 'besu-validator' as const, owner: OWNER(n) });
-    try {
-      const exec = deps?.exec ?? defaults().exec; // inside the try: reading the kubeconfig path from the state can fail too
-      const { items } = JSON.parse(await exec(['get', 'pods', '-o', 'json', '--request-timeout=3s'])) as { items: Pod[] };
-      return nums.map((n): NetworkNode => {
-        const pod = items.find((p) => p.metadata.name === `besu-node-validator-${n}-0` && !['Failed', 'Succeeded'].includes(p.status.phase ?? '') && !p.metadata.deletionTimestamp); // hook pods and evicted leftovers are not nodes
-        if (!pod) return { ...base(n), status: 'down', detail: 'pod tidak ditemukan' };
-        const ready = (pod.status.conditions ?? []).some((c) => c.type === 'Ready' && c.status === 'True');
-        const restarts = (pod.status.containerStatuses ?? []).reduce((m, c) => m + c.restartCount, 0);
-        return { ...base(n), status: ready ? 'up' : 'down', detail: `${pod.status.phase ?? 'Unknown'}, ${restarts} restart` };
-      });
-    } catch (e) { // the namespace could not be read: the status is not known, which is not "down"
-      return nums.map((n): NetworkNode => ({ ...base(n), status: 'unknown', detail: (e as Error).message.split('\n')[0]! }));
-    }
-  })();
+  const call = deps?.call ?? jsonRpc;
+  const door = deps?.door ?? besuDoor;
+  const num = (hex: unknown) => { try { return BigInt(hex as string).toString(); } catch { return undefined; } };
+  const validators = Promise.all(nums.map(async (n): Promise<NetworkNode> => {
+    const owner = OWNER(n);
+    const base = { id: `besu-validator-${n}`, label: `Validator Besu ${n}`, kind: 'besu-validator' as const, owner };
+    const url = door(owner);
+    if (!url) return { ...base, status: 'unknown', detail: 'pintu Besu belum diatur' }; // never fall back to another party's door
+    let block: string | undefined;
+    try { block = num(await call<string>(url, 'eth_blockNumber', [])); } catch { /* the cause stays out of the UI (error-leaks) */ }
+    if (block === undefined) return { ...base, status: 'down', detail: 'Besu tidak menjawab' };
+    // peers and sync state are extras: the gateway bundle may not allow them (zeto S17), which does not make the validator down
+    const peers = await call<string>(url, 'net_peerCount', []).then(num, () => undefined);
+    const syncing = await call<unknown>(url, 'eth_syncing', []).then((v) => v !== false && v != null, () => false);
+    return { ...base, status: 'up', detail: `blok ${block}${peers !== undefined ? `, ${peers} peer` : ''}${syncing ? ', menyinkron' : ''}` };
+  }));
   const paladin = opts.paladin
     ? Promise.all(nums.map(async (n): Promise<NetworkNode> => {
       const url = paladinUrl(OWNER(n));
