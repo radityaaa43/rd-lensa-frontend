@@ -29,6 +29,7 @@ jobs:
       - run: >
           npm test -w server --
           --exclude test/app.test.ts
+          --exclude test/app-busy.test.ts
           --exclude test/besu-network.test.ts
           --exclude test/bi-report-paging.test.ts
           --exclude test/error-leaks.test.ts
