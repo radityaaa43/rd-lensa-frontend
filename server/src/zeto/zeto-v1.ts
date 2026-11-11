@@ -5,7 +5,7 @@
 // through the official client surface `client.ptx`. Moved from the vendored besu/zeto/src/zeto-v1.ts; the lock flow itself is unchanged.
 import { ethers } from 'ethers';
 import { LONG_POLL_TIMEOUT } from '../../vendor/besu/zeto/src/common.ts';
-import type { ITransactionReceipt, PaladinVerifier } from '../../vendor/paladin-sdk';
+import type { ITransactionReceipt, PaladinVerifier } from '@lfdecentralizedtrust/paladin-sdk';
 import { cancelLockRequest, createLockRequest, delegateLockRequest, prepareSpendLockRequest } from './lock-requests.ts';
 
 // Deploy params of the V1 axis (examples/swap/src/index.ts:136-143). The ONLY place the token name is set. Without all three the pool is on the V0 axis

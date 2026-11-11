@@ -3,7 +3,7 @@
 import * as fs from "fs";
 import * as https from "https";
 import * as path from "path";
-import { ITransactionReceipt, PaladinConfig } from "../../../paladin-sdk";
+import { ITransactionReceipt, PaladinConfig } from "@lfdecentralizedtrust/paladin-sdk";
 
 export const DEFAULT_POLL_TIMEOUT = 30000;
 export const LONG_POLL_TIMEOUT = 120000;

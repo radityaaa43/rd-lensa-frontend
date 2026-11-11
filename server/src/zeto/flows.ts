@@ -1,5 +1,5 @@
 // Owned code since sdk D step 2 (final-design/lensa): moved from the vendored besu/zeto/src/flows.ts. The lock calls now come from ./zeto-v1.ts
-// (plain ptx requests), mint and transfer since steps 3 and 4a (./token-requests.ts); deploy and the Atom calls still use the vendored Paladin SDK build and are replaced one by one.
+// (plain ptx requests), the request builders are in ./token-requests.ts; the SDK is the npm @lfdecentralizedtrust/paladin-sdk 1.0.0 (client class, Atom and Pente factories).
 // Zeto flow helpers for the Lensa Privasi app, parameterised (no module globals). Same calls as
 // spike-zeto-e2e.ts (createLock/prepareSpendLock/delegateLockV1/Atom/report), plus private mint.
 // Zeto V1 (Paladin main + PR #1189, zeto-contracts v0.5.1). Issuance is private `mint` by the token owner
@@ -14,7 +14,7 @@ import PaladinClient, {
   PenteFactory,
   ZetoInstance,
   algorithmZetoSnarkBJJ,
-} from '../../vendor/paladin-sdk';
+} from '@lfdecentralizedtrust/paladin-sdk';
 import { AtomFactory } from '../../vendor/besu/zeto/src/atom.ts';
 import { REPORT_TOPIC, Report, buildReport } from '../../vendor/besu/zeto/src/bi-report.ts';
 import { LONG_POLL_TIMEOUT } from '../../vendor/besu/zeto/src/common.ts';
