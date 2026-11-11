@@ -11,9 +11,13 @@ import { BANKS, PARTIES, type PartyId } from './domain.ts';
 // In per-party mode the gateway certificate carries no IP SAN, only its service name (bank-gw-<N>, fx-gw-<N>): the caller passes that name as
 // `servername`, which the TLS client then verifies instead of the URL's host. The flat mode (one shared cert, IP SAN) never sets it.
 const agents = new Map<string, https.Agent>();
+// LENSA_GW_MTLS_DIR_FABRICX (optional, until fabricx S19; analyst Q15): the cert directory for Fabric-X gateway targets (TLS servername fx-gw-N). At the
+// zeto cutover the host moves to the per-party certs, but the OLD fx-gw trust the flat Lensa CA only. Unset = LENSA_GW_MTLS_DIR for every gateway as before.
+// mTLS itself stays on/off by LENSA_GW_MTLS_DIR; a set but unreadable directory is an error, never a fallback.
 export function gwAgent(party?: PartyId, servername?: string): https.Agent | undefined {
-  const root = process.env.LENSA_GW_MTLS_DIR;
-  if (!root) return undefined;
+  const main = process.env.LENSA_GW_MTLS_DIR;
+  if (!main) return undefined;
+  const root = (servername?.startsWith('fx-gw-') && process.env.LENSA_GW_MTLS_DIR_FABRICX) || main;
   const perParty = !!party && existsSync(join(root, party));
   const dir = perParty ? join(root, party) : root;
   const sn = perParty ? servername : undefined;
