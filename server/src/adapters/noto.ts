@@ -6,6 +6,7 @@ import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type Ba
 import { readState } from '../state.ts';
 import { notoDrift } from '../policy/noto-config.ts';
 import { besuNetwork, besuReceipt, paladinNodeReceipt } from './besu-network.ts';
+import { applyNotoConnections } from './noto-connections.ts';
 import { besuTrace, nameFrom } from './besu-trace.ts';
 import type { Sample } from '../stats.ts';
 // Everything Paladin goes through the bond project's modules (its SDK 1.0.0 copy is the only one in play).
@@ -212,7 +213,7 @@ export async function biBalance(token: { balanceOf(v: { lookup: string }, o: { a
 
 export function createNotoAdapter(dataDir: string): ModelAdapter {
   let platform: Promise<Platform> | undefined;
-  const plat = () => (platform ??= loadPlatform(dataDir).catch((e) => {
+  const plat = () => (platform ??= Promise.resolve().then(() => { applyNotoConnections(); return loadPlatform(dataDir); }).catch((e) => {
     platform = undefined;
     console.error('[noto] platform tidak dapat dimuat:', e); // the library's message names the data dir: the UI gets a fixed text
     throw new Error('Data platform Noto tidak dapat dimuat (lihat log server)');

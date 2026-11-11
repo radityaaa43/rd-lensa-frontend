@@ -59,7 +59,7 @@ function convertJsonToNodeConnection(jsonNode: NodeConnectionJson): NodeConnecti
   }
 
   // Opt-in mTLS to the OPA gateways (besu/opa/README.md): LENSA_GW_MTLS_DIR holds ca.crt, lensa.crt, lensa.key.
-  const mtlsDir = process.env.LENSA_GW_MTLS_DIR;
+  const mtlsDir = undefined as string | undefined; // patched by scripts/vendor-siblings.sh: Lensa builds these clients' options in src/adapters/noto-connections.ts
   if (mtlsDir) {
     clientOptions.url = clientOptions.url.replace(/^http:/, 'https:');
     clientOptions.requestConfig = {
