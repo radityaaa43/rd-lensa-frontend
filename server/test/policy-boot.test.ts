@@ -1,11 +1,15 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, test, vi } from 'vitest';
+import { afterAll, afterEach, expect, test, vi } from 'vitest';
 import { bootPolicy } from '../src/policy/boot.ts';
 import type { PolicyStore } from '../src/policy/store.ts';
 
-const env = { OPA_BIN: '/nonexistent/opa', OPA_KEYS_DIR: '/nonexistent/keys' };
+// zeto S20 (a): the Publisher goes only through the party sinks; there is no kubectl way and no signing key on the Lensa host.
+const tokens = mkdtempSync(join(tmpdir(), 'bootenv-')); chmodSync(tokens, 0o700);
+writeFileSync(join(tokens, 'BI'), 'tok-bi', { mode: 0o600 });
+afterAll(() => rmSync(tokens, { recursive: true, force: true }));
+const env = { OPA_BIN: '/nonexistent/opa', LENSA_SINK_TOKENS_DIR: tokens };
 const store = { migrate: vi.fn() } as unknown as PolicyStore;
 const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 afterEach(() => log.mockClear());
@@ -16,11 +20,17 @@ test('no OPA_BIN: no policy deps, nothing built', () => {
   expect(makeStore).not.toHaveBeenCalled();
 });
 
-test('OPA_BIN without OPA_KEYS_DIR: no policy deps, nothing built, logged', () => {
+test('OPA_BIN without LENSA_SINK_TOKENS_DIR: no policy deps, nothing built, logged (no kubectl way any more)', () => {
   const makeStore = vi.fn();
   expect(bootPolicy({ OPA_BIN: '/nonexistent/opa' }, { makeStore })).toBeUndefined();
   expect(makeStore).not.toHaveBeenCalled();
-  expect(log).toHaveBeenCalledWith(expect.stringContaining('Kebijakan dinonaktifkan'), expect.objectContaining({ message: expect.stringContaining('OPA_KEYS_DIR') }));
+  expect(log).toHaveBeenCalledWith(expect.stringContaining('Kebijakan dinonaktifkan'), expect.objectContaining({ message: expect.stringContaining('LENSA_SINK_TOKENS_DIR') }));
+});
+
+test('OPA_KEYS_DIR alone no longer enables the host way: still no policy deps, nothing built', () => {
+  const makeStore = vi.fn();
+  expect(bootPolicy({ OPA_BIN: '/nonexistent/opa', OPA_KEYS_DIR: '/nonexistent/keys' }, { makeStore })).toBeUndefined();
+  expect(makeStore).not.toHaveBeenCalled();
 });
 
 test('store that cannot be opened: undefined and logged', () => {

@@ -1,55 +1,20 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterAll, expect, test } from 'vitest';
-import { kubectlKube } from '../src/policy/kube.ts';
+import { readFileSync } from 'node:fs';
+import { expect, test } from 'vitest';
+import * as kube from '../src/policy/kube.ts';
 
-// kubectl is a stub script found through PATH: nothing here can reach a cluster.
-const dirs: string[] = [];
-afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
-function stub(script: string) {
-  const dir = mkdtempSync(join(tmpdir(), 'lensa-kube-'));
-  dirs.push(dir);
-  const bin = join(dir, 'kubectl');
-  writeFileSync(bin, `#!/bin/sh\n${script}\n`);
-  chmodSync(bin, 0o755);
-  const log = join(dir, 'log');
-  return { log, kube: kubectlKube({ PATH: `${dir}:/usr/bin:/bin` }) };
-}
-const big = { 'bi.tar.gz': Buffer.alloc(8192, 1), 'bank.tar.gz': Buffer.alloc(8192, 2) };
+// zeto S20 (a): Lensa holds no kube credential for the Publisher. src/policy/kube.ts keeps only the Kube interface and its types; the
+// kubectl implementation, its namespace constant and the only child_process import of that module are gone.
+const src = (f: string) => readFileSync(new URL(`../src/policy/${f}`, import.meta.url), 'utf8');
 
-test('applyConfigMap rejects (no crash) when kubectl exits without reading stdin', async () => {
-  const { kube } = stub('echo boom >&2; exit 1');
-  await expect(kube.applyConfigMap('bank-gw-2-bundles', big)).rejects.toThrow(/boom/);
+test('kube.ts exports no kubectl implementation', () => {
+  expect(Object.keys(kube)).toEqual([]);
 });
 
-test('argument vectors: apply, and the sink status read through the service proxy (no rollout, no patch, no exec)', async () => {
-  const { kube, log } = stub(`printf "%s\\n" "$*" >> "$0.args"; case "$*" in *--raw*) echo '{"bank-gw-2":{"age_s":3,"bundles":{}}}';; *) cat >> "$0.in";; esac; exit 0`);
-  await kube.applyConfigMap('bank-gw-2-bundles', { 'bi.tar.gz': Buffer.from('x') });
-  expect(await kube.bundleStatus()).toEqual({ 'bank-gw-2': { age_s: 3, bundles: {} } });
-  const dir = log.replace(/\/log$/, '');
-  expect(readFileSync(join(dir, 'kubectl.args'), 'utf8').trim().split('\n')).toEqual([
-    '-n paladin apply -f -',
-    '-n paladin get --raw /api/v1/namespaces/paladin/services/bundle-server:sink/proxy/status',
-  ]);
-  expect(JSON.parse(readFileSync(join(dir, 'kubectl.in'), 'utf8'))).toMatchObject({
-    kind: 'ConfigMap', metadata: { name: 'bank-gw-2-bundles', namespace: 'paladin' }, binaryData: { 'bi.tar.gz': 'eA==' },
-  });
+test('no kubectl, no paladin namespace constant and no child_process in the Kube module', () => {
+  const code = src('kube.ts').split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+  expect(code).not.toMatch(/child_process|execFile|kubectl|NS = 'paladin'/);
 });
 
-test('bundleStatus rejects when kubectl fails or answers non-JSON', async () => {
-  await expect(stub('echo nope >&2; exit 1').kube.bundleStatus()).rejects.toThrow(/nope/);
-  await expect(stub('echo not-json').kube.bundleStatus()).rejects.toThrow();
-});
-
-test('names outside <platform>-gw-1..4 are refused before kubectl runs', async () => {
-  const { kube, log } = stub(`echo called >> "$0.args"`);
-  const dir = log.replace(/\/log$/, '');
-  await expect(kube.applyConfigMap('kube-root-ca.crt', big)).rejects.toThrow(/ditolak/);
-  await expect(kube.getConfigMap('bank-gw-5-bundles')).rejects.toThrow(/ditolak/);
-  await expect(kube.deploymentExists('bank-gw-2-bundles')).rejects.toThrow(/ditolak/);
-  await expect(kube.deploymentExists('paladin-node1')).rejects.toThrow(/ditolak/);
-  await expect(kube.deploymentExists('bundle-server')).rejects.toThrow(/ditolak/);
-  await expect(kube.getConfigMap('fabricx-gw-1')).rejects.toThrow(/ditolak/); // a ConfigMap name must end in -bundles
-  expect(existsSync(join(dir, 'kubectl.args'))).toBe(false);
+test('no policy module references the old host way (kubectlKube)', () => {
+  for (const f of ['boot.ts', 'publish.ts', 'sink.ts', 'routes.ts', 'workflow.ts']) expect(src(f), f).not.toContain('kubectlKube');
 });

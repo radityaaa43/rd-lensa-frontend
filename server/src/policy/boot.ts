@@ -1,4 +1,4 @@
-import { kubectlKube, type Kube } from './kube.ts';
+import type { Kube } from './kube.ts';
 import { Opa } from './opa.ts';
 import { Publisher } from './publish.ts';
 import type { PolicyDeps } from './routes.ts';
@@ -17,19 +17,18 @@ export interface BootParts {
 }
 
 // Halaman Kebijakan is optional: no OPA_BIN, or any failure while wiring it, means no policy deps (routes answer 501)
-// and the rest of Lensa still starts. Two ways to publish:
-//  - LENSA_SINK_TOKENS_DIR set (zeto S20 a): through each party gateway's sink with that party's client cert and bearer token; the bundles are
-//    built UNSIGNED and each sink signs its own party's bundle, so Lensa holds no signing key and no kubeconfig.
-//  - otherwise the host way: kubectl on the bundle ConfigMaps, with OPA_KEYS_DIR (private bundle signing keys, outside the repo) required: the
-//    gateways only activate signed bundles, so without it a publish could never take effect.
+// and the rest of Lensa still starts. Publishing goes only through each party gateway's sink (zeto S20 a), with that party's client certificate and
+// bearer token (LENSA_SINK_TOKENS_DIR, required): the bundles are built UNSIGNED and each sink signs its own party's bundle, so Lensa holds no
+// signing key and no kubeconfig. There is no kubectl way any more.
 export function bootPolicy(env: NodeJS.ProcessEnv, parts: BootParts = {}): PolicyDeps | undefined {
   if (!env.OPA_BIN) return undefined;
   try {
-    if (!env.LENSA_SINK_TOKENS_DIR && !env.OPA_KEYS_DIR) throw new Error('OPA_KEYS_DIR belum diatur');
+    if (!env.LENSA_SINK_TOKENS_DIR) throw new Error('LENSA_SINK_TOKENS_DIR belum diatur');
     const store = parts.makeStore?.() ?? new PolicyStore(POLICY_STATE_DIR, SEEDS_DIR);
-    const opa = new Opa(env.OPA_BIN, OPA_ROOT, env.LENSA_SINK_TOKENS_DIR ? undefined : env.OPA_KEYS_DIR);
+    const opa = new Opa(env.OPA_BIN, OPA_ROOT);
     store.migrate();
-    const kube = env.LENSA_SINK_TOKENS_DIR ? (() => { const io = sinkIo(env.LENSA_SINK_TOKENS_DIR); return sinkKube(io, io.parties); })() : kubectlKube(env);
+    const io = sinkIo(env.LENSA_SINK_TOKENS_DIR);
+    const kube = sinkKube(io, io.parties);
     const publisher = parts.makePublisher?.(store, opa, kube) ?? new Publisher(kube, opa, store);
     publisher.recoverInterrupted();
     // a failure that is not already a PolicyError came from publishing: say so, keep the original in the server log
