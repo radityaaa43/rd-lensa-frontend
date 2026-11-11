@@ -12,15 +12,14 @@ import PaladinClient, {
   ITransactionReceipt,
   PaladinVerifier,
   PenteFactory,
-  ZetoFactory,
   ZetoInstance,
   algorithmZetoSnarkBJJ,
 } from '../../vendor/paladin-sdk';
 import { AtomFactory } from '../../vendor/besu/zeto/src/atom.ts';
 import { REPORT_TOPIC, Report, buildReport } from '../../vendor/besu/zeto/src/bi-report.ts';
 import { LONG_POLL_TIMEOUT } from '../../vendor/besu/zeto/src/common.ts';
-import { mintRequest, transferRequest } from './token-requests.ts';
-import { PtxClient, ZETO_V1, createLock, delegateLock, prepareSpend } from './zeto-v1.ts';
+import { deployTokenRequest, mintRequest, transferRequest } from './token-requests.ts';
+import { PtxClient, ZETO_V1, createLock, delegateLock, prepareSpend, receiptWithin } from './zeto-v1.ts';
 
 export { PaladinClient, ZetoInstance, AtomFactory, IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X, algorithmZetoSnarkBJJ };
 export { newAtomFactory } from "../../vendor/besu/zeto/src/atom.ts";
@@ -69,10 +68,13 @@ export async function settle(c: PaladinClient, fut: { id: string | Promise<strin
   throw new Error(`${what}: tidak ada receipt dalam ${ms / 1000} detik (tx ${id})`);
 }
 
-// Fresh V1-axis Zeto_Anon owned by `issuer` (BI on node1). Private from the start: no ERC20, no setERC20.
-export async function deployToken(issuer: Party): Promise<ZetoInstance> {
-  const zeto = await within(new ZetoFactory(issuer.c, "zeto").newZeto(issuer.v, { ...ZETO_V1 }).waitForDeploy(LONG_POLL_TIMEOUT), LONG_POLL_TIMEOUT, "Deploy Zeto");
-  return must(zeto, "Zeto deploy");
+// Fresh V1-axis Zeto_Anon owned by `issuer` (BI on node1). Private from the start: no ERC20, no setERC20. The deploy request is built here
+// (token-requests.ts) and sent on plain ptx; only the contract address of the receipt is used.
+export async function deployToken(issuer: Party, ms = LONG_POLL_TIMEOUT): Promise<{ address: string }> {
+  const c = issuer.c as PtxClient;
+  const receipt = await receiptWithin(c, c.ptx.sendTransaction(deployTokenRequest(issuer.lookup, ZETO_V1)), ms);
+  if (receipt?.success !== true) throw new Error(`Deploy Zeto failed: ${receipt?.failureMessage ?? "no receipt"}`);
+  return { address: must(receipt.contractAddress, "Zeto deploy") };
 }
 
 // Private mint by the token's deployer: one UTXO per entry, at most 10 outputs per mint tx.

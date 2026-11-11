@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { ZetoInstance } from '../vendor/paladin-sdk/build/domains/zeto.js';
 import zetoJson from '../vendor/paladin-sdk/build/domains/abis/IZetoFungible.json' with { type: 'json' };
-import { ZETO_PRIVATE_ABI, balanceOfRequest, mintRequest, transferRequest, zetoBalanceOf } from '../src/zeto/token-requests.ts';
-import { mintUtxos, transfer } from '../src/zeto/flows.ts';
+import { ZETO_CONSTRUCTOR_ABI_V1, ZETO_PRIVATE_ABI, balanceOfRequest, deployTokenRequest, mintRequest, transferRequest, zetoBalanceOf } from '../src/zeto/token-requests.ts';
+import { deployToken, mintUtxos, transfer } from '../src/zeto/flows.ts';
+import { ZETO_V1 } from '../src/zeto/zeto-v1.ts';
 
 // Option D, step 3: Lensa builds the private Zeto `mint` request itself and sends it with `client.ptx.sendTransaction`.
 // The first block records what the vendored SDK sends today (stub client) and requires the same request from our code.
@@ -136,5 +137,37 @@ describe('zetoBalanceOf', () => {
     const client = { ptx: { call: async (tx: unknown) => { sent.push(tx); return result; } } };
     expect(await zetoBalanceOf(client, ZETO, 'bob@node2', 'bob@node2')).toBe(result);
     expect(sent).toEqual([balanceOfRequest(ZETO, 'bob@node2', 'bob@node2')]);
+  });
+});
+
+describe('deployTokenRequest (Zeto V1 pool constructor)', () => {
+  it('equals what the vendored SDK\'s ZetoFactory.newZeto sends for the V1 deploy parameters', async () => {
+    const { ZetoFactory, zetoConstructorABI_V1 } = await import('../vendor/paladin-sdk/build/domains/zeto.js');
+    const seen: any[] = [];
+    const paladin: any = { sendTransaction: async (tx: any) => { seen.push(tx); return 'tx-id'; } };
+    const params = { tokenName: 'Zeto_AnonNullifier', domainConfigSchema: 'v1', zetoVariant: 1, factoryVersion: 1 } as const;
+    await new ZetoFactory(paladin, 'zeto').newZeto({ lookup: 'bi@node1' } as any, { ...params }).id;
+    expect(deployTokenRequest('bi@node1', params)).toEqual(seen[0]);
+    expect(ZETO_CONSTRUCTOR_ABI_V1).toEqual(zetoConstructorABI_V1);
+  });
+
+  it('refuses a missing token name', () => {
+    expect(() => deployTokenRequest('bi@node1', { tokenName: '', domainConfigSchema: 'v1', zetoVariant: 1, factoryVersion: 1 })).toThrow(/tokenName/);
+  });
+});
+
+describe('deployToken (flows)', () => {
+  const issuer = (c: any) => ({ lookup: 'bi@node1', c, v: { lookup: 'bi@node1' } as any });
+  it('sends the constructor request and returns the contract address of the receipt', async () => {
+    const sent: any[] = [];
+    const c: any = { ptx: { sendTransaction: async (tx: any) => { sent.push(tx); return 'tx-1'; }, getTransactionReceipt: async () => ({ id: 'r', success: true, contractAddress: '0x0b91f511a3c9ca8144a5422734a2db42bb86e8f6' }) } };
+    const z = await deployToken(issuer(c));
+    expect(sent).toEqual([deployTokenRequest('bi@node1', ZETO_V1)]);
+    expect(z.address).toBe('0x0b91f511a3c9ca8144a5422734a2db42bb86e8f6');
+  });
+  it('a receipt without a contract address, or a failed deploy, throws', async () => {
+    const mk = (receipt: any): any => ({ ptx: { sendTransaction: async () => 'tx-1', getTransactionReceipt: async () => receipt } });
+    await expect(deployToken(issuer(mk({ id: 'r', success: true })), 300)).rejects.toThrow(/Zeto deploy/);
+    await expect(deployToken(issuer(mk({ id: 'r', success: false, failureMessage: 'PD012345: boom' })), 300)).rejects.toThrow(/PD012345/);
   });
 });
