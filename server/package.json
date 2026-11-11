@@ -10,6 +10,7 @@
     "preflight": "tsx src/cli/preflight.ts",
     "policy:build": "tsx src/cli/policy-build.ts",
     "typecheck": "tsc --noEmit",
+    "check:load": "tsx test/fixtures/load-all-adapters.mts",
     "test": "vitest run",
     "test:live": "vitest run --config vitest.live.config.ts"
   },
