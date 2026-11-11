@@ -216,7 +216,12 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
     for (const h of ok) {
       busy.add(lc(h.stealthAddress));
       // Another run may have spent from it between the listing and the claim: re-read the balance now that it is ours.
-      if ((await balance(asset, h.stealthAddress)) >= need) return h;
+      try {
+        if ((await balance(asset, h.stealthAddress)) >= need) return h;
+      } catch (e) {
+        busy.delete(lc(h.stealthAddress)); // a failed read must not leave the address marked busy until restart
+        throw e;
+      }
       busy.delete(lc(h.stealthAddress));
     }
     throw new Error(NO_BALANCE);
