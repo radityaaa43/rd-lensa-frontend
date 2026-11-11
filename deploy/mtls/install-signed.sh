@@ -6,7 +6,7 @@
 set -euo pipefail
 party="${1:-}"; cert="${2:-}"; ca="${3:-}"
 [[ "$party" =~ ^(BI|A|B|C)$ && -f "$cert" && -f "$ca" ]] || { echo "usage: install-signed.sh <BI|A|B|C> <lensa.crt> <ca.crt>" >&2; exit 2; }
-home="${LENSA_MTLS_HOME:-$HOME/.config/lensa/mtls}"
+home="${LENSA_MTLS_HOME:-$HOME/.opa-mtls-party}"
 key="$home/$party/lensa.key"
 [[ -f "$key" ]] || { echo "no key for $party: run csr.sh first" >&2; exit 2; }
 openssl verify -CAfile "$ca" "$cert" >/dev/null 2>&1 || { echo "refusing: the certificate does not verify against the given CA" >&2; exit 2; }
