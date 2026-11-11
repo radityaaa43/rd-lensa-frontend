@@ -64,3 +64,21 @@ export function balanceOfRequest(zeto: string, from: string, account: string): B
 export function zetoBalanceOf(client: { ptx: { call(tx: unknown): Promise<any> } }, zeto: string, from: string, account: string): Promise<any> {
   return client.ptx.call(balanceOfRequest(zeto, from, account));
 }
+
+// The V1 pool constructor: the three extra parameters put the pool on the V1 transaction axis (see ZETO_V1 in zeto-v1.ts). Same ABI as the SDK's
+// zetoConstructorABI_V1 (zeto-token-requests.test.ts pins it).
+export const ZETO_CONSTRUCTOR_ABI_V1 = {
+  type: 'constructor',
+  inputs: [{ name: 'tokenName', type: 'string' }, { name: 'domainConfigSchema', type: 'string' }, { name: 'zetoVariant', type: 'uint256' }, { name: 'factoryVersion', type: 'uint256' }],
+} as const;
+
+export type DeployTokenRequest = {
+  type: 'private'; domain: 'zeto'; abi: readonly [typeof ZETO_CONSTRUCTOR_ABI_V1]; function: ''; from: string;
+  data: { tokenName: string; domainConfigSchema: string; zetoVariant: number; factoryVersion: number };
+};
+
+// `from` deploys a fresh private pool through the zeto domain factory; the receipt carries the contract address.
+export function deployTokenRequest(from: string, p: { tokenName: string; domainConfigSchema: string; zetoVariant: number; factoryVersion: number }): DeployTokenRequest {
+  if (!p.tokenName) throw new Error('deploy needs a tokenName');
+  return { type: 'private', domain: 'zeto', abi: [ZETO_CONSTRUCTOR_ABI_V1], function: '', from, data: { ...p } };
+}
