@@ -436,12 +436,26 @@ describe('fabricx history', () => {
 
 describe('kubectl() error text', () => {
   it('never carries the command line (kubeconfig path) to the caller', async () => {
-    const { kubectl } = await import('../src/adapters/fabricx.ts');
-    const exec = kubectl({ kubeconfig: '/definitely/not/here/secret-kubeconfig.yaml', namespace: 'x' });
-    const err = await exec(['get', 'pods']).catch((e: Error) => e);
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).not.toMatch(/secret-kubeconfig|--kubeconfig|Command failed/);
-    expect((err as Error).message).toMatch(/^kubectl gagal \(kode /);
+    // A stub `kubectl` first on PATH, so the test needs no real binary and no network: it names the kubeconfig on stderr and exits 1.
+    // (The real one hit this test's 5 s timeout on a CI runner.)
+    const { mkdtempSync, writeFileSync, chmodSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const bin = mkdtempSync(join(tmpdir(), 'fake-kubectl-'));
+    writeFileSync(join(bin, 'kubectl'), '#!/bin/sh\necho "error: stat $2: no such file or directory" >&2\nexit 1\n');
+    chmodSync(join(bin, 'kubectl'), 0o755);
+    vi.stubEnv('PATH', `${bin}:${process.env.PATH}`);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { kubectl } = await import('../src/adapters/fabricx.ts');
+      const exec = kubectl({ kubeconfig: '/definitely/not/here/secret-kubeconfig.yaml', namespace: 'x' });
+      const err = await exec(['get', 'pods']).catch((e: Error) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).not.toMatch(/secret-kubeconfig|--kubeconfig|Command failed/);
+      expect((err as Error).message).toMatch(/^kubectl gagal \(kode /);
+      expect(String(log.mock.calls[0]?.[0])).toContain('(berkas server)'); // the journal line names the file only as redacted
+      expect(String(log.mock.calls[0]?.[0])).not.toContain('secret-kubeconfig');
+    } finally { log.mockRestore(); vi.unstubAllEnvs(); }
   });
 
   // Deterministic (no real kubectl): kubectl's stderr names the kubeconfig by the given path, its resolved real path and its file name.
