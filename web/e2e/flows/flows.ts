@@ -1,7 +1,7 @@
 // Shared live flow runner: drives the real Lensa UI the way a person does (route, asset tab, form, send),
 // waits for the four process steps, opens the lens and checks who reads what. One test per flow.
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { AMOUNT, biVerdicts, need, short, type Bal } from './bi-delta.ts';
+import { AMOUNT, biVerdicts, need, parseRefusal, payerNeeds, payerShortfalls, short, topUpAmount, type Asset, type Bal } from './bi-delta.ts';
 
 export type Model = 'zeto' | 'noto' | 'stealth' | 'fabricx' | 'iroha3';
 type P = 'BI' | 'A' | 'B' | 'C';
@@ -30,13 +30,26 @@ const OUTSIDER: Record<Model, (flow: Flow) => Seen> = {
 };
 
 // BI's own balance and the ids of its history, read through the Lensa API (the same data the UI shows).
-async function biState(request: APIRequestContext, model: Model): Promise<{ bal: Bal | null; ids: Set<string> }> {
-  const b = await request.get(`/api/balance?model=${model}&party=BI`);
-  const h = await request.get(`/api/history?model=${model}&party=BI&limit=100`);
+async function biState(request: APIRequestContext, model: Model, party: P = 'BI'): Promise<{ bal: Bal | null; ids: Set<string> }> {
+  const b = await request.get(`/api/balance?model=${model}&party=${party}`);
+  const h = await request.get(`/api/history?model=${model}&party=${party}&limit=100`);
   const bj = b.ok() ? await b.json() : null;
   const hj = h.ok() ? await h.json() : null;
   const items: { id: string }[] = hj ? (hj.items ?? hj) : [];
   return { bal: bj ? { rd: BigInt(bj.RD.amount), dfabi: BigInt(bj.DFABI.amount) } : null, ids: new Set(items.map((i) => i.id)) };
+}
+
+// iroha3 only: a payer without one large private note is topped up through the normal Lensa issue flow (POST /api/tx, BI issues to it).
+// It is a LIVE WRITE, so it runs only with IROHA3_TOPUP=1 (lead GO, under flock); without it the test is skipped with the reason.
+const TOPUP = process.env.IROHA3_TOPUP === '1';
+async function topUp(request: APIRequestContext, model: Model, to: P, asset: Asset, amount: bigint): Promise<string> {
+  const post = await request.post('/api/tx', { data: { model, flow: asset === 'RD' ? 'rd-issue' : 'dfabi-issue', from: 'BI', to, amount: String(amount) } });
+  if (post.status() !== 202) throw new Error(`top-up ${asset} ${to}: HTTP ${post.status()} ${await post.text()}`);
+  const { runId } = await post.json();
+  const text = await (await request.get(`/api/tx/${runId}/events`, { timeout: 600_000 })).text(); // the stream ends with the run
+  const ok = /event: result\ndata: (.*)/.exec(text);
+  if (!ok) throw new Error(`top-up ${asset} ${to} failed: ${/event: error\ndata: (.*)/.exec(text)?.[1] ?? text.slice(-200)}`);
+  return String(JSON.parse(ok[1]!).txHash);
 }
 
 const route = (m: Model, screen: string, party: P) => `/${m === 'fabricx' || m === 'iroha3' ? m : `besu/${m}`}/${screen}?pihak=${party}`;
@@ -55,9 +68,27 @@ export function defineFlows(model: Model) {
       test.skip(!cap?.enabled, `alur ${c.flow} nonaktif: ${cap?.reason}`);
       const name = (id: P) => meta.parties[id].name as string;
       const errors = watchErrors(page);
-      const biBefore = await biState(request, model);
+      let biBefore = await biState(request, model);
       // noto and iroha3 cannot run award / dfabi-issue when BI holds too little DFABI (see `short`): skip, not a delta FAIL
       test.skip(!!biBefore.bal && short(model, c.flow, biBefore.bal.dfabi), `precondition: BI DFABI=${biBefore.bal?.dfabi} does not cover ${need(model, c.flow)}`);
+
+      // iroha3 payer side: top up (opt-in) or skip when a payer's total cannot hold the one note the driver needs
+      let toppedUp = false;
+      const topUpParty = async (party: P, asset: Asset, min: bigint) => {
+        const tx = await topUp(request, model, party, asset, topUpAmount(asset, min));
+        console.log(`TOPUP ${model} ${c.flow}: ${asset} ${party} +${topUpAmount(asset, min)} tx ${tx}`);
+        info.annotations.push({ type: 'topup', description: `${asset} ${party} tx ${tx}` });
+        toppedUp = true;
+        biBefore = await biState(request, model); // a top-up moves BI's own balance: the delta check starts after it
+      };
+      if (model === 'iroha3') {
+        const needs = payerNeeds(model, c.flow, c.from, c.to);
+        const bals: Partial<Record<P, Bal>> = {};
+        for (const n of needs) bals[n.party] = (await biState(request, model, n.party)).bal ?? undefined;
+        const lacking = payerShortfalls(needs, bals);
+        test.skip(lacking.length > 0 && !TOPUP, `precondition: payer total too small for one note: ${lacking.map((n) => `${n.party} ${n.asset} <= ${n.min}`).join(', ')} (IROHA3_TOPUP=1 tops up, live write, lead GO)`);
+        for (const n of lacking) await topUpParty(n.party, n.asset, n.min);
+      }
 
       // 1. compose, like a user: the sender is the route party, the asset is a tab, recipient and amount are form fields
       await page.goto(route(model, c.dvp ? 'dvp' : 'transfer', c.from));
@@ -77,6 +108,16 @@ export function defineFlows(model: Model) {
         await expect(done.or(retry)).toBeVisible({ timeout: info.timeout - 60_000 });
         if (await done.isVisible()) break;
         const reason = await page.getByRole('heading', { name: 'Transaksi gagal' }).locator('xpath=following-sibling::p[1]').innerText();
+        // iroha3: the driver refused before proving (no write): the payer's pool has no single large note. Top up once, then retry.
+        const refused = model === 'iroha3' ? parseRefusal(reason) : null;
+        if (refused) {
+          test.skip(!TOPUP, `precondition: ${reason} (IROHA3_TOPUP=1 tops up, live write, lead GO)`);
+          const party = (Object.keys(meta.parties) as P[]).find((id) => name(id) === refused.name);
+          if (toppedUp || !party) throw new Error(`UI melaporkan gagal: ${reason}${toppedUp ? ' (after top-up)' : ''}`);
+          await topUpParty(party, refused.asset, refused.asset === 'RD' ? (BigInt(c.amount) * (c.dvp ? PRICE_PER_UNIT : 1n)) + 1n : BigInt(c.amount));
+          await retry.click();
+          continue;
+        }
         if (!/sibuk|belum siap/i.test(reason) || attempt >= RETRIES) throw new Error(`UI melaporkan gagal: ${reason}`);
         console.log(`${model} ${c.flow}: "${reason}", coba lagi`);
         await page.waitForTimeout(15_000);

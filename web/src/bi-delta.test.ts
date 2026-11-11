@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BI_WANT, biVerdicts, need, short, type Flow, type Model } from '../e2e/flows/bi-delta.ts';
+import { BI_WANT, biVerdicts, need, parseRefusal, payerNeeds, payerShortfalls, short, topUpAmount, type Flow, type Model } from '../e2e/flows/bi-delta.ts';
 
 const MODELS: Model[] = ['zeto', 'noto', 'stealth', 'fabricx', 'iroha3'];
 const FLOWS: Flow[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp', 'award'];
@@ -57,5 +57,32 @@ describe('biVerdicts', () => {
   });
   it('noto dfabi-issue also asserts BI RD 0', () => {
     expect(biVerdicts('noto', 'dfabi-issue', bal(7n, 3n), bal(8n, 0n))[0]).toMatchObject({ cell: 'RD', status: 'FAIL', note: 'delta 1, want 0' });
+  });
+});
+
+describe('iroha3 payer side', () => {
+  it('payerNeeds: RD leg needs one note > amount + 1, DFABI leg > amount; dvp and award add the buyer RD leg', () => {
+    expect(payerNeeds('iroha3', 'rd-transfer', 'A', 'B')).toEqual([{ party: 'A', asset: 'RD', min: 1001n }]);
+    expect(payerNeeds('iroha3', 'dfabi-transfer', 'A', 'B')).toEqual([{ party: 'A', asset: 'DFABI', min: 2n }]);
+    expect(payerNeeds('iroha3', 'dvp', 'A', 'B')).toEqual([{ party: 'A', asset: 'DFABI', min: 1n }, { party: 'B', asset: 'RD', min: 1_000_001n }]);
+    expect(payerNeeds('iroha3', 'award', 'BI', 'C')).toEqual([{ party: 'BI', asset: 'DFABI', min: 1n }, { party: 'C', asset: 'RD', min: 1_000_001n }]);
+  });
+  it('payerNeeds: other platforms have no payer-side precondition', () => {
+    expect(payerNeeds('zeto', 'dvp', 'A', 'B')).toEqual([]);
+  });
+  it('payerShortfalls: a total at or below the min is short, above it is not, an unreadable balance is not judged', () => {
+    const needs = payerNeeds('iroha3', 'dvp', 'A', 'B');
+    expect(payerShortfalls(needs, { A: bal(0n, 1n), B: bal(1_000_001n, 0n) })).toEqual(needs);
+    expect(payerShortfalls(needs, { A: bal(0n, 2n), B: bal(1_000_002n, 0n) })).toEqual([]);
+    expect(payerShortfalls(needs, {})).toEqual([]);
+  });
+  it('parseRefusal reads the driver refusal and ignores other errors', () => {
+    expect(parseRefusal('Saldo RD Bank Nusantara tidak cukup di satu note privat')).toEqual({ asset: 'RD', name: 'Bank Nusantara' });
+    expect(parseRefusal('Saldo DFABI Bank A tidak cukup di satu note privat')).toEqual({ asset: 'DFABI', name: 'Bank A' });
+    expect(parseRefusal('Saldo Bank Nusantara tidak cukup')).toBeNull();
+    expect(parseRefusal('Driver APS gagal (kode 1): No such file or directory (os error 2)')).toBeNull();
+  });
+  it('topUpAmount: RD floor 3,000,000, DFABI floor 20, else 3 x min', () => {
+    expect([topUpAmount('RD', 1_000_001n), topUpAmount('RD', 2_000_000n), topUpAmount('DFABI', 1n), topUpAmount('DFABI', 10n)]).toEqual([3_000_003n, 6_000_000n, 20n, 30n]);
   });
 });
