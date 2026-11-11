@@ -8,33 +8,47 @@ import { BANKS, PARTIES, type PartyId } from './domain.ts';
 // client presents the cert. Unset: plain http as before. Set but unreadable: the server does not start (no silent downgrade).
 // Per party (final-design zeto S19): if <dir>/<BI|A|B|C>/ exists, that party's calls present the cert in it and nothing else; a party
 // without a subfolder uses the flat files in <dir>. A subfolder with a missing file is an error, never a fallback to the flat cert.
+// In per-party mode the gateway certificate carries no IP SAN, only its service name (bank-gw-<N>, fx-gw-<N>): the caller passes that name as
+// `servername`, which the TLS client then verifies instead of the URL's host. The flat mode (one shared cert, IP SAN) never sets it.
 const agents = new Map<string, https.Agent>();
-export function gwAgent(party?: PartyId): https.Agent | undefined {
+export function gwAgent(party?: PartyId, servername?: string): https.Agent | undefined {
   const root = process.env.LENSA_GW_MTLS_DIR;
   if (!root) return undefined;
-  const dir = party && existsSync(join(root, party)) ? join(root, party) : root;
-  let agent = agents.get(dir);
+  const perParty = !!party && existsSync(join(root, party));
+  const dir = perParty ? join(root, party) : root;
+  const sn = perParty ? servername : undefined;
+  const key = `${dir}|${sn ?? ''}`;
+  let agent = agents.get(key);
   if (!agent) {
     const f = (n: string) => readFileSync(join(dir, n));
-    agent = new https.Agent({ ca: f('ca.crt'), cert: f('lensa.crt'), key: f('lensa.key'), keepAlive: true });
-    agents.set(dir, agent);
+    agent = new https.Agent({ ca: f('ca.crt'), cert: f('lensa.crt'), key: f('lensa.key'), keepAlive: true, ...(sn ? { servername: sn } : {}) });
+    agents.set(key, agent);
   }
   return agent;
 }
-// Which party a gateway URL belongs to, by host:port: the configured endpoints below, LENSA_BESU_RPC (BI's Besu door) and
-// LENSA_BESU_RPC_BANKS (one door per bank). Lets every existing call site pick the right cert without passing the party along.
+// Which party a gateway URL belongs to, and the service name its certificate carries, by host:port: the configured endpoints below,
+// LENSA_BESU_RPC (BI's Besu door) and LENSA_BESU_RPC_BANKS (one door per bank). Lets every existing call site pick the right cert without
+// passing the party along. Paladin and Besu doors are both served by bank-gw-<N>; Fabric-X by fx-gw-<N> [name unverified until fabricx S16].
 const bankDoors = () => (process.env.LENSA_BESU_RPC_BANKS ?? '').split(',').filter(Boolean);
-export function partyOfUrl(u: string): PartyId | undefined {
+export interface GwTarget { party: PartyId; servername: string }
+export function gwTarget(u: string): GwTarget | undefined {
   const host = (v?: string) => { try { return v ? new URL(v).host : undefined; } catch { return undefined; } };
   const key = host(u);
   if (!key) return undefined;
+  const bank = (party: PartyId): GwTarget => ({ party, servername: `bank-gw-${PARTIES[party].node}` });
   for (const p of Object.keys(PARTIES) as PartyId[]) {
-    for (const kind of ['paladin', 'fabricx'] as const) if (host(process.env[`LENSA_GW_${kind.toUpperCase()}_${p}`] || `http://127.0.0.1:${gwDefault(kind, p)}`) === key) return p;
+    for (const kind of ['paladin', 'fabricx'] as const) {
+      if (host(process.env[`LENSA_GW_${kind.toUpperCase()}_${p}`] || `http://127.0.0.1:${gwDefault(kind, p)}`) === key) {
+        return kind === 'paladin' ? bank(p) : { party: p, servername: `fx-gw-${PARTIES[p].node}` };
+      }
+    }
   }
-  if (host(process.env.LENSA_BESU_RPC) === key) return 'BI';
+  if (host(process.env.LENSA_BESU_RPC) === key) return bank('BI');
   const doors = bankDoors();
-  return BANKS.find((_, i) => host(doors[i]) === key);
+  const hit = BANKS.find((_, i) => host(doors[i]) === key);
+  return hit ? bank(hit) : undefined;
 }
+export const partyOfUrl = (u: string): PartyId | undefined => gwTarget(u)?.party;
 export const gwUrl = (u: string, party: PartyId | undefined = partyOfUrl(u)) => (gwAgent(party) ? u.replace(/^http:/, 'https:') : u);
 
 // Besu: ONE URL for every party (Lensa has a single Besu endpoint: BESU_RPC, the stealth adapter's provider, the health probe).
@@ -93,7 +107,9 @@ export const paladinUrl = (p: PartyId) => gwEndpoint('paladin', p);
 
 // fetch() for JSON-RPC to a gateway. Node's global fetch takes no client cert, so with mTLS on this goes through https.request.
 export const gwFetch = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal; party?: PartyId } = {}): Promise<Response> => {
-  const agent = gwAgent(init.party ?? partyOfUrl(url));
+  const t = gwTarget(url);
+  const party = init.party ?? t?.party;
+  const agent = gwAgent(party, t?.servername ?? (party ? `bank-gw-${PARTIES[party].node}` : undefined));
   if (!agent) return fetch(url, init);
   return new Promise((resolve, reject) => {
     const req = https.request(url, { method: init.method, headers: init.headers, agent, signal: init.signal }, (res) => {

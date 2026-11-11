@@ -61,11 +61,12 @@ describe('gateway mTLS (LENSA_GW_MTLS_DIR)', () => {
     expect(await p.send('eth_blockNumber', [])).toBe('0x10');
   });
 
-  it('on: the Paladin client (zeto nodeConnections) presents the client cert, https replaces http', async () => {
+  it('on: the Paladin client (zetoConnections) presents the client cert, https replaces http', async () => {
     vi.stubEnv('LENSA_GW_MTLS_DIR', dir);
     vi.resetModules();
-    const { nodeConnections, PaladinClient } = await import('../src/zeto/flows.ts');
-    const o = nodeConnections[1]!.clientOptions;
+    const { PaladinClient } = await import('../src/zeto/flows.ts');
+    const { zetoConnections } = await import('../src/adapters/zeto-connections.ts');
+    const o = zetoConnections()[1]!.clientOptions;
     expect(o.url).toBe('https://127.0.0.1:31648');
     const client = new PaladinClient({ ...o, url: base });
     expect(await client.ptx.queryTransactionReceipts({ limit: 1 })).toBe('0x10');

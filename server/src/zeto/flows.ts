@@ -18,11 +18,11 @@ import PaladinClient, {
 } from '../../vendor/paladin-sdk';
 import { AtomFactory } from '../../vendor/besu/zeto/src/atom.ts';
 import { REPORT_TOPIC, Report, buildReport } from '../../vendor/besu/zeto/src/bi-report.ts';
-import { LONG_POLL_TIMEOUT, nodeConnections } from '../../vendor/besu/zeto/src/common.ts';
+import { LONG_POLL_TIMEOUT } from '../../vendor/besu/zeto/src/common.ts';
 import { mintRequest, transferRequest } from './token-requests.ts';
 import { PtxClient, ZETO_V1, createLock, delegateLock, prepareSpend } from './zeto-v1.ts';
 
-export { PaladinClient, ZetoInstance, AtomFactory, nodeConnections, IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X, algorithmZetoSnarkBJJ };
+export { PaladinClient, ZetoInstance, AtomFactory, IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X, algorithmZetoSnarkBJJ };
 export { newAtomFactory } from "../../vendor/besu/zeto/src/atom.ts";
 export { BiLedger, chainIO } from "../../vendor/besu/zeto/src/bi-report.ts";
 

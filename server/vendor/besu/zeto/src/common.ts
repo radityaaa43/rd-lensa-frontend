@@ -16,11 +16,7 @@ export interface NodeConnection {
 
 // Opt-in mTLS to the OPA gateways (besu/opa/README.md): LENSA_GW_MTLS_DIR holds ca.crt, lensa.crt, lensa.key. Unset: plain http.
 const mtlsDir = process.env.LENSA_GW_MTLS_DIR;
-const mtls = mtlsDir && {
-  ca: fs.readFileSync(path.join(mtlsDir, "ca.crt")),
-  cert: fs.readFileSync(path.join(mtlsDir, "lensa.crt")),
-  key: fs.readFileSync(path.join(mtlsDir, "lensa.key")),
-};
+const mtls = undefined as undefined | { ca: Buffer; cert: Buffer; key: Buffer }; // patched by scripts/vendor-siblings.sh: Lensa builds its Paladin clients in src/adapters/zeto-connections.ts
 
 export const nodeConnections: NodeConnection[] = JSON.parse(
   fs.readFileSync(path.join(__dirname, "..", "config.json"), "utf8"),
