@@ -15,10 +15,12 @@ const units = (key: 'Wants' | 'After') => {
   const line = deploy('lensa.service').split('\n').find((l) => l.startsWith(`${key}=`)) ?? '';
   return line.slice(key.length + 1).trim().split(/\s+/).map((u) => u.replace(/^lensa-pf@/, '').replace(/\.service$/, '')).sort();
 };
-const envPorts = (key: string) => {
+const envUrls = (key: string) => {
   const m = deploy('lensa.env.example').match(new RegExp(`^#?\\s*${key}=(\\S+)`, 'm'));
-  return (m?.[1] ?? '').split(',').map((u) => Number(new URL(u).port));
+  // The example keeps bank C's public address as a placeholder (the address lives only in the S21 GO text); parse it as a documentation address.
+  return (m?.[1] ?? '').replace(/<[^>]+>/g, '192.0.2.1').split(',').filter(Boolean).map((u) => new URL(u));
 };
+const isLoopback = (u: URL) => u.hostname === '127.0.0.1';
 
 describe('deploy/forwards.conf', () => {
   it('has four fields per line, unique names and unique numeric local ports', () => {
@@ -40,9 +42,28 @@ describe('deploy/forwards.conf', () => {
     expect(units('After')).toEqual(names);
   });
 
-  it('matches the local ports in lensa.env.example (Besu door of BI, and of each bank)', () => {
-    expect(envPorts('LENSA_BESU_RPC')).toEqual([byName('besu')?.local]);
+  it('matches the local ports in lensa.env.example for every loopback entry (Besu door of BI, and of banks A and B)', () => {
+    expect(envUrls('LENSA_BESU_RPC').map((u) => Number(u.port))).toEqual([byName('besu')?.local]);
     const doors = forwards.filter((f) => f.name.startsWith('besu-bank-')).map((f) => f.local).sort();
-    expect(envPorts('LENSA_BESU_RPC_BANKS').sort()).toEqual(doors);
+    const loop = envUrls('LENSA_BESU_RPC_BANKS').filter(isLoopback).map((u) => Number(u.port)).sort();
+    expect(loop).toEqual(doors);
+  });
+
+  it('keeps bank C in slot C of LENSA_BESU_RPC_BANKS on its public https door (no forward; an empty slot would send its txs through BI)', () => {
+    const slots = envUrls('LENSA_BESU_RPC_BANKS');
+    expect(slots.length).toBe(3); // slot order A, B, C (gateway.ts besuDoor, stealth.ts bankProvider)
+    expect(isLoopback(slots[0]!) && isLoopback(slots[1]!)).toBe(true);
+    expect(slots[2]!.protocol).toBe('https:');
+    expect(isLoopback(slots[2]!)).toBe(false);
+    expect(slots[2]!.port).toBe('8545');
+  });
+
+  it('points bank C Paladin at its public gateway, since its loopback forward 31848 is gone', () => {
+    expect(byName('paladin-node4')).toBeUndefined();
+    const [c] = envUrls('LENSA_GW_PALADIN_C');
+    expect(c?.protocol).toBe('https:');
+    expect(isLoopback(c!)).toBe(false);
+    expect(c!.port).toBe('8548');
+    expect(c!.host).not.toBe(envUrls("LENSA_BESU_RPC_BANKS")[2]!.host); // distinct host:port (gateway.ts assertGatewayEnv): same LB, other port
   });
 });

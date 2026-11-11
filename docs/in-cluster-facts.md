@@ -51,7 +51,7 @@ Not environment but config files the server reads: `state/*.json` (section 2), `
 Each is `kubectl port-forward -n <ns> svc/<svc> <local>:<remote> --address 127.0.0.1`, started by `lensa.service` `Wants=`/`After=` (all 15 listed there; never `systemctl enable`d). Needs a kubeconfig on the host (`KUBECONFIG`).
 | Unit | ns / service : port | Local | Replaced by L5 env (#19/#20) |
 |---|---|---|---|
-| `paladin-node1..3` | `rd-zeto-bi`, `rd-zeto-bank-a`, `rd-zeto-bank-b` / `bank-gw-1..3` : 8548 | 31548, 31648, 31748 | **yes**: `LENSA_GW_PALADIN_<BI,A,B>` (bank C: no host forward, cluster 2) |
+| `paladin-node1..3` | `rd-zeto-bi`, `rd-zeto-bank-a`, `rd-zeto-bank-b` / `bank-gw-1..3` : 8548 | 31548, 31648, 31748 | **yes**: `LENSA_GW_PALADIN_<BI,A,B>` (bank C: no host forward, cluster 2; set `LENSA_GW_PALADIN_C` to its `bank-gw-4-ext` :8548) |
 | `besu` | `rd-zeto-bi` / `bank-gw-1` : 8545 | 38545 | env URL `LENSA_BESU_RPC` (already a URL, not `LENSA_GW_*`) |
 | `besu-bank-a/b` | `rd-zeto-bank-a`, `rd-zeto-bank-b` / `bank-gw-2..3` : 8545 | 38546, 38547 | env URL `LENSA_BESU_RPC_BANKS` |
 | `fabricx-gw-1..4` | `fabricx` / `fx-gw-1..4` : 8443 | 39441..39444 | **yes**: `LENSA_GW_FABRICX_<BI,A,B,C>` (needs `LENSA_FABRICX_GW=1`) |
