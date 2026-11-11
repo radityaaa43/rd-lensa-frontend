@@ -423,7 +423,10 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
       const context: Ctx = { kind, stealthAddress: leg.s.stealthAddress, ephemeralPubKey: leg.s.ephemeralPubKey, memo: leg.memo, amount };
       return { txHash: rc.hash, block: rc.blockNumber, steps, context };
     } catch (e) {
-      if (escrowed) { (state.escrowed ??= []).push(escrowed); writeState('stealth', state); }
+      if (escrowed) {
+        // A disk or permission error here must not replace the failure being reported.
+        try { (state.escrowed ??= []).push(escrowed); writeState('stealth', state); } catch (w) { console.error('[stealth] escrow record not saved:', w); }
+      }
       throw e;
     } finally {
       for (const a of taken) busy.delete(a);

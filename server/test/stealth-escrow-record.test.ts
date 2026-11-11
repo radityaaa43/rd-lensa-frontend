@@ -34,8 +34,8 @@ vi.mock('../src/adapters/stealth-scan.ts', async () => {
   const { scan } = await import('../../../besu/stealth-address/ts/stealth.ts');
   return { scanOffThread: async (...a: Parameters<typeof scan>) => scan(...a) };
 });
-const saved = vi.hoisted(() => ({ writes: 0 }));
-vi.mock('../src/state.ts', async (orig) => ({ ...(await orig<object>()), writeState: () => { saved.writes++; } }));
+const saved = vi.hoisted(() => ({ writes: 0, fail: false }));
+vi.mock('../src/state.ts', async (orig) => ({ ...(await orig<object>()), writeState: () => { saved.writes++; if (saved.fail) throw new Error('EACCES'); } }));
 
 const RD = '0x' + 'aa'.repeat(20);
 const BOND = '0x' + 'bb'.repeat(20);
@@ -61,5 +61,14 @@ describe('DvP escrow left funded by a failing buyer', () => {
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ escrow: PREDICTED, seller: at(1), bondAmount: '1', expiry: '1600' });
     expect(saved.writes).toBeGreaterThan(0);
+  });
+
+  it('a state file that cannot be written does not replace the original error', async () => {
+    saved.fail = true;
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(createStealthAdapter(mkState()).run(req, 1n, () => {})).rejects.toThrow('BUYER');
+      expect(err).toHaveBeenCalled();
+    } finally { saved.fail = false; err.mockRestore(); }
   });
 });
