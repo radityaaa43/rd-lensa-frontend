@@ -23,6 +23,7 @@ export function gwAgent(party?: PartyId): https.Agent | undefined {
 }
 // Which party a gateway URL belongs to, by host:port: the configured endpoints below, LENSA_BESU_RPC (BI's Besu door) and
 // LENSA_BESU_RPC_BANKS (one door per bank). Lets every existing call site pick the right cert without passing the party along.
+const bankDoors = () => (process.env.LENSA_BESU_RPC_BANKS ?? '').split(',').filter(Boolean);
 export function partyOfUrl(u: string): PartyId | undefined {
   const host = (v?: string) => { try { return v ? new URL(v).host : undefined; } catch { return undefined; } };
   const key = host(u);
@@ -31,7 +32,7 @@ export function partyOfUrl(u: string): PartyId | undefined {
     for (const kind of ['paladin', 'fabricx'] as const) if (host(process.env[`LENSA_GW_${kind.toUpperCase()}_${p}`] || `http://127.0.0.1:${gwDefault(kind, p)}`) === key) return p;
   }
   if (host(process.env.LENSA_BESU_RPC) === key) return 'BI';
-  const doors = (process.env.LENSA_BESU_RPC_BANKS ?? '').split(',').filter(Boolean);
+  const doors = bankDoors();
   return BANKS.find((_, i) => host(doors[i]) === key);
 }
 export const gwUrl = (u: string, party: PartyId | undefined = partyOfUrl(u)) => (gwAgent(party) ? u.replace(/^http:/, 'https:') : u);
@@ -60,7 +61,7 @@ export function gwEndpoint(kind: GwKind, p: PartyId): string {
   return u ? gwUrl(process.env[gwVar(kind, p)]!.replace(/\/+$/, ''), p) : gwUrl(`http://127.0.0.1:${gwDefault(kind, p)}`, p);
 }
 // Startup check (main.ts): every set gateway variable is an http(s) URL, and all gateway endpoints (configured, else the loopback default) plus
-// LENSA_BESU_RPC have pairwise distinct host:port. This closes the first-match ambiguity of partyOfUrl: a URL then belongs to exactly one party,
+// LENSA_BESU_RPC and the LENSA_BESU_RPC_BANKS doors have pairwise distinct host:port. This closes the first-match ambiguity of partyOfUrl: a URL then belongs to exactly one party,
 // so it can never present another party's client cert. Messages name variables, never values.
 export function assertGatewayEnv(): void {
   const seen = new Map<string, string>();
@@ -75,9 +76,10 @@ export function assertGatewayEnv(): void {
       add(u ? gwVar(kind, p) : `default ${gwVar(kind, p)}`, u ? u.host : `127.0.0.1:${gwDefault(kind, p)}`);
     }
   }
-  if (process.env.LENSA_BESU_RPC) {
-    try { add('LENSA_BESU_RPC', new URL(process.env.LENSA_BESU_RPC).host); } catch (e) { if (e instanceof TypeError) throw new Error('LENSA_BESU_RPC is not a URL'); throw e; }
-  }
+  const hostOf = (label: string, v: string) => { try { return new URL(v).host; } catch { throw new Error(`${label} is not a URL`); } };
+  if (process.env.LENSA_BESU_RPC) add('LENSA_BESU_RPC', hostOf('LENSA_BESU_RPC', process.env.LENSA_BESU_RPC));
+  // stealth bank doors, slot i = BANKS[i]; empty entries are dropped first, exactly like stealth.ts and partyOfUrl do
+  bankDoors().forEach((d, i) => { const label = `LENSA_BESU_RPC_BANKS[${BANKS[i] ?? i}]`; add(label, hostOf(label, d)); });
 }
 export const paladinUrl = (p: PartyId) => gwEndpoint('paladin', p);
 
