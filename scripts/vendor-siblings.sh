@@ -30,6 +30,10 @@ printf '{ "private": true, "description": "scope stub written by scripts/vendor-
 # the server as soon as that directory holds only per-party subfolders (zeto S19). Lensa builds its Paladin clients itself (src/adapters/zeto-connections.ts).
 perl -0pi -e 's/const mtls = mtlsDir && \{.*?\n\};/const mtls = undefined as undefined | { ca: Buffer; cert: Buffer; key: Buffer }; \/\/ patched by scripts\/vendor-siblings.sh: Lensa builds its Paladin clients in src\/adapters\/zeto-connections.ts/s' "$vendor/besu/zeto/src/common.ts"
 grep -q 'const mtls = undefined' "$vendor/besu/zeto/src/common.ts" || { echo "vendor-siblings: the common.ts mtls patch did not apply" >&2; exit 2; }
+# The second patch (noto S12): besu/noto+pente/common/src/config.ts read the same flat files when imported. Lensa sets those clients' options itself
+# (src/adapters/noto-connections.ts, called before loadPlatform).
+perl -0pi -e 's/const mtlsDir = process\.env\.LENSA_GW_MTLS_DIR;/const mtlsDir = undefined as string | undefined; \/\/ patched by scripts\/vendor-siblings.sh: Lensa builds these clients\x27 options in src\/adapters\/noto-connections.ts/' "$vendor/besu/noto+pente/common/src/config.ts"
+grep -q 'const mtlsDir = undefined' "$vendor/besu/noto+pente/common/src/config.ts" || { echo "vendor-siblings: the noto common config.ts mtls patch did not apply" >&2; exit 2; }
 {
   echo "# Vendored sibling code"
   echo
@@ -40,7 +44,7 @@ grep -q 'const mtls = undefined' "$vendor/besu/zeto/src/common.ts" || { echo "ve
   echo
   echo "besu/stealth-address/out/* is Foundry build output (git-ignored in besu): it is the forge build on the machine that ran this script, not a tracked file at the commit above."
   echo
-  echo "One patch to copied files: besu/zeto/src/common.ts no longer reads the flat mTLS files at load (the mtls block is replaced by undefined; Lensa builds its Paladin clients in server/src/adapters/zeto-connections.ts). The besu/zeto and besu/noto+pente sources use the npm @lfdecentralizedtrust/paladin-sdk 1.0.0; server/vendor/paladin-sdk (the PR #1189 build) is kept only as the reference the differential tests compare Lensa-built requests with, not used at runtime. Nothing else is changed."
+  echo "Two patches to copied files: besu/zeto/src/common.ts and besu/noto+pente/common/src/config.ts no longer read the flat mTLS files at load (the mtls block / mtlsDir is replaced by undefined; Lensa builds its Paladin clients in server/src/adapters/zeto-connections.ts and noto-connections.ts). The besu/zeto and besu/noto+pente sources use the npm @lfdecentralizedtrust/paladin-sdk 1.0.0; server/vendor/paladin-sdk (the PR #1189 build) is kept only as the reference the differential tests compare Lensa-built requests with, not used at runtime. Nothing else is changed."
   echo
   echo "paladin-sdk is not a git checkout: the line above is the sha256 of the sorted per-file sha256 list of its build/ directory. Source (traced 2026-11-11): the local repo ~/eksplorasi-paladin/build-v1/paladin (origin LFDT-Paladin/paladin), sdk/typescript at local merge commit 82fbd49ce1dd866e9f73eb7a3b6832907a0181aa = upstream main 559567e38c386b8c89b1ae414fee6ce76dd3fe61 + the head of the still-open PR #1189 (28c72b76fda49d0e7c317432880f167a60da2f78), conflicts hand-resolved in scripts/abi.mjs and src/domains/zeto.ts (the other 34 tracked files equal upstream main). Not an upstream commit; no public ref can rebuild it (deviation report to lead, options pending)."
   echo
