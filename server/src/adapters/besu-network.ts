@@ -4,12 +4,17 @@ import type { Network, NetworkNode, Receipt, ReceiptPart } from '../adapter.ts';
 import { PARTIES, type PartyId } from '../domain.ts';
 import { Interface } from '../../vendor/besu/stealth-address/ts/chain.ts';
 import { EVENT_ABI } from './chain-abi.ts';
+import { withDeadline } from '../deadline.ts';
 
 // network() of the Besu-based models (zeto, noto, stealth; ARCHITECTURE.md §2.3 besu-network.ts).
 //   - 4 Besu validators, each read through its OWN party's Besu door (eth_blockNumber, net_peerCount, eth_syncing: no kubectl, no kubeconfig).
 //     Owner by wiring: validator N belongs to the party whose PARTIES[*].node is N (BI=1, A=2, B=3, C=4). A convention of the deployment, not an on-chain fact.
 //   - with `paladin`: the 4 Paladin nodes, probed on their port-forwarded RPC (31548/31648/31748/31848, as health.ts).
-export interface BesuNetworkDeps { rpc: (url: string, method: string) => Promise<boolean>; call: JsonRpc; door: (p: PartyId) => string | undefined }
+export interface BesuNetworkDeps { rpc: (url: string, method: string) => Promise<boolean>; call: JsonRpc; door: (p: PartyId) => string | undefined; validatorMs?: number }
+
+// Budget of ONE validator probe (its 3 calls together). The route answers within 5 s (app.ts NETWORK_MS), the per-call limit of jsonRpc is 10 s: a slow door must turn into that
+// node `down`, never into a 502 for the whole network (2026-11-12 23:14Z).
+export const VALIDATOR_MS = 2_500;
 
 // A tx near the head of the scan that the party's own node cannot read yet is held back, neither listed nor claimed sealed, until this
 // process has seen it unreadable for RECORD_WAIT_MS (the private state / the bank report arrives a moment after the chain event).
@@ -42,18 +47,23 @@ export async function besuNetwork(opts: { paladin: boolean }, deps?: BesuNetwork
   const call = deps?.call ?? jsonRpc;
   const door = deps?.door ?? besuDoor;
   const num = (hex: unknown) => { try { return BigInt(hex as string).toString(); } catch { return undefined; } };
-  const validators = Promise.all(nums.map(async (n): Promise<NetworkNode> => {
+  const validators = Promise.all(nums.map((n): Promise<NetworkNode> => {
     const owner = OWNER(n);
     const base = { id: `besu-validator-${n}`, label: `Validator Besu ${n}`, kind: 'besu-validator' as const, owner };
     const url = door(owner);
-    if (!url) return { ...base, status: 'unknown', detail: 'pintu Besu belum diatur' }; // never fall back to another party's door
-    let block: string | undefined;
-    try { block = num(await call<string>(url, 'eth_blockNumber', [])); } catch { /* the cause stays out of the UI (error-leaks) */ }
-    if (block === undefined) return { ...base, status: 'down', detail: 'Besu tidak menjawab' };
-    // peers and sync state are extras: the gateway bundle may not allow them (zeto S17), which does not make the validator down
-    const peers = await call<string>(url, 'net_peerCount', []).then(num, () => undefined);
-    const syncing = await call<unknown>(url, 'eth_syncing', []).then((v) => v !== false && v != null, () => false);
-    return { ...base, status: 'up', detail: `blok ${block}${peers !== undefined ? `, ${peers} peer` : ''}${syncing ? ', menyinkron' : ''}` };
+    if (!url) return Promise.resolve({ ...base, status: 'unknown', detail: 'pintu Besu belum diatur' }); // never fall back to another party's door
+    const probe = async (): Promise<NetworkNode> => {
+      let block: string | undefined;
+      try { block = num(await call<string>(url, 'eth_blockNumber', [])); } catch { /* the cause stays out of the UI (error-leaks) */ }
+      if (block === undefined) return { ...base, status: 'down', detail: 'Besu tidak menjawab' };
+      // peers and sync state are extras: the gateway bundle may not allow them (zeto S17), which does not make the validator down
+      const [peers, syncing] = await Promise.all([
+        call<string>(url, 'net_peerCount', []).then(num, () => undefined),
+        call<unknown>(url, 'eth_syncing', []).then((v) => v !== false && v != null, () => false),
+      ]);
+      return { ...base, status: 'up', detail: `blok ${block}${peers !== undefined ? `, ${peers} peer` : ''}${syncing ? ', menyinkron' : ''}` };
+    };
+    return withDeadline(probe(), deps?.validatorMs ?? VALIDATOR_MS, `Validator ${n}`).catch((): NetworkNode => ({ ...base, status: 'down', detail: 'Besu tidak menjawab' }));
   }));
   const paladin = opts.paladin
     ? Promise.all(nums.map(async (n): Promise<NetworkNode> => {
