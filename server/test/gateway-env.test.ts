@@ -170,6 +170,27 @@ describe('assertGatewayEnv (startup check)', () => {
     expect(() => assertGatewayEnv()).toThrow(/LENSA_BESU_RPC/);
   });
 
+  it('LENSA_BESU_RPC_BANKS doors: distinct from each other, from LENSA_BESU_RPC and from the gateway endpoints', () => {
+    vi.stubEnv('LENSA_BESU_RPC', 'https://10.0.0.9:30545');
+    vi.stubEnv('LENSA_BESU_RPC_BANKS', 'https://10.0.0.9:30546,https://10.0.0.9:30547,https://10.0.0.9:30548');
+    expect(() => assertGatewayEnv()).not.toThrow();
+    vi.stubEnv('LENSA_BESU_RPC_BANKS', 'https://10.0.0.9:30546,https://10.0.0.9:30546/,https://10.0.0.9:30548');
+    expect(() => assertGatewayEnv()).toThrow(/LENSA_BESU_RPC_BANKS\[A\].*LENSA_BESU_RPC_BANKS\[B\]/);
+    vi.stubEnv('LENSA_BESU_RPC_BANKS', 'https://10.0.0.9:30545');
+    expect(() => assertGatewayEnv()).toThrow(/LENSA_BESU_RPC.*LENSA_BESU_RPC_BANKS\[A\]/);
+    vi.stubEnv('LENSA_BESU_RPC', '');
+    vi.stubEnv('LENSA_GW_PALADIN_C', 'https://10.0.0.7:30548');
+    vi.stubEnv('LENSA_BESU_RPC_BANKS', 'https://10.0.0.1:1,https://10.0.0.2:2,https://10.0.0.7:30548');
+    expect(() => assertGatewayEnv()).toThrow(/LENSA_GW_PALADIN_C.*LENSA_BESU_RPC_BANKS\[C\]/);
+  });
+
+  it('a door that is not a URL names its slot; a skipped empty entry shifts the slots like the adapter does', () => {
+    vi.stubEnv('LENSA_BESU_RPC_BANKS', 'https://10.0.0.1:1,not-a-url');
+    expect(() => assertGatewayEnv()).toThrow(/LENSA_BESU_RPC_BANKS\[B\]/);
+    vi.stubEnv('LENSA_BESU_RPC_BANKS', ',https://10.0.0.1:1,not-a-url'); // empty entries are dropped (stealth.ts filter(Boolean)): the bad one is slot B
+    expect(() => assertGatewayEnv()).toThrow(/LENSA_BESU_RPC_BANKS\[B\]/);
+  });
+
   it('the error never prints a URL value', () => {
     vi.stubEnv('LENSA_GW_PALADIN_A', 'https://secret-host.example:30548');
     vi.stubEnv('LENSA_GW_PALADIN_B', 'https://secret-host.example:30548');
