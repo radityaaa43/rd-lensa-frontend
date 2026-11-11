@@ -120,7 +120,9 @@ app = docs(["app"], ENV)
 cm = name(app, "ConfigMap", "lensa-env")["data"]
 check(cm.get("HOST") == "0.0.0.0" and cm.get("PORT") == "8790" and cm.get("LENSA_GW_MTLS_DIR") == "/certs", f"configmap fixed keys {sorted(cm)}")
 check(cm.get("LENSA_GW_PALADIN_BI") == "https://10.0.0.1:31548" and cm.get("LENSA_BESU_RPC") == "https://10.0.0.1:38545", "configmap takes the env file values")
+check(cm.get("LENSA_SINK_TOKENS_DIR") == "/sink-tokens" and cm.get("LENSA_GW_PALADIN_C") == "https://10.0.0.4:8548" and cm.get("LENSA_FABRICX_GW") == "1", "configmap takes the S5 pointers: sink token dir, bank C Paladin, Fabric-X gateways on")
 for k in cm:
+    if k == "LENSA_SINK_TOKENS_DIR": continue  # a directory path; the tokens themselves are in the Secret lensa-sink-tokens
     check(not re.search(r"KEY|SECRET|TOKEN|PASSWORD|KUBECONFIG", k), f"configmap key looks secret: {k}")
 for bad in ["LENSA_GW_PALADIN_BI=https://user:pw@10.0.0.1:1", "KUBECONFIG=/x", "OPA_KEYS_DIR=/x", 'LENSA_BESU_RPC=http://a"b']:
     p = os.path.join(fx, "_bad.env"); open(p, "w").write(bad + "\n")
@@ -144,8 +146,8 @@ check(c.get("livenessProbe", {}).get("httpGet") == {"path": "/api/livez", "port"
 r = c.get("resources", {})
 check(r.get("requests") == {"cpu": "100m", "memory": "256Mi"} and r.get("limits") == {"cpu": "1", "memory": "1Gi"}, f"resources {r}")
 mounts = {m["mountPath"]: m for m in c.get("volumeMounts", [])}
-check(set(mounts) == {"/tmp", "/app/frontend/server/state", "/certs"}, f"mounts {sorted(mounts)}")
-check(mounts.get("/certs", {}).get("readOnly") is True, "/certs read-only")
+check(set(mounts) == {"/tmp", "/app/frontend/server/state", "/certs", "/sink-tokens"}, f"mounts {sorted(mounts)}")
+check(mounts.get("/certs", {}).get("readOnly") is True and mounts.get("/sink-tokens", {}).get("readOnly") is True, "/certs and /sink-tokens read-only")
 vols = {v["name"]: v for v in pod.get("volumes", [])}
 check(any("persistentVolumeClaim" in v and v["persistentVolumeClaim"]["claimName"] == "lensa-state" for v in vols.values()), "state volume is PVC lensa-state")
 proj = [s for v in vols.values() for s in v.get("projected", {}).get("sources", [])]
@@ -153,6 +155,9 @@ got = {s["secret"]["name"]: sorted((i["key"], i["path"]) for i in s["secret"]["i
 want = {f"lensa-gw-mtls-{p.lower()}": sorted((k, f"{p}/{k}") for k in ("ca.crt", "lensa.crt", "lensa.key")) for p in ("BI", "A", "B", "C")}
 check(got == want, f"projected cert Secrets {got}")
 check(all(s["secret"].get("optional") is not True for s in proj), "cert Secrets are not optional: a missing party Secret must stop the pod")
+st = [v["secret"] for v in vols.values() if v.get("secret", {}).get("secretName") == "lensa-sink-tokens"]
+check(len(st) == 1 and sorted((i["key"], i["path"]) for i in st[0]["items"]) == [(p, p) for p in ("A", "B", "BI", "C")], f"sink token Secret volume {st}")
+check(st and st[0].get("optional") is not True and st[0].get("defaultMode") == 0o440, "sink tokens: Secret lensa-sink-tokens (keys BI|A|B|C, never rendered), not optional, mode 0440 (group fsGroup 10001 reads it)")
 check(not any("kubeconfig" in str(v).lower() or "hostPath" in v for v in vols.values()), "no kubeconfig volume, no hostPath")
 na = pod.get("affinity", {}).get("nodeAffinity", {}).get("requiredDuringSchedulingIgnoredDuringExecution", {}).get("nodeSelectorTerms", [{}])[0].get("matchExpressions", [])
 check(na == [{"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["member-16033-node", "member-16034-node"]}], f"nodeAffinity {na}")

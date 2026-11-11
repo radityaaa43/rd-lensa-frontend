@@ -80,7 +80,7 @@ app() {
   local img="${LENSA_IMAGE:-}"
   [[ "$img" =~ ^ghcr\.io/radityaaa43/rd-lensa-frontend@sha256:[0-9a-f]{64}$ ]] || die "LENSA_IMAGE must be ghcr.io/radityaaa43/rd-lensa-frontend@sha256:<64 hex> (pinned by digest)"
   cat <<'EOF'
-# Plain values only: gateway URLs and Besu doors. Keys and certificates are mounted from Secrets, never put here.
+# Plain values only: gateway URLs, Besu doors and the DIRECTORY of the sink tokens. Keys, certificates and tokens are mounted from Secrets, never put here.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -96,7 +96,7 @@ EOF
     local k v
     while IFS='=' read -r k v; do
       [[ -z "${k:-}" || "$k" == \#* ]] && continue
-      [[ "$k" =~ ^(LENSA_GW_(PALADIN|FABRICX)_(BI|A|B|C)|LENSA_BESU_RPC|LENSA_BESU_RPC_BANKS|LENSA_FABRICX_GW)$ ]] || die "env key '$k' is not allowed in the ConfigMap"
+      [[ "$k" =~ ^(LENSA_GW_(PALADIN|FABRICX)_(BI|A|B|C)|LENSA_BESU_RPC|LENSA_BESU_RPC_BANKS|LENSA_FABRICX_GW|LENSA_SINK_TOKENS_DIR)$ ]] || die "env key '$k' is not allowed in the ConfigMap"
       [[ -n "$v" && "$v" != *[\"\\@\ ]* ]] || die "env value of $k is empty or holds a quote, backslash, space or '@' (no credentials in URLs)"
       printf '  %s: "%s"\n' "$k" "$v"
     done < "$LENSA_ENV_FILE"

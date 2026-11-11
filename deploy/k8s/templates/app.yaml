@@ -67,6 +67,7 @@ spec:
             - {name: tmp, mountPath: /tmp}
             - {name: state, mountPath: /app/frontend/server/state}
             - {name: certs, mountPath: /certs, readOnly: true}
+            - {name: sink-tokens, mountPath: /sink-tokens, readOnly: true}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -89,6 +90,14 @@ spec:
               - secret:
                   name: lensa-gw-mtls-c
                   items: [{key: ca.crt, path: C/ca.crt}, {key: lensa.crt, path: C/lensa.crt}, {key: lensa.key, path: C/lensa.key}]
+        # LENSA_SINK_TOKENS_DIR (zeto S20 a): one bearer token per party, files BI, A, B, C (64 hex, no newline), Secret lensa-sink-tokens created by the
+        # gateway operators (never rendered here). Mode 0440 so the pod group (fsGroup 10001) can read it. Not optional: without it the Publisher cannot
+        # reach the sinks, and a half-configured pod must not start.
+        - name: sink-tokens
+          secret:
+            secretName: lensa-sink-tokens
+            defaultMode: 0440
+            items: [{key: BI, path: BI}, {key: A, path: A}, {key: B, path: B}, {key: C, path: C}]
 ---
 apiVersion: v1
 kind: Service
