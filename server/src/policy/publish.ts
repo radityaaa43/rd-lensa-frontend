@@ -53,8 +53,12 @@ export async function buildBundles(
   const work = mkdtempSync(join(tmpdir(), 'lensa-bundle-'));
   try {
     opa.assemble(node, bi.docs, bank.docs, work);
-    await opa.build(join(work, 'bi'), revisionOf('bi', bi.n), join(outDir, 'bi.tar.gz'), 'bi');
-    await opa.build(join(work, 'bank'), revisionOf(bankName, bank.n), join(outDir, 'bank.tar.gz'), bankName === 'bank-bi' ? 'bi' : bankName);
+    const one = async (name: 'bi' | 'bank', revision: string, keyId: string) => {
+      if (opa.signsOnHost) await opa.build(join(work, name), revision, join(outDir, `${name}.tar.gz`), keyId);
+      else opa.sourceBundle(join(work, name), revision, join(outDir, `${name}.tar.gz`)); // sink mode: the source, signed by the party's own sink
+    };
+    await one('bi', revisionOf('bi', bi.n), 'bi');
+    await one('bank', revisionOf(bankName, bank.n), bankName === 'bank-bi' ? 'bi' : bankName);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }

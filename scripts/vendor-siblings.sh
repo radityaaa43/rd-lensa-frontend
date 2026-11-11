@@ -14,6 +14,9 @@ for repo in besu iroha3; do
 done
 [[ -f "${src[paladin-sdk]}/package.json" ]] || { echo "vendor-siblings: ${src[paladin-sdk]} has no package.json" >&2; exit 2; }
 
+# Nothing dropped: every tracked file under besu opa/bundles must be listed in MANIFEST (a gateway bundle built without sink/stealth/iroha3 rego would deny those doors).
+missing=$(git -C "${src[besu]}" ls-files opa/bundles | while read -r p; do grep -qxF "besu $p" "$vendor/MANIFEST" || echo "$p"; done)
+[[ -z "$missing" ]] || { echo "vendor-siblings: besu opa/bundles files missing from server/vendor/MANIFEST:" >&2; echo "$missing" >&2; exit 2; }
 find "$vendor" -mindepth 1 ! -name MANIFEST -delete
 while read -r repo path; do
   [[ -z "${repo:-}" || "$repo" == \#* ]] && continue
