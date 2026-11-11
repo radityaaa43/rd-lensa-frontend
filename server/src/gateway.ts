@@ -41,6 +41,14 @@ export const gwUrl = (u: string, party: PartyId | undefined = partyOfUrl(u)) => 
 // Default is the direct forward; deploy sets LENSA_BESU_RPC=http://127.0.0.1:38545 (forward to bank-gw-1's Besu door).
 export const BESU_RPC = gwUrl(process.env.LENSA_BESU_RPC ?? 'http://127.0.0.1:8545', 'BI');
 
+// The Besu door of one party's gateway: BI's is LENSA_BESU_RPC, a bank's is its own entry of LENSA_BESU_RPC_BANKS (slot A, B, C). A bank without
+// an entry has NO door here (undefined): its validator must never be reported through BI's door.
+export const besuDoor = (p: PartyId): string | undefined => {
+  if (p === 'BI') return BESU_RPC;
+  const u = bankDoors()[BANKS.indexOf(p)];
+  return u ? gwUrl(u, p) : undefined;
+};
+
 // A party's gateway: LENSA_GW_<PALADIN|FABRICX>_<BI|A|B|C>=https://<ip>:<port> (NodePort or LoadBalancer, mTLS), no kubectl port-forward and no
 // kubeconfig. Unset: today's loopback forward (lensa-pf@*). A set value that is not an http(s) URL is an error, not a default.
 export type GwKind = 'paladin' | 'fabricx';

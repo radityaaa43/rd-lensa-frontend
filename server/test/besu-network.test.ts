@@ -1,32 +1,39 @@
 import { describe, expect, it } from 'vitest';
-import type { Exec } from '../src/adapters/fabricx.ts';
 import { besuNetwork, holdBack, joinInFlight, RECORD_WAIT_MS } from '../src/adapters/besu-network.ts';
+import type { PartyId } from '../src/domain.ts';
 
-// Pod names and ports are the live ones (ns besu: besu-node-validator-N-0; Paladin RPC port-forwards 31548/31648/31748/31848).
-const pods = (over: Record<string, { ready?: boolean; restarts?: number }> = {}) => ({
-  items: [1, 2, 3, 4].flatMap((n) => [
-    { metadata: { name: `besu-node-validator-${n}-0` }, status: { phase: 'Running', conditions: [{ type: 'Ready', status: over[`besu-node-validator-${n}-0`]?.ready === false ? 'False' : 'True' }], containerStatuses: [{ restartCount: over[`besu-node-validator-${n}-0`]?.restarts ?? 0 }] } },
-    { metadata: { name: `besu-node-validator-${n}-pre-install-hook-x` }, status: { phase: 'Succeeded', conditions: [{ type: 'Ready', status: 'False' }], containerStatuses: [{ restartCount: 0 }] } }, // finished helm hook: not a node
-  ]),
-});
-const execOf = (body: unknown = pods()) => { const calls: string[][] = []; const exec: Exec = async (a) => { calls.push(a); return JSON.stringify(body); }; return { exec, calls }; };
+// Validators are read through each party's own Besu door (S20 b: no kubectl, no kubeconfig on the Lensa host). The doors are injected here; in
+// the server they come from LENSA_BESU_RPC (BI) and LENSA_BESU_RPC_BANKS (A, B, C), see besuDoor in gateway.ts.
+const DOORS: Record<PartyId, string | undefined> = { BI: 'https://gw1:8545', A: 'https://gw2:8545', B: 'https://gw3:8545', C: 'https://gw4:8545' };
+type Replies = Record<string, (url: string) => unknown>;
+const callOf = (replies: Replies = {}) => {
+  const seen: string[] = [];
+  const call: JsonRpc = async <T>(url: string, method: string) => {
+    seen.push(`${url} ${method}`);
+    const r = replies[method] ?? ({ eth_blockNumber: () => '0x10', net_peerCount: () => '0x3', eth_syncing: () => false } as Replies)[method]!;
+    return r(url) as T;
+  };
+  return { call, seen };
+};
+const noProbe = async () => { throw new Error('no probe expected'); };
 
 describe('besuNetwork', () => {
-  it('validators only: 4 validators owned by wiring (validator N = Paladin node N = the party with PARTIES.node N), full mesh, one kubectl call', async () => {
-    const { exec, calls } = execOf();
-    const n = await besuNetwork({ paladin: false }, { exec, rpc: async () => { throw new Error('no probe expected'); } });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.slice(0, 4)).toEqual(['get', 'pods', '-o', 'json']);
+  it('validators only: 4 validators owned by wiring (validator N = Paladin node N = the party with PARTIES.node N), each read at its own door, full mesh', async () => {
+    const { call, seen } = callOf();
+    const n = await besuNetwork({ paladin: false }, { call, door: (p) => DOORS[p], rpc: noProbe });
     expect(n.nodes.map((x) => [x.id, x.kind, x.owner, x.status, x.detail])).toEqual([
-      ['besu-validator-1', 'besu-validator', 'BI', 'up', 'Running, 0 restart'], ['besu-validator-2', 'besu-validator', 'A', 'up', 'Running, 0 restart'],
-      ['besu-validator-3', 'besu-validator', 'B', 'up', 'Running, 0 restart'], ['besu-validator-4', 'besu-validator', 'C', 'up', 'Running, 0 restart'],
+      ['besu-validator-1', 'besu-validator', 'BI', 'up', 'blok 16, 3 peer'], ['besu-validator-2', 'besu-validator', 'A', 'up', 'blok 16, 3 peer'],
+      ['besu-validator-3', 'besu-validator', 'B', 'up', 'blok 16, 3 peer'], ['besu-validator-4', 'besu-validator', 'C', 'up', 'blok 16, 3 peer'],
     ]);
     expect(n.links).toHaveLength(6);
+    for (const [i, url] of ['https://gw1:8545', 'https://gw2:8545', 'https://gw3:8545', 'https://gw4:8545'].entries()) {
+      expect(seen.filter((s) => s.startsWith(url)).map((s) => s.split(' ')[1]).sort(), `validator ${i + 1}`).toEqual(['eth_blockNumber', 'eth_syncing', 'net_peerCount']);
+    }
   });
 
   it('with paladin: 4 more nodes probed on 31548/31648/31748/31848, each linked to its validator', async () => {
     const urls: string[] = [];
-    const n = await besuNetwork({ paladin: true }, { exec: execOf().exec, rpc: async (url, method) => { urls.push(`${url} ${method}`); return !url.includes(':31748'); } });
+    const n = await besuNetwork({ paladin: true }, { call: callOf().call, door: (p) => DOORS[p], rpc: async (url, method) => { urls.push(`${url} ${method}`); return !url.includes(':31748'); } });
     expect(urls.sort()).toEqual([31548, 31648, 31748, 31848].map((p) => `http://127.0.0.1:${p} transport_nodeName`));
     expect(n.nodes.filter((x) => x.kind === 'paladin').map((x) => [x.id, x.owner, x.status])).toEqual([
       ['paladin-1', 'BI', 'up'], ['paladin-2', 'A', 'up'], ['paladin-3', 'B', 'down'], ['paladin-4', 'C', 'up'],
@@ -36,50 +43,35 @@ describe('besuNetwork', () => {
     expect(n.links).toHaveLength(6 + 4);
   });
 
-  it('a validator pod that is not Ready is down; a missing pod is down; hook pods are ignored', async () => {
-    const body = pods({ 'besu-node-validator-2-0': { ready: false, restarts: 3 } });
-    body.items = body.items.filter((p) => p.metadata.name !== 'besu-node-validator-4-0');
-    const n = await besuNetwork({ paladin: false }, { exec: execOf(body).exec, rpc: async () => true });
-    expect(n.nodes[1]).toMatchObject({ id: 'besu-validator-2', status: 'down', detail: 'Running, 3 restart' });
-    expect(n.nodes[3]).toMatchObject({ id: 'besu-validator-4', status: 'down', detail: 'pod tidak ditemukan' });
-    expect(n.nodes[0]!.status).toBe('up');
+  it('a validator whose door does not answer eth_blockNumber is down and the others stay up; the error text is not shown', async () => {
+    const { call } = callOf({ eth_blockNumber: (url) => { if (url.includes('gw3')) throw new Error('connect ECONNREFUSED 10.0.0.3:8545 /secret/path'); return '0x20'; } });
+    const n = await besuNetwork({ paladin: false }, { call, door: (p) => DOORS[p], rpc: noProbe });
+    expect(n.nodes.map((x) => x.status)).toEqual(['up', 'up', 'down', 'up']);
+    expect(n.nodes[2]!.detail).toBe('Besu tidak menjawab');
+    expect(n.nodes[0]!.detail).toBe('blok 32, 3 peer');
   });
 
-  it('when the namespace cannot be read the validators are unknown with the error, and the Paladin probes still answer', async () => {
-    const exec: Exec = async () => { throw new Error('Unable to connect to the server'); };
-    const n = await besuNetwork({ paladin: true }, { exec, rpc: async () => true });
-    expect(n.nodes.filter((x) => x.kind === 'besu-validator').map((x) => [x.status, x.detail])).toEqual(Array(4).fill(['unknown', 'Unable to connect to the server']));
-    expect(n.nodes.filter((x) => x.kind === 'paladin').every((x) => x.status === 'up')).toBe(true);
+  it('net_peerCount and eth_syncing may be denied by the gateway bundle: the validator is still up, with the block only', async () => {
+    const deny = () => { throw new Error('net_peerCount: HTTP 403'); };
+    const n = await besuNetwork({ paladin: false }, { call: callOf({ net_peerCount: deny, eth_syncing: deny }).call, door: (p) => DOORS[p], rpc: noProbe });
+    expect(n.nodes.map((x) => [x.status, x.detail])).toEqual(Array(4).fill(['up', 'blok 16']));
+  });
+
+  it('a validator that is syncing says so', async () => {
+    const n = await besuNetwork({ paladin: false }, { call: callOf({ eth_syncing: (url) => (url.includes('gw2') ? { currentBlock: '0x1', highestBlock: '0x9' } : false) }).call, door: (p) => DOORS[p], rpc: noProbe });
+    expect(n.nodes[1]).toMatchObject({ status: 'up', detail: 'blok 16, 3 peer, menyinkron' });
+    expect(n.nodes[0]!.detail).toBe('blok 16, 3 peer');
+  });
+
+  it('a bank without its own door is unknown, never answered with BI\'s door; no call is made for it', async () => {
+    const { call, seen } = callOf();
+    const n = await besuNetwork({ paladin: false }, { call, door: (p) => (p === 'B' ? undefined : DOORS[p]), rpc: noProbe });
+    expect(n.nodes[2]).toMatchObject({ id: 'besu-validator-3', status: 'unknown', detail: 'pintu Besu belum diatur' });
+    expect(n.nodes.filter((x) => x.status === 'up')).toHaveLength(3);
+    expect(seen.some((s) => s.startsWith('https://gw3'))).toBe(false);
   });
 });
 
-describe('besuNetwork, leftovers and failures', () => {
-  const pod = (name: string, over: { phase?: string; ready?: boolean; deleting?: boolean } = {}) => ({
-    metadata: { name, ...(over.deleting ? { deletionTimestamp: '2026-11-02T10:00:00Z' } : {}) },
-    status: { phase: over.phase ?? 'Running', conditions: [{ type: 'Ready', status: over.ready === false ? 'False' : 'True' }], containerStatuses: [{ restartCount: 0 }] },
-  });
-  it('an evicted (Failed) or terminating pod with the real validator name does not hide the Running one', async () => {
-    const items = [
-      pod('besu-node-validator-1-0', { phase: 'Failed', ready: false }), pod('besu-node-validator-1-0'),
-      pod('besu-node-validator-2-0', { deleting: true, ready: false }), pod('besu-node-validator-2-0'),
-      pod('besu-node-validator-3-0'), pod('besu-node-validator-4-0'),
-    ];
-    const n = await besuNetwork({ paladin: false }, { exec: (async () => JSON.stringify({ items })) as Exec, rpc: async () => true });
-    expect(n.nodes.map((x) => x.status)).toEqual(['up', 'up', 'up', 'up']);
-  });
-
-  it('a validator whose only pod is Failed or terminating is down', async () => {
-    const items = [pod('besu-node-validator-1-0', { phase: 'Failed', ready: false }), pod('besu-node-validator-2-0', { deleting: true }), pod('besu-node-validator-3-0'), pod('besu-node-validator-4-0')];
-    const n = await besuNetwork({ paladin: false }, { exec: (async () => JSON.stringify({ items })) as Exec, rpc: async () => true });
-    expect(n.nodes.map((x) => x.status)).toEqual(['down', 'down', 'up', 'up']);
-  });
-
-  it('a failure while building the default kubectl (e.g. no state) does not reject network(): the validators are unknown', async () => {
-    const n = await besuNetwork({ paladin: true }, { exec: (() => { throw new Error('geen'); }) as unknown as Exec, rpc: async () => true });
-    expect(n.nodes.filter((x) => x.kind === 'besu-validator').every((x) => x.status === 'unknown')).toBe(true);
-    expect(n.nodes.filter((x) => x.kind === 'paladin').every((x) => x.status === 'up')).toBe(true);
-  });
-});
 
 describe('holdBack (shared by Fabric-X-style, Noto and Zeto history)', () => {
   it('holds a tx near the head back for RECORD_WAIT_MS after it is first seen unreadable, then lets it be sealed', () => {
