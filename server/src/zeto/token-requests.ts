@@ -29,3 +29,23 @@ export function mintRequest(zeto: string, from: string, mints: { to: string; amo
     },
   };
 }
+
+export type TransferRequest = {
+  type: 'private'; abi: readonly Record<string, unknown>[]; function: 'transfer'; to: string; from: string;
+  data: { transfers: { to: string; amount: number; data: string }[] };
+};
+
+// `from` spends its own UTXOs into one output per entry. Same wire value as the SDK: amount a JSON number, data "0x" unless given.
+export function transferRequest(zeto: string, from: string, transfers: { to: string; amount: number | bigint; data?: string }[]): TransferRequest {
+  if (transfers.length === 0) throw new Error('transfer needs at least one output');
+  return {
+    type: 'private', abi: ZETO_PRIVATE_ABI, function: 'transfer', to: zeto, from,
+    data: {
+      transfers: transfers.map((t) => {
+        const amount = Number(t.amount);
+        if (!Number.isSafeInteger(amount) || amount <= 0 || (typeof t.amount === 'bigint' && BigInt(amount) !== t.amount)) throw new Error(`transfer amount out of range: ${t.amount}`);
+        return { to: t.to, amount, data: t.data ?? '0x' };
+      }),
+    },
+  };
+}
