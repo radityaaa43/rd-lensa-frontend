@@ -50,7 +50,20 @@ test('(b) a run that never settles frees the slot at 2 x txDeadlineMs', async ()
   expect((await post(app)).statusCode).toBe(202);
 });
 
-test('(c) the hold after a deadline is capped at 10 min even for a long txDeadlineMs (fabricx 745 s)', async () => {
+test('(c) the hold is never shorter than the client deadline: fabricx txDeadlineMs 745 s keeps the slot to 745 s, a never-settling run frees it then', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const z = fakeAdapter('zeto');
+  z.txDeadlineMs = 745_000; // 2 x = 1490 s, capped at 600 s, but never below the deadline itself
+  z.run = () => new Promise(() => {});
+  app = buildApp({ zeto: z }, { probe });
+  expect((await post(app)).statusCode).toBe(202);
+  await vi.advanceTimersByTimeAsync(744_000);
+  expect((await post(app)).statusCode).toBe(409);
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect((await post(app)).statusCode).toBe(202);
+});
+
+test('(d) the cap bounds the hold for a mid-size deadline: txDeadlineMs 400 s holds 600 s', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   const z = fakeAdapter('zeto');
   z.txDeadlineMs = 400_000; // 2 x = 800 s, capped at 600 s
