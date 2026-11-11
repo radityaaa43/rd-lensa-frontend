@@ -250,6 +250,8 @@ retired. The live demo txs (blocks 121, 127) proved that `/v1/explorer/*` serves
   identified by definition id, so `AssetDefinition` transfers are never counted.
 - **Network.** 4 `iroha-peer` nodes. Status: `GET /health` with `Accept: text/plain`.
   `detail` = `blok {n}` from `/status`. Full mesh.
+- **Fee.** A bank's history row shows the 1 RD sponsor fee ("+ biaya Rp 1", from the wallet item `fee`). BI's column has no fee: audit records
+  carry none and BI's companion 1 RD leg produces no wallet item; BI sees the fee in balances only.
 
 **Fabric-X** (`fabricx.ts`). The driver command `api history` was approved by the user and reviewed by lead
 - **Fact** (blockhain): `rdbi-driver api` has no listing command. The library has a per-node

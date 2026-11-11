@@ -3,7 +3,7 @@ import type { ServerResponse } from 'node:http';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { HISTORY_MAX, NotAvailableError, WarmingUpError, type Capability, type LensView, type ModelAdapter } from './adapter.ts';
-import { withDeadline } from './deadline.ts';
+import { DeadlineError, withDeadline } from './deadline.ts';
 import {
   FLOWS, MODEL_NAMES, PARTIES, PRICE_PER_UNIT, validateRequest,
   type FlowId, type FlowRequest, type ModelId, type PartyId,
@@ -102,6 +102,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
 
   // ponytail: one process-wide lock; only one tx or stress run at a time by design
   let busy: 'tx' | 'stress' | null = null;
+  let txGen = 0; // which tx holds `busy`: a late release from an old run must not free a newer tx's slot
   let lastStress: StressRun | null = null;
   const streams = new Set<ServerResponse>();
   app.addHook('onClose', async () => { for (const r of streams) r.end(); });
@@ -258,27 +259,37 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
   interface TxRun { events: { name: string; data: unknown }[]; subs: Set<Sse>; done: boolean }
   const runs = new Map<string, TxRun>();
 
-  async function execute(run: TxRun, adapter: ModelAdapter, req: FlowRequest, amount: bigint) {
+  async function execute(run: TxRun, adapter: ModelAdapter, req: FlowRequest, amount: bigint, runId: string) {
     let closed = false;
     const emit = (name: string, data: unknown) => {
       if (closed && name === 'step') return; // late step after a deadline
       run.events.push({ name, data });
       for (const s of run.subs) s.send(name, data);
     };
+    const owner = ++txGen;
+    const release = () => { if (busy === 'tx' && txGen === owner) busy = null; };
+    const deadlineMs = adapter.txDeadlineMs ?? TX_DEADLINE_MS;
+    const work = (async () => {
+      const result = await adapter.run(req, amount, (s) => emit('step', s));
+      const lenses: LensView[] = await Promise.all(PARTY_IDS.map((p) => adapter.lens(req, result, p)));
+      return { txHash: result.txHash, block: result.block, steps: result.steps, lenses };
+    })();
+    // The slot is held until the adapter's run settles, not until the client's deadline: after the deadline the run keeps going and may
+    // still hold chain-side resources (stealth.ts: one tx at a time, so two awards never race for the top-up). A run that never settles
+    // frees it at 2 x the deadline, so a hung adapter cannot wedge Lensa.
+    const cap = setTimeout(() => { app.log.error(`tx ${runId}: run did not settle in ${2 * deadlineMs / 1000} s, busy released`); release(); }, 2 * deadlineMs);
+    cap.unref();
+    work.then(() => {}, () => {}).finally(() => { clearTimeout(cap); release(); });
     try {
-      const out = await withDeadline((async () => {
-        const result = await adapter.run(req, amount, (s) => emit('step', s));
-        const lenses: LensView[] = await Promise.all(PARTY_IDS.map((p) => adapter.lens(req, result, p)));
-        return { txHash: result.txHash, block: result.block, steps: result.steps, lenses };
-      })(), adapter.txDeadlineMs ?? TX_DEADLINE_MS, 'Transaksi');
+      const out = await withDeadline(work, deadlineMs, 'Transaksi');
       emit('result', out);
     } catch (e) {
+      if (e instanceof DeadlineError) app.log.warn(`tx ${runId}: run continues after deadline, busy held`);
       if (isGatewayDeny(e)) app.log.error({ err: e }, `tx ${req.model} ${req.flow} denied by gateway`); // the original stays in the log
       emit('error', { reason: isGatewayDeny(e) ? `Ditolak kebijakan di gateway ${PARTIES[req.from].name}` : msg(e) }); // Paladin calls go through the initiator's gateway
     } finally {
       closed = true;
       run.done = true;
-      busy = null;
       for (const s of run.subs) s.end();
     }
   }
@@ -322,7 +333,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       const run: TxRun = { events: [], subs: new Set(), done: false };
       runs.set(runId, run);
       started = true;
-      void execute(run, adapter, body, v.amount).finally(() => {
+      void execute(run, adapter, body, v.amount, runId).finally(() => {
         setTimeout(() => runs.delete(runId), KEEP_RUN_MS).unref();
       });
       return reply.code(202).send({ runId });
