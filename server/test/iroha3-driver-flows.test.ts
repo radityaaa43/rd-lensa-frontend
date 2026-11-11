@@ -147,9 +147,10 @@ describe('iroha3 on the new chain: keyless balance read', () => {
     expect(seen[0]).not.toMatch(/X-Iroha/i); // unsigned
     expect(r.calls).toEqual([]);
   });
-  it('no row for the asset is a zero balance; a malformed body or an HTTP error is an error', async () => {
+  it('an EMPTY answer is not proof of a zero balance (iroha: the unsigned read returns items [] even for minted accounts): "belum tersedia"; a non-empty list without the asset is 0; malformed or HTTP error is an error', async () => {
     const r = readCli();
-    expect(await createIroha3Adapter(state, r.cli, readWith({ items: [], total: 0 }).read, undefined, fakeDriver().driver).balanceOf('A', 'RD')).toBe(0n);
+    await expect(createIroha3Adapter(state, r.cli, readWith({ items: [], total: 0 }).read, undefined, fakeDriver().driver).balanceOf('A', 'RD')).rejects.toThrow(/belum tersedia/);
+    expect(await createIroha3Adapter(state, r.cli, readWith({ items: [asset(DFABI, '7')], total: 1 }).read, undefined, fakeDriver().driver).balanceOf('A', 'RD')).toBe(0n);
     await expect(createIroha3Adapter(state, r.cli, readWith({ nope: 1 }).read, undefined, fakeDriver().driver).balanceOf('A', 'RD')).rejects.toThrow(/saldo/i);
     await expect(createIroha3Adapter(state, r.cli, readWith({}, 500).read, undefined, fakeDriver().driver).balanceOf('A', 'RD')).rejects.toThrow(/HTTP 500/);
   });
