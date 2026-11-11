@@ -24,6 +24,7 @@ jobs:
       # The server needs no sibling checkout: the code it imports from besu, iroha3 and the Paladin SDK is in server/vendor
       # (scripts/vendor-siblings.sh, server/test/vendor-layout.test.ts), so the whole suite and tsc run here.
       - run: npm run typecheck -w server
+      - run: npm run check:load -w server # the real tsx loader, not vitest: every adapter and the app must import
       - run: npm test -w server
       - run: deploy/k8s/test.sh
       - run: deploy/mtls/test.sh
