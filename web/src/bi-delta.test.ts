@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BI_WANT, biVerdicts, type Flow, type Model } from '../e2e/flows/bi-delta.ts';
+import { BI_WANT, biVerdicts, need, type Flow, type Model } from '../e2e/flows/bi-delta.ts';
 
 const MODELS: Model[] = ['zeto', 'noto', 'stealth', 'fabricx', 'iroha3'];
 const FLOWS: Flow[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp', 'award'];
@@ -34,8 +34,8 @@ describe('biVerdicts', () => {
     expect(biVerdicts('noto', 'dfabi-issue', bal(0n, 3n), bal(0n, 0n))[1].status).toBe('PASS');
     expect(biVerdicts('noto', 'dfabi-issue', bal(0n, 3n), bal(0n, 1n))[1].status).toBe('FAIL');
   });
-  it('noto labels the precondition "custodian" (no top-up exists there)', () => {
-    expect(biVerdicts('noto', 'award', bal(0n, 0n), bal(0n, 0n))[1]).toEqual({ cell: 'DFABI', status: 'SKIP', note: 'SKIP: precondition (custodian=0)' });
+  it('need: noto award needs custodian DFABI 1, noto dfabi-issue 3; other platforms and flows 0', () => {
+    expect([need('noto', 'award'), need('noto', 'dfabi-issue'), need('noto', 'dvp'), need('zeto', 'award'), need('iroha3', 'dfabi-issue')]).toEqual([1n, 3n, 0n, 0n, 0n]);
   });
   it('fabricx award: DFABI 0 is asserted even with zero stock (no precondition)', () => {
     expect(biVerdicts('fabricx', 'award', bal(0n, 0n), bal(1_000_000n, 0n)).map((x) => x.status)).toEqual(['PASS', 'PASS']);

@@ -1,7 +1,7 @@
 // Shared live flow runner: drives the real Lensa UI the way a person does (route, asset tab, form, send),
 // waits for the four process steps, opens the lens and checks who reads what. One test per flow.
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { biVerdicts, type Bal } from './bi-delta.ts';
+import { biVerdicts, need, type Bal } from './bi-delta.ts';
 
 export type Model = 'zeto' | 'noto' | 'stealth' | 'fabricx' | 'iroha3';
 type P = 'BI' | 'A' | 'B' | 'C';
@@ -43,7 +43,9 @@ const route = (m: Model, screen: string, party: P) => `/${m === 'fabricx' || m =
 const digits = (s: string | null) => (s ?? '').replace(/\D/g, '');
 
 export function defineFlows(model: Model) {
-  test.describe.configure({ mode: 'serial' }); // one network, one transaction at a time; a failure stops the rest
+  // one network, one transaction at a time; a failure stops the rest. Also what keeps other BI traffic out of a test: the BI delta
+  // checks assume nobody else moves BI's balance meanwhile (playwright.flows.config.ts: workers: 1, fullyParallel: false)
+  test.describe.configure({ mode: 'serial' });
 
   for (const c of CASES) {
     test(`${model} ${c.flow}`, async ({ page, request }, info) => {
@@ -54,6 +56,8 @@ export function defineFlows(model: Model) {
       const name = (id: P) => meta.parties[id].name as string;
       const errors = watchErrors(page);
       const biBefore = await biState(request, model);
+      // noto rejects award / dfabi-issue before any lock when BI's custodian holds less DFABI than the flow sells (see `need`)
+      test.skip(!!biBefore.bal && biBefore.bal.dfabi < need(model, c.flow), `precondition: custodian DFABI=${biBefore.bal?.dfabi} < need ${need(model, c.flow)}`);
 
       // 1. compose, like a user: the sender is the route party, the asset is a tab, recipient and amount are form fields
       await page.goto(route(model, c.dvp ? 'dvp' : 'transfer', c.from));

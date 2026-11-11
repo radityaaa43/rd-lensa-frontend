@@ -28,18 +28,26 @@ export const BI_WANT: Record<Model, Record<Flow, Want>> = {
   iroha3: { 'rd-issue': { rd: -1001n, dfabi: 0n }, 'rd-transfer': ZERO, 'dfabi-issue': { rd: -1n, dfabi: -3n }, 'dfabi-transfer': { rd: -1n, dfabi: 0n }, dvp: ZERO, award: award(-1n) },
 };
 
-// A DFABI cell that expects BI to give away N needs BI stock >= N before the flow; otherwise report SKIP, not FAIL. What happens
-// with less stock differs per platform (besu review, lead decision 2026-11-11):
-//  - zeto (zeto.ts:238 topUpFor) and iroha3: a batch is minted first, so the delta is no longer -N;
+// BI stock BEFORE the flow that a noto flow needs: noto REJECTS award / dfabi-issue before any lock when the custodian holds less
+// (besu noto+pente/bond/src/lib/outright.ts:143-144, TradeRejected "Persediaan DFABI BI tidak cukup"), so flows.ts skips the test
+// up front. Other platforms are 0: they top up or mint instead.
+export const need = (model: Model, flow: Flow): bigint => {
+  const w = BI_WANT[model][flow].dfabi;
+  return model === 'noto' && w !== null && w < 0n ? -w : 0n;
+};
+
+// A DFABI cell that expects BI to give away N needs BI stock >= N before the flow; with less, report SKIP, not FAIL, because
+// the delta is no longer -N (lead decision 2026-11-11, besu review):
+//  - zeto (zeto.ts:238 topUpFor) and iroha3: a batch is minted first;
 //  - stealth (stealth.ts:86-92 planInventory): the precondition is PER FREE BI ADDRESS, not the total; the API only gives the total,
-//    which is equivalent for the amount 1 these flows use (total >= 1 <=> some address >= 1);
-//  - noto (noto.ts:68, issue.ts:66): no top-up exists, the flow FAILS if the custodian's DFABI < N, so label it "custodian".
+//    which is equivalent for the amount 1 these flows use (total >= 1 <=> some address >= 1).
+// noto never reaches this SKIP: see `need`.
 export function biVerdicts(model: Model, flow: Flow, before: Bal, after: Bal): Verdict[] {
   const want = BI_WANT[model][flow];
   const cells = [['RD', want.rd, after.rd - before.rd, null], ['DFABI', want.dfabi, after.dfabi - before.dfabi, before.dfabi]] as const;
   return cells.map(([cell, w, got, stock]): Verdict => {
     if (w === null) return { cell, status: 'NOT-ASSERTED', note: 'not asserted (out of scope)' };
-    if (stock !== null && w < 0n && stock < -w) return { cell, status: 'SKIP', note: `SKIP: precondition (${model === 'noto' ? 'custodian' : 'stock'}=${stock})` };
+    if (stock !== null && w < 0n && stock < -w) return { cell, status: 'SKIP', note: `SKIP: precondition (stock=${stock})` };
     return got === w ? { cell, status: 'PASS', note: `delta ${got}` } : { cell, status: 'FAIL', note: `delta ${got}, want ${w}` };
   });
 }
