@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PLATFORMS } from './platforms.ts';
@@ -59,6 +59,24 @@ export class Opa {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  }
+
+  // Every rego file a bundle tar must carry, relative to the bundle root (all .rego of the vendored bundles/<name> tree). `opa build` stores a rego file under the
+  // absolute path it was built from and merges every data.json into one `/data.json`, so only rego files can be compared by name; data is checked for presence.
+  expectedFiles(name: 'bi' | 'bank'): string[] {
+    const root = join(this.opaRoot, 'bundles', name);
+    return (readdirSync(root, { recursive: true }) as string[]).filter((f) => f.endsWith('.rego') && statSync(join(root, f)).isFile()).sort();
+  }
+
+  // Compares a built tar with expectedFiles(name): `missing` = a vendored rego not in the tar (a dropped door; 'data.json' if the merged data is absent),
+  // `extra` = a rego in the tar that is not vendored.
+  async bundleParity(tar: string, name: 'bi' | 'bank'): Promise<{ missing: string[]; extra: string[] }> {
+    const entries = (await run('tar', ['tzf', tar])).split('\n').filter(Boolean);
+    const rego = entries.filter((e) => e.endsWith('.rego'));
+    const want = this.expectedFiles(name);
+    const missing = want.filter((f) => !rego.some((e) => e.endsWith(`/${f}`)));
+    if (!entries.some((e) => /^\.?\/?data\.json$/.test(e))) missing.push('data.json');
+    return { missing, extra: rego.filter((e) => !want.some((f) => e.endsWith(`/${f}`))).sort() };
   }
 
   async test(): Promise<{ passed: number; total: number }> {
