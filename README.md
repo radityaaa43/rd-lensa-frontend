@@ -28,13 +28,9 @@ Server di port 8790 (`PORT` mengganti). Port 8791 dipakai server mock untuk Play
 
 ```bash
 cd frontend && npm install
-cd ../besu/stealth-address && npm install
-cd ../zeto && npm install
-cd ../noto+pente/common && npm ci
-cd ../bond && npm ci
 ```
 
-Adapter Noto mengimpor `noto+pente/bond/src/lib`, jadi `bond` butuh `node_modules` sendiri.
+The server needs no sibling checkout and no other `npm install`: the code it imports from `besu`, `iroha3` and the Paladin SDK build lives in `server/vendor` (list: `server/vendor/MANIFEST`, source commits: `server/vendor/PROVENANCE.md`). To refresh it from local sibling checkouts, run `scripts/vendor-siblings.sh`, then commit the result. `server/test/vendor-layout.test.ts` fails if the list and the files drift or a sibling path comes back.
 
 ## Bootstrap (sekali, urutan ini)
 
@@ -84,7 +80,7 @@ kalau mati. Semuanya hanya di `127.0.0.1`.
   alih setelah port itu bebas. Jangan `systemctl enable` `lensa-pf@*`: template tidak punya `[Install]`; sebuah forward
   naik saat boot hanya jika terdaftar di `Wants=`/`After=` pada `lensa.service`.
 - Konfigurasi di `~/.config/lensa/lensa.env` (mode 600, tidak masuk git; contoh: `deploy/lensa.env.example`).
-- Gateway per pihak tanpa port-forward dan tanpa kubeconfig: `LENSA_GW_PALADIN_<BI|A|B|C>` dan `LENSA_GW_FABRICX_<BI|A|B|C>` (URL `https://<ip>:<port>`), sertifikat klien per pihak di `LENSA_GW_MTLS_DIR/<BI|A|B|C>/{ca.crt,lensa.crt,lensa.key}`. Server menolak start bila nilai bukan URL http(s) atau dua endpoint memakai host:port yang sama. Setelah zeto S19 file datar (`ca.crt`, `lensa.crt`, `lensa.key`) di `LENSA_GW_MTLS_DIR` dihapus; hanya empat subfolder pihak yang tinggal.
+- Per-party gateways without port-forward and without a kubeconfig: `LENSA_GW_PALADIN_<BI|A|B|C>` and `LENSA_GW_FABRICX_<BI|A|B|C>` (URL `https://<ip>:<port>`), one client certificate set per party in `LENSA_GW_MTLS_DIR/<BI|A|B|C>/{ca.crt,lensa.crt,lensa.key}`. The server refuses to start when a value is not an http(s) URL or two endpoints share a host:port. After zeto S19 the flat files (`ca.crt`, `lensa.crt`, `lensa.key`) in `LENSA_GW_MTLS_DIR` are removed; only the four party subfolders stay.
 
 ```bash
 deploy/install.sh                       # sekali: pasang unit, buat lensa.env bila belum ada, enable; tidak menjalankan apa pun
