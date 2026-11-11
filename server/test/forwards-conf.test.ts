@@ -18,7 +18,8 @@ const units = (key: 'Wants' | 'After') => {
 const envUrls = (key: string) => {
   const m = deploy('lensa.env.example').match(new RegExp(`^#?\\s*${key}=(\\S+)`, 'm'));
   // The example keeps bank C's public address as a placeholder (the address lives only in the S21 GO text); parse it as a documentation address.
-  return (m?.[1] ?? '').replace(/<[^>]+>/g, '192.0.2.1').split(',').filter(Boolean).map((u) => new URL(u));
+  const off = [...key].reduce((a, c) => a + c.charCodeAt(0), 0); // a distinct fake port per key where the example has a port placeholder
+  return (m?.[1] ?? '').replace(/:<[^>]+>/g, () => `:${30000 + off}`).replace(/<[^>]+>/g, '192.0.2.1').split(',').filter(Boolean).map((u) => new URL(u));
 };
 const isLoopback = (u: URL) => u.hostname === '127.0.0.1';
 
@@ -65,5 +66,13 @@ describe('deploy/forwards.conf', () => {
     expect(isLoopback(c!)).toBe(false);
     expect(c!.port).toBe('8548');
     expect(c!.host).not.toBe(envUrls("LENSA_BESU_RPC_BANKS")[2]!.host); // distinct host:port (gateway.ts assertGatewayEnv): same LB, other port
+  });
+
+  it('has no Fabric-X forward: each fx-gw is reached at its own https URL (fabricx S19)', () => {
+    expect(forwards.filter((f) => f.name.startsWith('fabricx')), 'fabricx forwards').toEqual([]);
+    const hosts = (['BI', 'A', 'B', 'C'] as const).map((p) => envUrls(`LENSA_GW_FABRICX_${p}`)[0]);
+    for (const u of hosts) { expect(u?.protocol).toBe('https:'); expect(isLoopback(u!)).toBe(false); }
+    expect(new Set(hosts.map((u) => u!.host)).size).toBe(4); // distinct host:port per party (assertGatewayEnv)
+    expect(deploy('lensa.env.example')).toMatch(/^#?\s*LENSA_FABRICX_GW=1/m);
   });
 });
