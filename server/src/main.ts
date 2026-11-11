@@ -2,8 +2,10 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadAdaptersWithFailures } from './adapters/index.ts';
 import { buildApp } from './app.ts';
+import { assertGatewayEnv } from './gateway.ts';
 import { bootPolicy } from './policy/boot.ts';
 
+assertGatewayEnv(); // a bad or ambiguous LENSA_GW_* setting stops the server here, before anything listens
 const PORT = Number(process.env.PORT ?? 8790);
 const dist = fileURLToPath(new URL('../../web/dist', import.meta.url));
 const { adapters, failures } = await loadAdaptersWithFailures();
