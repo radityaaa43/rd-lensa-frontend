@@ -1,4 +1,5 @@
-import { BESU_RPC, gwFetch, gwUrl } from './gateway.ts';
+import { BESU_RPC, gwEndpoint, gwFetch } from './gateway.ts';
+import { PARTIES, type PartyId } from './domain.ts';
 
 export type Probe = () => Promise<{ besu: boolean; paladin: boolean[] }>;
 
@@ -13,7 +14,7 @@ export const rpcUp = (url: string, method: string): Promise<boolean> =>
 export const probeNodes: Probe = async () => {
   const [besu, ...paladin] = await Promise.all([
     rpcUp(BESU_RPC, 'eth_blockNumber'),
-    ...[31548, 31648, 31748, 31848].map((p) => rpcUp(gwUrl(`http://127.0.0.1:${p}`), 'transport_nodeName')),
+    ...(Object.keys(PARTIES) as PartyId[]).map((p) => rpcUp(gwEndpoint('paladin', p), 'transport_nodeName')),
   ]);
   return { besu, paladin };
 };
