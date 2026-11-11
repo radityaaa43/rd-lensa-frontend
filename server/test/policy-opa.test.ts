@@ -108,6 +108,23 @@ test.skipIf(need)('assemble writes the Noto balance controls only when BI sets t
   expect(noto).not.toHaveProperty('min_balance');
 });
 
+// assemble() is the only step that touches the bi bundle's content before opa packs it, and it needs no opa binary.
+// rd-besu adds a top-level `fabricx_ca` (the Fabric-X CA, PEM text) to bundles/bi/bi/config/data.json; Lensa must pass it through untouched.
+test('assemble keeps an existing top-level fabricx_ca of the bi data.json byte for byte', () => {
+  const root = tmp();
+  cpSync(join(OPA_ROOT, 'bundles'), join(root, 'bundles'), { recursive: true });
+  const file = join(root, 'bundles/bi/bi/config/data.json');
+  const fabricxCa = { pem: '-----BEGIN CERTIFICATE-----\nZmFrZS1jYS1mb3ItdGVzdA==\n-----END CERTIFICATE-----\n', id: 'fabricx-ca-1', version: 2 };
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), fabricx_ca: fabricxCa }, null, 2));
+  const out = tmp();
+  new Opa('opa', root).assemble(2, seed<BiPolicy>('bi'), seed<BankPolicy>('bank-a'), out);
+  const text = readFileSync(join(out, 'bi/bi/config/data.json'), 'utf8');
+  const sent = JSON.parse(text);
+  expect(JSON.stringify(sent.fabricx_ca)).toBe(JSON.stringify(fabricxCa)); // same bytes, key order included
+  expect(text).toContain(JSON.stringify(fabricxCa.pem)); // the PEM text is in the file as written
+  expect(sent.policy).toEqual(seed<BiPolicy>('bi')); // and the editable part is still Lensa's
+});
+
 test.skipIf(need)('build writes a bundle tarball', async () => {
   const out = tmp();
   opa.assemble(1, seed<BiPolicy>('bi'), seed<BankPolicy>('bank-bi'), out);
