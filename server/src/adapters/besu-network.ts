@@ -1,5 +1,5 @@
 import { rpcUp } from '../health.ts';
-import { BESU_RPC, gwFetch, gwUrl, paladinUrl } from '../gateway.ts';
+import { BESU_RPC, gwFetch, paladinUrl } from '../gateway.ts';
 import type { Network, NetworkNode, Receipt, ReceiptPart } from '../adapter.ts';
 import { PARTIES, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
@@ -68,8 +68,9 @@ export async function besuNetwork(opts: { paladin: boolean }, deps?: BesuNetwork
   })();
   const paladin = opts.paladin
     ? Promise.all(nums.map(async (n): Promise<NetworkNode> => {
-      const port = 31548 + 100 * (n - 1);
-      const up = await rpc(gwUrl(`http://127.0.0.1:${port}`), 'transport_nodeName');
+      const url = paladinUrl(OWNER(n));
+      const port = new URL(url).port;
+      const up = await rpc(url, 'transport_nodeName');
       return { id: `paladin-${n}`, label: `Node Paladin ${n}`, kind: 'paladin', owner: OWNER(n), status: up ? 'up' : 'down', detail: up ? `RPC ${port} menjawab` : `RPC ${port} tidak menjawab (port-forward aktif?)` };
     }))
     : Promise.resolve([] as NetworkNode[]);

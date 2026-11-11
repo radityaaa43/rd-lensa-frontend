@@ -7,7 +7,7 @@ import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, Model
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, type LoadUser } from '../adapter.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { afterLock, withDeadline } from '../deadline.ts';
-import { gwFetch, gwUrl } from '../gateway.ts';
+import { gwEndpoint, gwFetch } from '../gateway.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
 
@@ -110,7 +110,7 @@ export type GwCall = (party: PartyId, body: Record<string, unknown>) => Promise<
 const isGatewayCut = (e: unknown) => e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError' || /\(HTTP 504\)/.test(e.message));
 export const fxGateway: GwCall = async (party, body) => {
   const name = PARTIES[party].name;
-  const res = await gwFetch(gwUrl(`http://127.0.0.1:${39440 + PARTIES[party].node}/`), {
+  const res = await gwFetch(`${gwEndpoint('fabricx', party)}/`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(GW_CALL_MS),
   });
   const text = (await res.text()).trim();

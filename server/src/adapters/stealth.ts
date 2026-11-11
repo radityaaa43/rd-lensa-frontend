@@ -7,7 +7,7 @@ import { BANKS, FLOWS, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, typ
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import type { Sample } from '../stats.ts';
 import { STATE_DIR, readState, writeState } from '../state.ts';
-import { gwAgent, gwUrl } from '../gateway.ts';
+import { gwAgent, gwUrl, partyOfUrl } from '../gateway.ts';
 // Server code never imports ethers itself: everything chain-related comes from stealth-address, so one ethers copy is in play.
 import {
   Contract, FetchRequest, JsonRpcProvider, TRANCHE_A, Wallet, announcements, artifact, biRows, cert, chainNow, contracts, pay, read,
@@ -104,7 +104,7 @@ export function flowLabel(dvp: boolean, kind: 'rd' | 'bond', fromBI: boolean): F
 
 // With gateway mTLS on (gateway.ts) ethers must present the client cert: its FetchRequest takes an https agent.
 export function besuRequest(url: string): string | FetchRequest {
-  const agent = gwAgent();
+  const agent = gwAgent(partyOfUrl(url));
   if (!agent) return url;
   const req = new FetchRequest(url);
   req.getUrlFunc = FetchRequest.createGetUrlFunc({ agent });
