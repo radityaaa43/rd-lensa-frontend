@@ -13,7 +13,7 @@
 // ZetoLockCreated.outputs + lockedOutputs (inputs = unlocked inputs), ZetoLockSpent / ZetoLockCancelled
 // .outputs + lockedOutputs (inputs = lockedInputs). ZetoLockDelegated / ZetoLockUpdated create nothing.
 // V0 events (UTXOsLocked, LockDelegateChanged, from abis/IZetoLockable.json) stay decodable for old tokens.
-import PaladinClient from "../../../paladin-sdk";
+import PaladinClient from "@lfdecentralizedtrust/paladin-sdk";
 import { ethers } from "ethers";
 import { buildBabyjub, buildPoseidon } from "circomlibjs";
 import v1Abi from "../abis/ZetoV1Events.json";

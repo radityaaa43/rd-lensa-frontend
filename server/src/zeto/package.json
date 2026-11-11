@@ -1,1 +1,1 @@
-{ "type": "commonjs", "description": "CommonJS island: these files use the vendored Paladin SDK build (CommonJS, default export) exactly like the vendored besu/zeto code they replace. Goes away with server/vendor/paladin-sdk." }
+{ "type": "commonjs", "description": "CommonJS island: these files use the npm Paladin SDK (CommonJS, default export) like the besu/zeto code they replace; ESM under NodeNext would not type-check its default export." }
