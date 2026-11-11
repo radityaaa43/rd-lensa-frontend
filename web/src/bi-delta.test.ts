@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BI_WANT, biVerdicts, need, parseRefusal, payerNeeds, payerShortfalls, short, topUpAmount, type Flow, type Model } from '../e2e/flows/bi-delta.ts';
+import { BI_WANT, biVerdicts, need, parseRefusal, payerNeeds, payerShortfalls, short, topUpAllowed, topUpAmount, type Flow, type Model } from '../e2e/flows/bi-delta.ts';
 
 const MODELS: Model[] = ['zeto', 'noto', 'stealth', 'fabricx', 'iroha3'];
 const FLOWS: Flow[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp', 'award'];
@@ -84,5 +84,11 @@ describe('iroha3 payer side', () => {
   });
   it('topUpAmount: RD floor 3,000,000, DFABI floor 20, else 3 x min', () => {
     expect([topUpAmount('RD', 1_000_001n), topUpAmount('RD', 2_000_000n), topUpAmount('DFABI', 1n), topUpAmount('DFABI', 10n)]).toEqual([3_000_003n, 6_000_000n, 20n, 30n]);
+  });
+});
+
+describe('live top-up budget', () => {
+  it('at most 2 top-ups per flow and 6 in total', () => {
+    expect([topUpAllowed(0, 0), topUpAllowed(1, 5), topUpAllowed(2, 2), topUpAllowed(1, 6), topUpAllowed(0, 6)]).toEqual([true, true, false, false, false]);
   });
 });
