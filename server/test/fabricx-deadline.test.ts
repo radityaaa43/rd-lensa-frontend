@@ -1,9 +1,10 @@
 // Fabric-X with BI down: the gateway answers after ~261 s (submit 130973 ms + final 998 + report 128897, report "not delivered: ...
 // connection timed out"; fabric's bound, rdbi/cmd/driver/api.go:76-100). Envoy caps a gateway call at 300 s (scripts/k8s.py:299).
 // The Lensa side must wait at least as long as the gateway can: server default 120 s (app.ts:21) and CALL_MS 180 s (fabricx.ts:22) cut a
-// tx that commits. RED until fe raises the fabricx adapter's txDeadlineMs and CALL_MS to >= 300_000.
+// tx that commits. RED until fe raises the fabricx adapter's txDeadlineMs (310_000) and CALL_MS (305_000), lead's decision 2026-11-11.
 import { describe, expect, it, vi } from 'vitest';
 import { createFabricxAdapter, fxGateway, type Exec, type GwCall } from '../src/adapters/fabricx.ts';
+import { withDeadline } from '../src/deadline.ts';
 import type { FlowRequest } from '../src/domain.ts';
 
 const BOUND_MS = 300_000;
@@ -30,14 +31,25 @@ describe('fabricx deadline vs the gateway bound (BI down)', () => {
     } finally { spy.mockRestore(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
   });
 
-  it('guard (green today): a gateway answer after 261 s with a pending report is a success, the report step keeps its time', async () => {
-    const report = 'not delivered: dial tcp 10.0.0.1:5101: connect: connection timed out';
-    const gw: GwCall = async () => ({ txId: TX, report, steps: [{ name: 'submit', ms: 130_973 }, { name: 'final', ms: 998 }, { name: 'report', ms: 128_897 }] });
-    const req: FlowRequest = { model: 'fabricx', flow: 'rd-transfer', from: 'A', to: 'B', amount: '1000' };
-    const steps: { index: number; ms: number }[] = [];
-    const r = await createFabricxAdapter(exec, gw).run(req, 1000n, (s) => steps.push(s));
-    expect(r.txHash).toBe(TX);
-    expect(steps.slice(0, 3).map((s) => s.ms)).toEqual([130_973, 998, 128_897]);
-    expect((r.context as { report: string }).report).toBe(report);
+  const report = 'not delivered: dial tcp 10.0.0.1:5101: connect: connection timed out';
+  const steps = [{ name: 'submit', ms: 130_973 }, { name: 'final', ms: 998 }, { name: 'report', ms: 128_897 }];
+  const req: FlowRequest = { model: 'fabricx', flow: 'rd-transfer', from: 'A', to: 'B', amount: '1000' };
+
+  it('a gateway answer after 261 s (report pending) is a success under the server deadline wiring (app.ts:269-273), not an error', async () => {
+    vi.useFakeTimers();
+    try {
+      const gw: GwCall = async () => { await new Promise((r) => setTimeout(r, 261_000)); return { txId: TX, report, steps }; };
+      const adapter = createFabricxAdapter(exec, gw);
+      // the same deadline the server puts around adapter.run (app.ts:273): adapter.txDeadlineMs ?? TX_DEADLINE_MS (120_000)
+      const run = adapter.run(req, 1000n, () => {});
+      const outcome = withDeadline(run, adapter.txDeadlineMs ?? 120_000, 'Transaksi').then((r) => ({ ok: r }), (e: Error) => ({ err: e.message }));
+      await vi.advanceTimersByTimeAsync(262_000);
+      const got = await outcome;
+      await vi.runAllTimersAsync(); // the adapter's own polls (ledger read) after the gateway answer
+      await run.catch(() => {}); // the run goes on after a deadline: let it end so it releases its sender lock for the next test
+      expect(got).not.toHaveProperty('err'); // today: "Transaksi tidak selesai dalam 120 detik" although the tx commits
+      expect((got as { ok: { txHash: string } }).ok.txHash).toBe(TX);
+      expect(((got as { ok: { context: { report: string } } }).ok.context).report).toBe(report); // the report stays pending, not lost
+    } finally { vi.useRealTimers(); }
   });
 });
