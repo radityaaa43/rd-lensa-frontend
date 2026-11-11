@@ -510,7 +510,7 @@ export function createZetoAdapter(state: ZetoState, connections = nodeConnection
   const booked = new Set<string>();
   const bookKey = async (id: string) => {
     if (booked.has(id)) return;
-    ownerBook.set(lower(await P.BI.c.ptx.resolveVerifier(id, algorithmZetoSnarkBJJ('zeto'), IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X)), id);
+    ownerBook.set(lower(await within(P.BI.c.ptx.resolveVerifier(id, algorithmZetoSnarkBJJ('zeto'), IDEN3_PUBKEY_BABYJUBJUB_COMPRESSED_0X), DEADLINE_MS, `Kunci ${id}`)), id);
     booked.add(id);
   };
   const loadUnits = async (u: LoadUser) => {
