@@ -7,11 +7,11 @@
 //   GET  /sink/status                  { "<gateway label>": { age_s, bundles: { bi|bank: { revision, code, message } } } }
 // Each call goes to the party's own gateway (the Paladin door URL: the sink shares its listener) with that party's client certificate.
 import { createHash } from 'node:crypto';
-import { accessSync, constants, readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { PARTIES, type PartyId } from '../domain.ts';
 import { gwFetch, paladinUrl } from '../gateway.ts';
-import { inCluster } from '../incluster.ts';
+import { inCluster, readOnlyMount } from '../incluster.ts';
 import type { GatewayBundles, Kube } from './kube.ts';
 
 export interface SinkIo {
@@ -109,8 +109,7 @@ export function sinkKube(io: SinkIo, parties: PartyId[]): SinkKube {
 export function sinkIo(tokensDir: string): SinkIo & { parties: PartyId[] } {
   // Pod mode = LENSA_IN_CLUSTER=1 AND a read-only dir (a Secret mount: the dir cannot be 700 and fsGroup adds the group-read bit): files must be unreachable
   // for others, unwritable and of our group. Anything else is the strict host rule.
-  let pod = false;
-  if (inCluster()) { try { accessSync(tokensDir, constants.W_OK); } catch { pod = true; } }
+  const pod = inCluster() && readOnlyMount(tokensDir);
   if (!pod && (statSync(tokensDir).mode & 0o077) !== 0) throw new Error('the sink token directory must be mode 700');
   const tokens = new Map<PartyId, string>();
   for (const p of Object.keys(PARTIES) as PartyId[]) {

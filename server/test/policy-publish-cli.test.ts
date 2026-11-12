@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, rmSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, rmSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runPublishCli, type CliDeps } from '../src/cli/policy-publish.ts';
 import { Opa } from '../src/policy/opa.ts';
 import { PLATFORMS } from '../src/policy/platforms.ts';
@@ -373,6 +373,45 @@ describe('--candidate: verify, then publish the exact verified bytes', () => {
     const c = mk({ dirMode: 0o755 });
     const r = await run(args(c, '--apply'), {});
     expect(r.rc).toBe(5); expect(r.io.calls).toEqual([]);
+  });
+  // 5b (lead 2026-11-12): the dry-run Job mounts the candidate as a read-only ConfigMap (dir cannot be 0700, the mount adds `..data` and `..<timestamp>` entries).
+  // Relaxed ONLY with LENSA_IN_CLUSTER=1 AND a read-only dir; the host keeps 0700 strict.
+  describe('read-only candidate mount (pod mode)', () => {
+    const all: string[] = [];
+    afterEach(() => { for (const d of all.splice(0)) { for (const n of [1, 2, 3, 4]) try { chmodSync(join(d, `node${n}`), 0o700); } catch { /* gone */ } try { chmodSync(d, 0o700); } catch { /* gone */ } } });
+    function ro(c: { dir: string }, dirMode = 0o555) {
+      for (const n of [1, 2, 3, 4]) { for (const f of ['bi', 'bank']) chmodSync(join(c.dir, `node${n}`, `${f}.tar.gz`), 0o444); chmodSync(join(c.dir, `node${n}`), 0o555); }
+      chmodSync(c.dir, dirMode); all.push(c.dir);
+    }
+    it('pod mode + read-only dir (0555): verify only passes, no network call', async () => {
+      const c = mk({ dirMode: 0o755 }); ro(c);
+      const r = await run(args(c), { LENSA_IN_CLUSTER: '1' });
+      expect(r.rc).toBe(0); expect(r.io.calls).toEqual([]);
+    });
+    it('the same read-only dir WITHOUT the pod-mode signal stays refused (host: 0700 strict)', async () => {
+      const c = mk({ dirMode: 0o755 }); ro(c);
+      const r = await run(args(c), {});
+      expect(r.rc).toBe(5); expect(r.io.calls).toEqual([]);
+    });
+    it('pod mode but a WRITABLE dir (0755) is refused: the relaxation needs the read-only mount', async () => {
+      const c = mk({ dirMode: 0o755 });
+      const r = await run(args(c), { LENSA_IN_CLUSTER: '1' });
+      expect(r.rc).toBe(5); expect(r.io.calls).toEqual([]);
+    });
+    it('pod mode + read-only: the mount bookkeeping entries (`..data`, `..<timestamp>`) are ignored; any other extra entry is still refused', async () => {
+      const c = mk({ dirMode: 0o700 });
+      mkdirSync(join(c.dir, '..2026_11_12_10_00_00.1')); symlinkSync('..2026_11_12_10_00_00.1', join(c.dir, '..data'));
+      ro(c);
+      expect((await run(args(c), { LENSA_IN_CLUSTER: '1' })).rc).toBe(0);
+      expect((await run(args(c), {})).rc).toBe(5); // host mode: `..data` is an extra entry
+      const d = mk({ dirMode: 0o700 }); writeFileSync(join(d.dir, 'stray.tar.gz'), 'x'); ro(d);
+      expect((await run(args(d), { LENSA_IN_CLUSTER: '1' })).rc).toBe(5);
+    });
+    it('pod mode + read-only dir but a tar file with a write bit is refused', async () => {
+      const c = mk({ dirMode: 0o755 }); ro(c); chmodSync(join(c.dir, 'node1'), 0o755); chmodSync(join(c.dir, 'node1/bi.tar.gz'), 0o644); chmodSync(join(c.dir, 'node1'), 0o555);
+      const r = await run(args(c), { LENSA_IN_CLUSTER: '1' });
+      expect(r.rc).toBe(5); expect(r.io.calls).toEqual([]);
+    });
   });
   it('the four bi tars must carry one revision (the signed bi from BI is relayed to all)', async () => {
     const c = mk();

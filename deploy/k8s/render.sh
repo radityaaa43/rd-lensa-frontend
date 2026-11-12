@@ -4,6 +4,7 @@
 #     base    S4a: namespace rd-lensa, default-deny + DNS + gateway egress policies, SAs and Roles
 #     volume  S4b: PVC lensa-state (Secrets are never rendered: their owners create them)
 #     app     S6:  ConfigMap lensa-env, Deployment lensa, Service lensa (needs LENSA_IMAGE)
+#     dryrun  5b:  ConfigMap lensa-candidate + Job lensa-dryrun (candidate verify, no sink IO; needs LENSA_IMAGE, LENSA_CANDIDATE_DIR, LENSA_CANDIDATE_EXPECT; NOT part of `all`)
 # Environment:
 #   LENSA_ENTRY     a (default: ClusterIP + port-forward under SA lensa-access) | b (adds the CLB ingress policy)
 #   LENSA_GATEWAYS  egress allow-list file (default: gateways.conf next to this script; format in that file)
@@ -108,15 +109,49 @@ EOF
   sed "s#\${IMAGE}#$img#" "$here/templates/app.yaml"
 }
 
-emit() { case "$1" in base) base ;; volume) volume ;; app) app ;; *) die "unknown part '$1'" ;; esac; }
+# 5b: ConfigMap lensa-candidate (the 8 verified bundle sources + the expect file) and the verify Job. Public bundle sources only: refuses a key-like member name, PEM key content,
+# a stray file, a missing tar, a sha256 that differs from the expect file. Needs tar + sha256sum + base64 besides bash and sed.
+dryrun() {
+  local img="${LENSA_IMAGE:-}" dir="${LENSA_CANDIDATE_DIR:-}" exp="${LENSA_CANDIDATE_EXPECT:-}" t n k total=0 names
+  [[ "$img" =~ ^ghcr\.io/radityaaa43/rd-lensa-frontend@sha256:[0-9a-f]{64}$ ]] || die "LENSA_IMAGE must be ghcr.io/radityaaa43/rd-lensa-frontend@sha256:<64 hex> (pinned by digest)"
+  [[ -d "$dir" && -f "$exp" ]] || die "LENSA_CANDIDATE_DIR (node1..4/{bi,bank}.tar.gz) and LENSA_CANDIDATE_EXPECT (sha256sum file) are required"
+  local want; want="$(for n in 1 2 3 4; do echo "node$n"; for k in bi bank; do echo "node$n/$k.tar.gz"; done; done | sort)"
+  [[ "$(cd "$dir" && find . -mindepth 1 | sed 's#^\./##' | sort)" == "$want" ]] || die "the candidate dir must hold exactly node1..4/{bi,bank}.tar.gz and nothing else"
+  [[ "$(grep -c . "$exp")" == 8 ]] || die "the expect file must list exactly the 8 tars"
+  (cd "$dir" && sha256sum -c --strict --quiet "$exp" >/dev/null 2>&1) || die "a tar differs from the expect file (or the expect file is malformed)"
+  for n in 1 2 3 4; do for k in bi bank; do
+    t="$dir/node$n/$k.tar.gz"
+    names="$(tar -tzf "$t")" || die "node$n/$k.tar.gz is not a readable tar.gz"
+    if grep -qiE '(\.(key|pem|crt|toml)|kubeconfig|\.env|alibaba\.yaml)$|/\.env' <<<"$names"; then die "node$n/$k.tar.gz holds a key-like file name"; fi
+    if tar -xzOf "$t" | grep -aq 'PRIVATE KEY'; then die "node$n/$k.tar.gz holds PEM private key content"; fi
+    total=$(( total + $(stat -c %s "$t") ))
+  done; done
+  (( total <= 700000 )) || die "the candidate is $total bytes: a ConfigMap holds at most 1 MiB"
+  cat <<'EOF2'
+# The candidate for the verify Job (rendered at apply time from a verified candidate dir; public bundle sources only). The Job: templates/dryrun.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lensa-candidate
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa}
+binaryData:
+EOF2
+  for n in 1 2 3 4; do for k in bi bank; do printf '  node%s_%s.tar.gz: %s\n' "$n" "$k" "$(base64 -w0 "$dir/node$n/$k.tar.gz")"; done; done
+  echo 'data:'; echo '  expect.sha256: |'; sed 's/^/    /' "$exp"
+  echo '---'
+  sed "s#\${IMAGE}#$img#" "$here/templates/dryrun.yaml"
+}
+
+emit() { case "$1" in base) base ;; volume) volume ;; app) app ;; dryrun) dryrun ;; *) die "unknown part '$1'" ;; esac; }
 
 out=""
 if [[ "${1:-}" == -o ]]; then out="${2:?-o needs a directory}"; shift 2; fi
 case "${1:-}" in
-  base|volume|app)
+  base|volume|app|dryrun)
     if [[ -n "$out" ]]; then mkdir -p "$out"; emit "$1" > "$out/rd-lensa-$1.yaml"; else emit "$1"; fi ;;
   all)
     if [[ -n "$out" ]]; then mkdir -p "$out"; for p in base volume app; do emit "$p" > "$out/rd-lensa-$p.yaml"; done
     else emit base; echo '---'; emit volume; echo '---'; emit app; fi ;;
-  *) die "usage: render.sh [-o DIR] <base|volume|app|all>" ;;
+  *) die "usage: render.sh [-o DIR] <base|volume|app|dryrun|all>" ;;
 esac
