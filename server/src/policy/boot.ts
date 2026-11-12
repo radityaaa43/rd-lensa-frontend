@@ -1,3 +1,4 @@
+import { inCluster } from '../incluster.ts';
 import { kubectlKube, type Kube } from './kube.ts';
 import { Opa } from './opa.ts';
 import { Publisher } from './publish.ts';
@@ -26,6 +27,7 @@ export function bootPolicy(env: NodeJS.ProcessEnv, parts: BootParts = {}): Polic
   if (!env.OPA_BIN) return undefined;
   try {
     if (!env.LENSA_SINK_TOKENS_DIR && !env.OPA_KEYS_DIR) throw new Error('OPA_KEYS_DIR belum diatur');
+    if (inCluster(env) && !env.LENSA_SINK_TOKENS_DIR) throw new Error('di pod hanya lewat sink (LENSA_SINK_TOKENS_DIR)'); // the pod never takes the host way
     const store = parts.makeStore?.() ?? new PolicyStore(POLICY_STATE_DIR, SEEDS_DIR);
     const opa = new Opa(env.OPA_BIN, OPA_ROOT, env.LENSA_SINK_TOKENS_DIR ? undefined : env.OPA_KEYS_DIR);
     store.migrate();
@@ -33,7 +35,9 @@ export function bootPolicy(env: NodeJS.ProcessEnv, parts: BootParts = {}): Polic
     const publisher = parts.makePublisher?.(store, opa, kube) ?? new Publisher(kube, opa, store);
     publisher.recoverInterrupted();
     // a failure that is not already a PolicyError came from publishing: say so, keep the original in the server log
-    const publish = (o: Parameters<Publisher['publish']>[0], m: Platform, n: number) => publisher.publish(o, m, n).catch((e) => {
+    // FREEZE (lead, 2026-11-12): in the pod opa is only a tester / tar tool and a LIVE publish stays refused until the freeze is lifted by a later change.
+    const frozen = inCluster(env);
+    const publish = (o: Parameters<Publisher['publish']>[0], m: Platform, n: number) => (frozen ? Promise.reject(new PolicyError(403, 'Terbit kebijakan dibekukan di pod (hanya uji coba)')) : publisher.publish(o, m, n)).catch((e) => {
       if (e instanceof PolicyError) throw e;
       console.error(`Terbit kebijakan ${o} ${m} v${n} gagal:`, e);
       throw new PolicyError(502, 'Gagal terbit ke gateway');

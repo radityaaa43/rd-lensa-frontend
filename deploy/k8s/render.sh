@@ -80,7 +80,7 @@ app() {
   local img="${LENSA_IMAGE:-}"
   [[ "$img" =~ ^ghcr\.io/radityaaa43/rd-lensa-frontend@sha256:[0-9a-f]{64}$ ]] || die "LENSA_IMAGE must be ghcr.io/radityaaa43/rd-lensa-frontend@sha256:<64 hex> (pinned by digest)"
   cat <<'EOF'
-# Plain values only: gateway URLs, Besu doors, the pod mode signal and the DIRECTORY of the sink tokens. Keys, certificates and tokens are mounted from Secrets, never put here.
+# Plain values only: gateway URLs, Besu doors, the pod mode signal, the path of the image's opa and the DIRECTORY of the sink tokens. Keys, certificates and tokens are mounted from Secrets, never put here.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -93,6 +93,7 @@ data:
   LENSA_GW_MTLS_DIR: "/certs"
   LENSA_IN_CLUSTER: "1"
   LENSA_SINK_TOKENS_DIR: "/sink-tokens"
+  OPA_BIN: "/usr/local/bin/opa"
 EOF
   if [[ -n "${LENSA_ENV_FILE:-}" ]]; then
     local k v
