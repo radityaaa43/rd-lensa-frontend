@@ -1,5 +1,5 @@
 # B1: the internal write instance (replicas 0 until a test window: `kubectl scale`). Reached ONLY by a port-forward to the pod (SA lensa-access): no Service, no Ingress.
-# app=lensa puts it under the real egress policy (egress-party-gateways selects app=lensa); role=flow keeps it out of Service lensa and of the ingress NetworkPolicy.
+# role=flow puts it under egress-gateways-flow (the Fabric-X, Iroha 3 and Stealth gateways only; the public pod has none of those) and keeps it out of Service lensa and of the ingress NetworkPolicy.
 # State is an emptyDir: it never mounts the PVC lensa-state. No sink tokens, no opa (Kebijakan off). Only the existing per-party client certs.
 apiVersion: apps/v1
 kind: Deployment

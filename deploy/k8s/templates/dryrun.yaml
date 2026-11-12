@@ -1,7 +1,7 @@
 # 5b: the Kebijakan candidate VERIFY Job (pod mode, no sink IO). Rendered by ../render.sh dryrun; ${IMAGE} is the ghcr digest reference.
 # It runs `policy-publish --candidate` WITHOUT --apply: it hashes the 8 verified bundle sources against the expect file and prints what the gateways would read; it makes
 # no network call, so it has no egress (default-deny stands), no mTLS certs and no tokens (LENSA_SINK_TOKENS_DIR only has to be set: the CLI refuses without it and
-# does not read it before an --apply). Its pod label is NOT app=lensa: Service lensa and egress-party-gateways must never select it. The Job removes itself (TTL).
+# does not read it before an --apply). Its pod label is NOT app=lensa: Service lensa and the egress-gateways-* policies must never select it. The Job removes itself (TTL).
 apiVersion: batch/v1
 kind: Job
 metadata:
