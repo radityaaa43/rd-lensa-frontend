@@ -4,6 +4,7 @@
 #     base    S4a: namespace rd-lensa, default-deny + DNS + gateway egress policies, SAs and Roles
 #     volume  S4b: PVC lensa-state (Secrets are never rendered: their owners create them)
 #     app     S6:  ConfigMap lensa-env, Deployment lensa, Service lensa (needs LENSA_IMAGE)
+#     seed    state seed: ConfigMap lensa-seed + Job lensa-seed from LENSA_SEED_DIR (seed-state --out); seedcheck: no-egress read Job that greps the PVC + image for key material. NOT part of `all`.
 #     dryrun  5b:  ConfigMap lensa-candidate + Job lensa-dryrun (candidate verify, no sink IO; needs LENSA_IMAGE, LENSA_CANDIDATE_DIR, LENSA_CANDIDATE_EXPECT; NOT part of `all`)
 # Environment:
 #   LENSA_ENTRY     a (default: ClusterIP + port-forward under SA lensa-access) | b (adds the CLB ingress policy)
@@ -143,15 +144,111 @@ EOF2
   sed "s#\${IMAGE}#$img#" "$here/templates/dryrun.yaml"
 }
 
-emit() { case "$1" in base) base ;; volume) volume ;; app) app ;; dryrun) dryrun ;; *) die "unknown part '$1'" ;; esac; }
+# State seed of the PVC lensa-state from a staging dir written by `seed-state --out` (server/src/cli/seed-state.ts): ConfigMap lensa-seed (the files, flat keys) and Job lensa-seed that
+# copies EACH file by its explicit name (never a directory), then verifies sha256. Only allow-listed paths; refuses stealth/iroha3 files, key-named fields, PEM, a stray or missing file and a
+# manifest that disagrees with the files. No egress. Prints file names + sha256 to stderr (never content).
+seed() {
+  local img="${LENSA_IMAGE:-}" dir="${LENSA_SEED_DIR:-}" f key total=0 allow
+  [[ "$img" =~ ^ghcr\.io/radityaaa43/rd-lensa-frontend@sha256:[0-9a-f]{64}$ ]] || die "LENSA_IMAGE must be ghcr.io/radityaaa43/rd-lensa-frontend@sha256:<64 hex> (pinned by digest)"
+  [[ -d "$dir" && -f "$dir/SEED-MANIFEST.json" ]] || die "LENSA_SEED_DIR must be a staging dir from seed-state --out (with SEED-MANIFEST.json)"
+  allow='^(zeto\.json|noto\.json|noto/contract-data-[A-Za-z0-9T._-]+\.json|noto/trades\.jsonl|policy/(bi|bank-a|bank-b|bank-c)/((zeto|noto|fabricx|iroha3)/)?(v[0-9]+\.json|pending\.json|audit\.jsonl))$'
+  [[ -z "$(cd "$dir" && find . -mindepth 1 ! -type f ! -type d)" ]] || die "the seed dir holds a link or special file"
+  local files; files="$(cd "$dir" && find . -type f ! -name SEED-MANIFEST.json | sed 's#^\./##' | sort)"
+  [[ -n "$files" ]] || die "the seed dir holds no file"
+  while IFS= read -r f; do
+    [[ "$f" =~ $allow ]] || die "'$f' is not on the seed allow-list (zeto, noto, the policy store only; no stealth, no iroha3, nothing else)"
+    if grep -aqE -e '-----BEGIN' "$dir/$f"; then die "$f holds PEM content"; fi
+    if grep -aqiE '"[^"]*(privatekey|spendkey|viewkey|deployerkey|seed|mnemonic|secret|password|kubeconfig)[^"]*"[[:space:]]*:' "$dir/$f"; then die "$f has a key-named field"; fi
+    total=$(( total + $(stat -c %s "$dir/$f") ))
+  done <<<"$files"
+  (( total <= 700000 )) || die "the seed is $total bytes: a ConfigMap holds at most 1 MiB"
+  local sums have; sums="$(cd "$dir" && while IFS= read -r f; do sha256sum "$f"; done <<<"$files")"
+  have="$(awk '/"path"/{gsub(/[",]/,""); p=$2} /"sha256"/{gsub(/[",]/,""); print $2"  "p}' "$dir/SEED-MANIFEST.json" | sort)"
+  [[ "$have" == "$(sort <<<"$sums")" ]] || die "SEED-MANIFEST.json does not match the files (a missing, extra or changed file)"
+  echo "seed files (name sha256):" >&2; sed 's/^\([0-9a-f]*\)  \(.*\)$/  \2 \1/' <<<"$sums" >&2
+  echo '# State seed (public read-model state of the in-scope platforms only), from a verified staging dir; the Job: below.'
+  printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: lensa-seed\n  namespace: rd-lensa\n  labels: {part-of: rd-lensa}\nbinaryData:\n'
+  while IFS= read -r f; do printf '  %s: %s\n' "${f//\//__}" "$(base64 -w0 "$dir/$f")"; done <<<"$files"
+  echo 'data:'; echo '  SEED.sha256: |'; sed 's/^/    /' <<<"$sums"
+  echo '---'
+  local script="set -eu"$'\n'
+  while IFS= read -r f; do [[ "$f" == */* ]] && script+="install -d -m 700 /state/$(dirname "$f")"$'\n'; done < <(sort -u <<<"$files")
+  while IFS= read -r f; do script+="install -m 600 /seed/${f//\//__} /state/$f"$'\n'; done <<<"$files"
+  script+="cd /state && sha256sum -c /seed/SEED.sha256"$'\n'"echo seed done"
+  cat <<EOF2
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lensa-seed
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa, app: lensa-seed}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: {part-of: rd-lensa, app: lensa-seed}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: lensa
+      automountServiceAccountToken: false
+      imagePullSecrets: [{name: ghcr-pull}]
+      # the PVC is ReadWriteOnce: the Job must run on the node of the lensa server pod
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector: {matchLabels: {app: lensa, role: server}}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: seed
+          image: $img
+          command:
+            - sh
+            - -c
+            - |
+$(sed 's/^/              /' <<<"$script")
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: seed, mountPath: /seed, readOnly: true}
+            - {name: state, mountPath: /state}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: seed
+          configMap: {name: lensa-seed, defaultMode: 0444}
+        - name: state
+          persistentVolumeClaim: {claimName: lensa-state}
+EOF2
+}
+
+seedcheck() {
+  local img="${LENSA_IMAGE:-}"
+  [[ "$img" =~ ^ghcr\.io/radityaaa43/rd-lensa-frontend@sha256:[0-9a-f]{64}$ ]] || die "LENSA_IMAGE must be ghcr.io/radityaaa43/rd-lensa-frontend@sha256:<64 hex> (pinned by digest)"
+  sed "s#\${IMAGE}#$img#" "$here/templates/seedcheck.yaml"
+}
+
+emit() { case "$1" in base) base ;; volume) volume ;; app) app ;; dryrun) dryrun ;; seed) seed ;; seedcheck) seedcheck ;; *) die "unknown part '$1'" ;; esac; }
 
 out=""
 if [[ "${1:-}" == -o ]]; then out="${2:?-o needs a directory}"; shift 2; fi
 case "${1:-}" in
-  base|volume|app|dryrun)
+  base|volume|app|dryrun|seed|seedcheck)
     if [[ -n "$out" ]]; then mkdir -p "$out"; emit "$1" > "$out/rd-lensa-$1.yaml"; else emit "$1"; fi ;;
   all)
     if [[ -n "$out" ]]; then mkdir -p "$out"; for p in base volume app; do emit "$p" > "$out/rd-lensa-$p.yaml"; done
     else emit base; echo '---'; emit volume; echo '---'; emit app; fi ;;
-  *) die "usage: render.sh [-o DIR] <base|volume|app|dryrun|all>" ;;
+  *) die "usage: render.sh [-o DIR] <base|volume|app|dryrun|seed|seedcheck|all>" ;;
 esac

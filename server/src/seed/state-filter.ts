@@ -146,20 +146,8 @@ export function planSeed(srcDir: string, opts: SeedOptions): SeedPlan {
     }
   }
 
-  // stealth.json: PROJECTED to deployed + chainId (the host file still holds the keys until stealth S21)
-  if (existsSync(join(srcDir, 'stealth.json'))) {
-    carriedTop.add('stealth.json');
-    const doc = parse(read('stealth.json'), 'stealth.json', problems) as Record<string, unknown> | undefined;
-    if (doc) {
-      if (!doc.deployed || typeof doc.deployed !== 'object') problems.push('stealth.json: field deployed missing (refused)');
-      else {
-        const out: Record<string, unknown> = { deployed: doc.deployed };
-        if ('chainId' in doc) out.chainId = doc.chainId;
-        screen(out, 'stealth.json', undefined, problems);
-        files.push({ path: 'stealth.json', content: Buffer.from(`${JSON.stringify(out, null, 2)}\n`) });
-      }
-    }
-  }
+  // stealth.json and iroha3 (iroha3.json, iroha3/): out of scope of the pod seed (analyst, 2026-11-12: stealth.json held every bank's spend/view keys, iroha3 holds seeds/notes/client.toml).
+  // They are never read here: no byte of them reaches the plan, they only show up by name in `notCarried`.
 
   // policy/<owner>/...: Lensa-owned documents and audit trail
   if (existsSync(join(srcDir, 'policy'))) {

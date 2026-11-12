@@ -266,6 +266,59 @@ check(run(["dryrun"], {**DRY, "LENSA_IMAGE": "ghcr.io/radityaaa43/rd-lensa-front
 check(run(["dryrun"], {"LENSA_IMAGE": IMAGE}).returncode != 0, "dryrun without a candidate dir is refused")
 shutil.rmtree(cand); os.remove(cexp)
 
+# ---- seed (state seed of the PVC; analyst condition 1): explicit file names from a staging dir, no egress, then a no-egress grep Job
+import json
+SEED_FILES = {"zeto.json": '{"rd":"0x%s","fromBlock":1}' % ("a" * 40), "noto.json": '{"dataDir":"/app/frontend/server/state/noto"}',
+              "noto/contract-data-2026-11-12T00-00-00-000Z.json": '{"cashGroupId":"0x%s"}' % ("b" * 64), "noto/trades.jsonl": '{"tradeId":"t-1"}\n',
+              "policy/bi/zeto/v1.json": '{"max_per_tx":{"RD":1}}', "policy/bi/audit.jsonl": '{"at":"x","event":"e"}\n'}
+def mk_seed(extra=None, content=None, manifest_lie=None):
+    d = tempfile.mkdtemp(); files = {**SEED_FILES, **(extra or {})}
+    if content: files[content[0]] = content[1]
+    ent = []
+    for rel, body in files.items():
+        os.makedirs(os.path.dirname(f"{d}/{rel}") or d, exist_ok=True); open(f"{d}/{rel}", "w").write(body)
+        ent.append({"path": rel, "bytes": len(body), "sha256": hashlib.sha256(body.encode()).hexdigest() if rel != manifest_lie else "0" * 64})
+    open(f"{d}/SEED-MANIFEST.json", "w").write(json.dumps({"files": ent, "notCarried": ["stealth.json", "iroha3.json", "iroha3/"]}, indent=2) + "\n")
+    return d
+SD = mk_seed()
+sd = docs(["seed"], {"LENSA_IMAGE": IMAGE, "LENSA_SEED_DIR": SD})
+scm = name(sd, "ConfigMap", "lensa-seed"); sj = name(sd, "Job", "lensa-seed"); sjp = sj["spec"]["template"]; sjs = sjp["spec"]; sjc = sjs["containers"][0]
+check(len(scm.get("binaryData", {})) == len(SEED_FILES) and "SEED.sha256" in scm.get("data", {}), f"lensa-seed keys {sorted(scm.get('binaryData', {}))}")
+sums = scm.get("data", {}).get("SEED.sha256", "")
+check(all(hashlib.sha256(b.encode()).hexdigest() + "  " + k in sums for k, b in SEED_FILES.items()), "SEED.sha256 lists every file by path + sha256 (verified in the pod after the copy)")
+cmd = " ".join(sjc.get("command", []) + sjc.get("args", []))
+check(all(f"/state/{k}" in cmd for k in SEED_FILES) and "sha256sum -c" in cmd, "seed Job copies EACH file by its explicit name (never a directory) and verifies the sums")
+check(not re.search(r"cp\s+-[a-zA-Z]*r|cp -R|\bcp [^;&]*/\*|rsync|tar |\*", cmd.replace("sha256sum -c", "")), f"seed Job must not copy a directory or glob: {cmd[:200]}")
+check(sjp["metadata"]["labels"].get("app") == "lensa-seed" and sj["spec"].get("ttlSecondsAfterFinished", 0) > 0 and sj["spec"].get("backoffLimit") == 0 and 0 < sj["spec"].get("activeDeadlineSeconds", 0) <= 600, "seed Job: label app=lensa-seed, TTL, no retry, deadline")
+check(sjs.get("automountServiceAccountToken") is False and sjs.get("serviceAccountName") == "lensa" and sjc["image"] == IMAGE, "seed Job: SA lensa no token, same digest")
+sv = {v["name"]: v for v in sjs["volumes"]}
+check(any(v.get("persistentVolumeClaim", {}).get("claimName") == "lensa-state" and not v["persistentVolumeClaim"].get("readOnly") for v in sv.values()) and not any("secret" in v or "projected" in v or "hostPath" in v for v in sv.values()), "seed Job: PVC lensa-state rw, no Secret, no hostPath")
+aff = json.dumps(sjs.get("affinity", {}))
+check("kubernetes.io/hostname" in aff and "lensa" in aff and "server" in aff, "seed Job: required pod affinity to the lensa server pod (the PVC is ReadWriteOnce: same node)")
+check(not of(sd, "NetworkPolicy"), "seed renders no NetworkPolicy: no egress (default-deny stands)")
+# refusals: key-named field, PEM, stealth, iroha3, a file outside the allow-list, a stray file, a manifest that lies
+def seed_refuse(why, **kw):
+    d = mk_seed(**kw)
+    check(run(["seed"], {"LENSA_IMAGE": IMAGE, "LENSA_SEED_DIR": d}).returncode != 0, f"seed must refuse: {why}")
+    shutil.rmtree(d)
+seed_refuse("a key-named field", content=("zeto.json", '{"spendKey":"x"}'))
+seed_refuse("a seed field", content=("noto/trades.jsonl", '{"seed":"x"}\n'))
+seed_refuse("PEM content", content=("zeto.json", '{"note":"-----BEGIN PRIVATE KEY-----"}'))
+seed_refuse("stealth.json", extra={"stealth.json": '{"deployed":{}}'})
+seed_refuse("an iroha3 file", extra={"iroha3.json": "{}"})
+seed_refuse("a client.toml", extra={"policy/bi/client.toml": "x"})
+seed_refuse("a file outside the allow-list", extra={"notes.txt": "x"})
+seed_refuse("a manifest that lies about a sha256", manifest_lie="zeto.json")
+d = mk_seed(); os.remove(f"{d}/noto.json"); check(run(["seed"], {"LENSA_IMAGE": IMAGE, "LENSA_SEED_DIR": d}).returncode != 0, "seed must refuse a file listed in the manifest but missing"); shutil.rmtree(d)
+check(run(["seed"], {"LENSA_IMAGE": IMAGE}).returncode != 0, "seed without LENSA_SEED_DIR is refused")
+shutil.rmtree(SD)
+# seedcheck: no-egress READ Job: the seeded PVC (ro) and the image data files contain no key material; prints names + sha256 only
+sc = docs(["seedcheck"], {"LENSA_IMAGE": IMAGE}); cj = name(sc, "Job", "lensa-seedcheck"); cjs = cj["spec"]["template"]["spec"]; cjc = cjs["containers"][0]
+ccmd = " ".join(cjc.get("command", []) + cjc.get("args", []))
+check(all(w in ccmd for w in ("PRIVATE KEY", "privateKey", "spendKey", "viewKey", "seed", "grep", "/state")) and "grep hits: 0" in ccmd, "seedcheck greps PRIVATE KEY / privateKey / spendKey / viewKey / seed in the PVC and the image data files")
+check(all(m.get("readOnly") is True for m in cjc["volumeMounts"] if m["mountPath"] == "/state") and any(v.get("persistentVolumeClaim", {}).get("readOnly") is True for v in cjs["volumes"]), "seedcheck: PVC mounted read-only")
+check(cj["spec"]["template"]["metadata"]["labels"].get("app") == "lensa-seedcheck" and not of(sc, "NetworkPolicy") and cjs.get("automountServiceAccountToken") is False, "seedcheck: own label, no egress, no token")
+
 allx = docs(["all"], {**GW, **ENV})
 check([d["kind"] for d in allx][0] == "Namespace", "all: namespace first")
 check(not any(d["kind"] == "Secret" for d in allx), "no render path ever emits a Secret")
