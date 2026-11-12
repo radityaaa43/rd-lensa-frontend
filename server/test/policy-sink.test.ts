@@ -160,4 +160,44 @@ describe('sinkIo', () => {
       expect(seen[0]!.headers!['content-length']).toBe('5');
     } finally { server.close(); }
   });
+
+  // Pod mode (LENSA_IN_CLUSTER=1): the tokens are a read-only Secret mount, so the dir cannot be 700 and fsGroup adds the group-read bit (0440). The relaxed
+  // check needs BOTH the signal and a read-only dir; the dir below is made unwritable with chmod 550 (what a read-only mount looks like to access(2)).
+  describe('pod mode', () => {
+    const podTokens = (files: Record<string, string>, fileMode = 0o440) => {
+      const d = tokens(files, 0o700, fileMode); chmodSync(d, 0o550); return d;
+    };
+    afterEach(() => { for (const d of dirs) try { chmodSync(d, 0o700); } catch { /* removed */ } });
+
+    it('host mode (no signal) stays strict: 0440 files are refused', () => {
+      expect(() => sinkIo(podTokens({ BI: 'tok-bi' }))).toThrow(/700/);
+      expect(() => sinkIo(tokens({ BI: 'tok-bi' }, 0o700, 0o640))).toThrow(/600/);
+    });
+
+    it('signal + read-only dir: 0440 (group read, as fsGroup makes it) is accepted', () => {
+      vi.stubEnv('LENSA_IN_CLUSTER', '1');
+      const { token, parties } = sinkIo(podTokens({ BI: 'tok-bi\n', C: 'tok-c' }));
+      expect(parties).toEqual(['BI', 'C']);
+      expect(token('C')).toBe('tok-c');
+    });
+
+    it('signal + read-only dir: a file others can read (0444) or write (0640) is refused', () => {
+      vi.stubEnv('LENSA_IN_CLUSTER', '1');
+      expect(() => sinkIo(podTokens({ BI: 'tok-secret' }, 0o444))).toThrow(/others/);
+      expect(() => sinkIo(podTokens({ BI: 'tok-secret' }, 0o640))).toThrow(/write/);
+    });
+
+    it('signal but a writable dir: the relaxation does not apply, strict again', () => {
+      vi.stubEnv('LENSA_IN_CLUSTER', '1');
+      expect(() => sinkIo(tokens({ BI: 'tok-bi' }, 0o700, 0o440))).toThrow(/600/);
+    });
+
+    it('signal + read-only dir: a file of another group is refused', () => {
+      vi.stubEnv('LENSA_IN_CLUSTER', '1');
+      const real = process.getgid!;
+      process.getgid = () => real() + 1;
+      try { expect(() => sinkIo(podTokens({ BI: 'tok-bi' }))).toThrow(/group/); } finally { process.getgid = real; }
+    });
+  });
+
 });

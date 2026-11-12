@@ -3,9 +3,11 @@ import { fileURLToPath } from 'node:url';
 import { loadAdaptersWithFailures } from './adapters/index.ts';
 import { buildApp } from './app.ts';
 import { assertGatewayEnv } from './gateway.ts';
+import { assertInClusterEnv } from './incluster.ts';
 import { bindHost } from './listen.ts';
 import { bootPolicy } from './policy/boot.ts';
 
+assertInClusterEnv(); // the pod refuses a kube credential or a signing key in its environment
 assertGatewayEnv(); // a bad or ambiguous LENSA_GW_* setting stops the server here, before anything listens
 const PORT = Number(process.env.PORT ?? 8790);
 const HOST = bindHost(process.env);

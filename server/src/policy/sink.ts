@@ -7,10 +7,11 @@
 //   GET  /sink/status                  { "<gateway label>": { age_s, bundles: { bi|bank: { revision, code, message } } } }
 // Each call goes to the party's own gateway (the Paladin door URL: the sink shares its listener) with that party's client certificate.
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { accessSync, constants, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { PARTIES, type PartyId } from '../domain.ts';
 import { gwFetch, paladinUrl } from '../gateway.ts';
+import { inCluster } from '../incluster.ts';
 import type { GatewayBundles, Kube } from './kube.ts';
 
 export interface SinkIo {
@@ -106,12 +107,21 @@ export function sinkKube(io: SinkIo, parties: PartyId[]): SinkKube {
 // The real io: tokens from <dir>/<BI|A|B|C> (dir 700, files 600, one line each, written by the gateway operator), requests through gwFetch to the
 // party's gateway URL with that party's client certificate and servername. A party without a token file is simply not enabled.
 export function sinkIo(tokensDir: string): SinkIo & { parties: PartyId[] } {
-  if ((statSync(tokensDir).mode & 0o077) !== 0) throw new Error('the sink token directory must be mode 700');
+  // Pod mode = LENSA_IN_CLUSTER=1 AND a read-only dir (a Secret mount: the dir cannot be 700 and fsGroup adds the group-read bit): files must be unreachable
+  // for others, unwritable and of our group. Anything else is the strict host rule.
+  let pod = false;
+  if (inCluster()) { try { accessSync(tokensDir, constants.W_OK); } catch { pod = true; } }
+  if (!pod && (statSync(tokensDir).mode & 0o077) !== 0) throw new Error('the sink token directory must be mode 700');
   const tokens = new Map<PartyId, string>();
   for (const p of Object.keys(PARTIES) as PartyId[]) {
     if (!readdirSync(tokensDir).includes(p)) continue;
     const file = join(tokensDir, p);
-    if ((statSync(file).mode & 0o077) !== 0) throw new Error(`the sink token file of ${p} must be mode 600`);
+    const st = statSync(file);
+    if (pod) {
+      if ((st.mode & 0o007) !== 0) throw new Error(`the sink token file of ${p} must not be accessible to others`);
+      if ((st.mode & 0o222) !== 0) throw new Error(`the sink token file of ${p} must not have a write bit`);
+      if (st.gid !== process.getgid?.()) throw new Error(`the sink token file of ${p} must belong to the process group`);
+    } else if ((st.mode & 0o077) !== 0) throw new Error(`the sink token file of ${p} must be mode 600`);
     const text = readFileSync(file, 'utf8').trim();
     if (!text) throw new Error(`the sink token file of ${p} is empty`);
     if (/\s/.test(text)) throw new Error(`the sink token file of ${p} must hold one line`);
