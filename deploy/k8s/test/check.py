@@ -193,7 +193,7 @@ check(not any("kubeconfig" in str(v).lower() or "hostPath" in v for v in vols.va
 na = pod.get("affinity", {}).get("nodeAffinity", {}).get("requiredDuringSchedulingIgnoredDuringExecution", {}).get("nodeSelectorTerms", [{}])[0].get("matchExpressions", [])
 check(na == [{"key": "kubernetes.io/hostname", "operator": "NotIn", "values": ["member-16033-node", "member-16034-node"]}], f"nodeAffinity {na}")
 svc = name(app, "Service", "lensa")
-check(svc["spec"].get("type", "ClusterIP") == "ClusterIP" and svc["spec"]["ports"] == [{"name": "http", "port": 8790, "targetPort": "http", "protocol": "TCP"}] and svc["spec"]["selector"] == {"app": "lensa"}, f"service {svc['spec']}")
+check(svc["spec"].get("type", "ClusterIP") == "ClusterIP" and svc["spec"]["ports"] == [{"name": "http", "port": 8790, "targetPort": "http", "protocol": "TCP"}] and svc["spec"]["selector"] == {"app": "lensa", "role": "server"}, f"service {svc['spec']}")
 check(c.get("ports") == [{"name": "http", "containerPort": 8790, "protocol": "TCP"}], "container port http 8790")
 for d in app:
     check(d["metadata"].get("namespace") == "rd-lensa" and d["metadata"].get("labels", {}).get("part-of") == "rd-lensa", f"app: {d['kind']}/{d['metadata']['name']} namespace/label")
@@ -242,7 +242,14 @@ for pol in of(base, "NetworkPolicy"):
     sel = pol["spec"]["podSelector"].get("matchLabels", {})
     if pol["metadata"]["name"] in ("default-deny-all", "allow-dns-egress"): check(sel == {}, f"{pol['metadata']['name']} must select every pod")
     else: check(sel.get("app") != "lensa-dryrun" and sel != {}, f"{pol['metadata']['name']} must not select the dryrun pod")
-check(name(app, "Service", "lensa")["spec"]["selector"] == {"app": "lensa"}, "Service lensa selects app=lensa only (never the dryrun Job)")
+check(name(app, "Service", "lensa")["spec"]["selector"] == {"app": "lensa", "role": "server"}, "Service lensa selects app=lensa AND role=server (never the dryrun Job, never an egress-probe pod that carries app=lensa)")
+plabels = pod_labels = dep["spec"]["template"]["metadata"]["labels"]
+check(plabels.get("role") == "server" and plabels.get("app") == "lensa", f"lensa pod labels {plabels}: role=server is what the Service selects")
+check(dep["spec"]["selector"] == {"matchLabels": {"app": "lensa"}}, "Deployment selector stays app=lensa (immutable once created; the template labels are a superset)")
+# an egress-probe pod (app=lensa, role=egress-probe) falls under egress-party-gateways but is NOT selected by the Service
+probe = {"app": "lensa", "role": "egress-probe"}
+check(all(probe.get(k) == v for k, v in gw["podSelector"]["matchLabels"].items()), "egress-party-gateways still applies to a pod labelled app=lensa,role=egress-probe")
+check(not all(probe.get(k) == v for k, v in name(app, "Service", "lensa")["spec"]["selector"].items()), "Service lensa must NOT select a pod labelled app=lensa,role=egress-probe")
 # the candidate is public bundle sources only: render refuses key-like members, PEM key content, a stray file, a missing tar, a sha mismatch, a wrong expect file, a tag image
 def refuse(why, **kw):
     d, e = mk_candidate(**kw)

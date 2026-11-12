@@ -12,7 +12,8 @@ spec:
     matchLabels: {app: lensa}
   template:
     metadata:
-      labels: {part-of: rd-lensa, app: lensa}
+      # role=server is what Service lensa selects: a Job pod that carries app=lensa (the egress-probe, to fall under the real egress policy) is never a Service endpoint
+      labels: {part-of: rd-lensa, app: lensa, role: server}
     spec:
       serviceAccountName: lensa
       automountServiceAccountToken: false
@@ -118,6 +119,6 @@ metadata:
   labels: {part-of: rd-lensa}
 spec:
   type: ClusterIP
-  selector: {app: lensa}
+  selector: {app: lensa, role: server}
   ports:
     - {name: http, port: 8790, targetPort: http, protocol: TCP}
