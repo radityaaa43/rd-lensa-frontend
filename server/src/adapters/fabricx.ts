@@ -3,11 +3,13 @@ import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import { promisify } from 'node:util';
+import { NotAvailableError } from '../adapter.ts';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, StepEvent, Verdict } from '../adapter.ts';
 import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, type LoadUser } from '../adapter.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { afterLock, withDeadline } from '../deadline.ts';
 import { gwEndpoint, gwFetch } from '../gateway.ts';
+import { inCluster } from '../incluster.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
 
@@ -164,7 +166,15 @@ export function awardOf(rows: { sender: string; recipient: string; token: string
 }
 interface Ctx { report: string; onChain: { label: string; value: string }[] }
 
-export function createFabricxAdapter(exec: Exec, gw?: GwCall) {
+// Pod mode (rd-lensa: no kubectl, no kube credential, no state file; design note FABRICX-IN-POD): every command of the exec driver and the committer DB goes through
+// `exec`, which here refuses. The ledger-dependent reads (history's sealed rows, receipt, trace, the post-commit check) therefore fail with an EXPLICIT NotAvailableError
+// (never an empty list) until fabric's gateway read ops exist (F2); no flow is offered meanwhile.
+export const POD_LEDGER_REASON = 'Fabric-X di pod: ledger publik belum tersedia (menunggu operasi baca di gateway)';
+const podExec: Exec = async () => { throw new NotAvailableError(POD_LEDGER_REASON); };
+// What a pod can honestly see of the network: whether each party's gateway answers. The committer and the orderers are not visible from here: "unknown", not "down".
+const POD_PROBE_MS = 4_000;
+
+export function createFabricxAdapter(exec: Exec, gw?: GwCall, opts: { pod?: boolean } = {}) {
   const api = async <T>(cmd: string[]): Promise<T> => {
     if (!gw) return JSON.parse(await exec(['exec', 'deploy/rdbi-driver', '-c', 'driver', '--', 'rdbi-driver', 'api', ...cmd])) as T;
     const { party, body, others } = gwRequest(cmd);
@@ -393,7 +403,17 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall) {
   }
 
   interface Pod { metadata: { name: string; deletionTimestamp?: string }; status: { phase?: string; conditions?: { type: string; status: string }[]; containerStatuses?: { restartCount: number }[] } }
+  async function podNetwork(): Promise<Network> {
+    const probe = gw ?? fxGateway;
+    const nodes = await Promise.all(NODES.map(async ({ match: _m, ...node }): Promise<NetworkNode> => {
+      if (!node.owner) return { ...node, status: 'unknown', detail: 'tidak terbaca dari pod' };
+      const ok = await withDeadline(probe(node.owner, { op: 'balance', type: TOKEN.RD }), POD_PROBE_MS, 'Gateway').then(() => true, () => false);
+      return { ...node, status: ok ? 'up' : 'down', detail: ok ? 'gateway menjawab' : 'gateway tidak menjawab' }; // fixed text: an error message could name a host
+    }));
+    return { nodes, links: LINKS };
+  }
   async function network(): Promise<Network> {
+    if (opts.pod) return podNetwork();
     let items: Pod[];
     try {
       items = (JSON.parse(await exec(['get', 'pods', '-o', 'json', '--request-timeout=3s'])) as { items: Pod[] }).items; // one call for the namespace
@@ -415,7 +435,7 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall) {
     id: 'fabricx',
     txDeadlineMs: LOCK_WAIT_MS + TX_DEADLINE_MS + LEDGER_WAIT_MS + 30_000 + 15_000,
     stepLabels: ['Bukti ZK & endorsement 3-of-4', 'Final di ledger', 'Laporan ke BI', 'Cek ledger publik'],
-    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
+    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, opts.pod ? { enabled: false, reason: POD_LEDGER_REASON } : { enabled: true }])) as Record<FlowId, Capability>,
     async health() {
       try {
         await balanceOf('A', 'RD');
@@ -481,7 +501,9 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall) {
   return adapter;
 }
 
+export const loadPod = (gw: GwCall = fxGateway) => createFabricxAdapter(podExec, gw, { pod: true });
 export async function load(stateDir?: string): Promise<ModelAdapter | null> {
+  if (inCluster() && process.env.LENSA_FABRICX_GW === '1') return loadPod(); // the pod has no state file and no kubeconfig by design
   const s = readState<FabricxState>('fabricx', stateDir);
   return s && s.funded !== false ? createFabricxAdapter(kubectl({ ...s, kubeconfig: process.env.FABRICX_KUBECONFIG ?? s.kubeconfig }), transport()) : null;
 }
