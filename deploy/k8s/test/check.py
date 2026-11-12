@@ -392,9 +392,38 @@ pe = os.path.join(fx, "_pub.env"); open(pe, "w").write("LENSA_PUBLIC_READONLY=1\
 check(run(["app"], {"LENSA_ENV_FILE": pe, "LENSA_IMAGE": IMAGE}).returncode != 0, "LENSA_PUBLIC_READONLY through the env file is refused (only LENSA_PUBLIC=1)"); os.remove(pe)
 check(run(["app"], {**ENV, "LENSA_PUBLIC": "2"}).returncode != 0, "LENSA_PUBLIC other than 1 is refused")
 
+# ---- flow (B1): the internal write instance lensa-flow. No Service, no Ingress, no PVC, replicas 0, its OWN ConfigMap, LENSA_FLOWS only here
+fl = docs(["flow"], ENV)
+check(sorted((d["kind"], d["metadata"]["name"]) for d in fl) == [("ConfigMap", "lensa-flow-env"), ("Deployment", "lensa-flow")], f"flow part renders exactly ConfigMap lensa-flow-env + Deployment lensa-flow: {[(d['kind'], d['metadata']['name']) for d in fl]}")
+fcm = name(fl, "ConfigMap", "lensa-flow-env")["data"]
+check("LENSA_PUBLIC_READONLY" not in fcm and "LENSA_FLOWS" not in fcm, "flow ConfigMap: neither public mode nor the flows flag (the flag is in the Deployment only)")
+check(fcm.get("LENSA_IN_CLUSTER") == "1" and fcm.get("LENSA_GW_MTLS_DIR") == "/certs" and fcm.get("LENSA_GW_PALADIN_BI") == "https://10.0.0.1:31548", f"flow ConfigMap keys {sorted(fcm)}")
+check("LENSA_SINK_TOKENS_DIR" not in fcm and "OPA_BIN" not in fcm, "flow ConfigMap: no sink tokens, no opa (Kebijakan stays off in the write instance)")
+fd = name(fl, "Deployment", "lensa-flow"); fspec = fd["spec"]; fpod = fspec["template"]["spec"]; fc = fpod["containers"][0] if fpod.get("containers") else {}
+check(fspec["replicas"] == 0 and fspec["strategy"] == {"type": "Recreate"}, "flow: replicas 0 (scaled up only for a test window), Recreate")
+check(fspec["template"]["metadata"]["labels"].get("app") == "lensa" and fspec["template"]["metadata"]["labels"].get("role") == "flow", "flow pod: app=lensa (the egress policy applies) + role=flow (the Service never selects it)")
+check(fspec["selector"]["matchLabels"] == {"app": "lensa", "role": "flow"}, "flow selector does not overlap the server Deployment")
+check(fc.get("image") == IMAGE and fc.get("envFrom") == [{"configMapRef": {"name": "lensa-flow-env"}}], "flow: same image, env only from lensa-flow-env")
+check({"name": "LENSA_FLOWS", "value": "1"} in fc.get("env", []), "flow container env LENSA_FLOWS=1")
+check(fpod.get("serviceAccountName") == "lensa" and fpod.get("automountServiceAccountToken") is False, "flow pod: SA lensa, no token mount")
+check(fc.get("securityContext", {}).get("readOnlyRootFilesystem") is True and fc["securityContext"].get("capabilities") == {"drop": ["ALL"]}, "flow container: read-only root, no capabilities")
+fm = {m["mountPath"] for m in fc.get("volumeMounts", [])}
+check(fm == {"/tmp", "/app/frontend/server/state", "/certs"}, f"flow mounts {sorted(fm)}: no /sink-tokens")
+fv = {v["name"]: v for v in fpod.get("volumes", [])}
+check(not any("persistentVolumeClaim" in v for v in fv.values()) and any("emptyDir" in v for v in fv.values()), "flow state is an emptyDir (never the PVC lensa-state)")
+fsrc = [s["secret"]["name"] for v in fv.values() for s in v.get("projected", {}).get("sources", [])]
+check(sorted(fsrc) == [f"lensa-gw-mtls-{p}" for p in ("a", "b", "bi", "c")], f"flow mounts only the existing per-party client cert Secrets: {fsrc}")
+check(not of(fl, "Service") and not of(fl, "Ingress") and not of(fl, "Secret"), "flow: no Service, no Ingress, no Secret")
+check("LENSA_FLOWS" not in str(app) and "LENSA_FLOWS" not in str(pub), "the server (public or not) render never carries LENSA_FLOWS")
+for bad in ["LENSA_FLOWS=1", "LENSA_PUBLIC_READONLY=1", "KUBECONFIG=/x"]:
+    p = os.path.join(fx, "_flow.env"); open(p, "w").write(bad + "\n")
+    check(run(["flow"], {"LENSA_ENV_FILE": p, "LENSA_IMAGE": IMAGE}).returncode != 0, f"flow env file line accepted but must be refused: {bad!r}")
+os.remove(os.path.join(fx, "_flow.env"))
+check(run(["flow"], {"LENSA_IMAGE": "ghcr.io/radityaaa43/rd-lensa-frontend:latest"}).returncode != 0, "flow: an image without @sha256 digest is refused")
 allx = docs(["all"], {**GW, **ENV})
 check([d["kind"] for d in allx][0] == "Namespace", "all: namespace first")
 check(not any(d["kind"] == "Secret" for d in allx), "no render path ever emits a Secret")
+check(not any(d["metadata"]["name"] in ("lensa-flow", "lensa-flow-env") for d in allx), "`all` never renders the write instance")
 
 if fails:
     print("\n".join("FAIL: " + f for f in fails)); sys.exit(1)

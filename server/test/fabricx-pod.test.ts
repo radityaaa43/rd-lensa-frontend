@@ -60,3 +60,20 @@ describe('F3: network() from the party gateways', () => {
     expect(n.nodes.find((x) => x.id === 'rdbi-bank2')!.status).toBe('down');
   }, 15_000);
 });
+
+// B1: the Fabric-X flows are offered in the pod ONLY for the internal write instance (LENSA_FLOWS=1, deploy part `flow`). The public pod never has it.
+describe('B1: flows only for LENSA_FLOWS=1', () => {
+  const enabled = (a: { capabilities: () => Record<string, { enabled: boolean }> }) => Object.values(a.capabilities()).map((c) => c.enabled);
+  it('loadPod without the flag: every flow disabled; with { flows: true }: every flow enabled', () => {
+    expect(new Set(enabled(loadPod(gwOk)))).toEqual(new Set([false]));
+    expect(new Set(enabled(loadPod(gwOk, { flows: true })))).toEqual(new Set([true]));
+  });
+  it('load() in pod mode reads LENSA_FLOWS: unset = closed (the public pod), 1 = open; any other value is not "1" and stays closed', async () => {
+    vi.stubEnv('LENSA_IN_CLUSTER', '1'); vi.stubEnv('LENSA_FABRICX_GW', '1');
+    expect(new Set(enabled((await load(emptyState()))!))).toEqual(new Set([false]));
+    vi.stubEnv('LENSA_FLOWS', '1');
+    expect(new Set(enabled((await load(emptyState()))!))).toEqual(new Set([true]));
+    vi.stubEnv('LENSA_FLOWS', 'true');
+    expect(new Set(enabled((await load(emptyState()))!))).toEqual(new Set([false]));
+  });
+});

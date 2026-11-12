@@ -5,6 +5,7 @@
 #     volume  S4b: PVC lensa-state (Secrets are never rendered: their owners create them)
 #     app     S6:  ConfigMap lensa-env, Deployment lensa, Service lensa (needs LENSA_IMAGE)
 #     ingress interim public entry: Issuer (HTTP-01, no e-mail) + Ingress (path allow-list) + NetworkPolicy; LENSA_PUBLIC_HOST, LENSA_ACME=staging|prod. NOT part of `all`.
+#     flow    B1: the internal write instance: ConfigMap lensa-flow-env + Deployment lensa-flow (replicas 0, LENSA_FLOWS=1, no Service, no Ingress, emptyDir state, no sink tokens); needs LENSA_IMAGE; NOT part of `all`.
 #     probe   egress proof Job from LENSA_PROBE_TARGETS (host port lines); app=lensa + role=egress-probe; NOT part of `all`.
 #     seed    state seed: ConfigMap lensa-seed + Job lensa-seed from LENSA_SEED_DIR (seed-state --out); seedcheck: no-egress read Job that greps the PVC + image for key material. NOT part of `all`.
 #     dryrun  5b:  ConfigMap lensa-candidate + Job lensa-dryrun (candidate verify, no sink IO; needs LENSA_IMAGE, LENSA_CANDIDATE_DIR, LENSA_CANDIDATE_EXPECT; NOT part of `all`)
@@ -101,17 +102,44 @@ data:
 EOF
   [[ -z "${LENSA_PUBLIC:-}" || "$LENSA_PUBLIC" == 1 ]] || die "LENSA_PUBLIC must be 1 or unset"
   [[ "${LENSA_PUBLIC:-}" == 1 ]] && echo '  LENSA_PUBLIC_READONLY: "1"'
-  if [[ -n "${LENSA_ENV_FILE:-}" ]]; then
-    local k v
-    while IFS='=' read -r k v; do
-      [[ -z "${k:-}" || "$k" == \#* ]] && continue
-      [[ "$k" =~ ^(LENSA_GW_(PALADIN|FABRICX)_(BI|A|B|C)|LENSA_BESU_RPC|LENSA_BESU_RPC_BANKS|LENSA_FABRICX_GW)$ ]] || die "env key '$k' is not allowed in the ConfigMap"
-      [[ -n "$v" && "$v" != *[\"\\@\ ]* ]] || die "env value of $k is empty or holds a quote, backslash, space or '@' (no credentials in URLs)"
-      printf '  %s: "%s"\n' "$k" "$v"
-    done < "$LENSA_ENV_FILE"
-  fi
+  env_file_lines
   echo '---'
   sed "s#\${IMAGE}#$img#" "$here/templates/app.yaml"
+}
+
+# Gateway URLs from LENSA_ENV_FILE as ConfigMap data lines (shared by app and flow): an allow-listed key, no credentials in a value.
+env_file_lines() {
+  [[ -n "${LENSA_ENV_FILE:-}" ]] || return 0
+  local k v
+  while IFS='=' read -r k v; do
+    [[ -z "${k:-}" || "$k" == \#* ]] && continue
+    [[ "$k" =~ ^(LENSA_GW_(PALADIN|FABRICX)_(BI|A|B|C)|LENSA_BESU_RPC|LENSA_BESU_RPC_BANKS|LENSA_FABRICX_GW)$ ]] || die "env key '$k' is not allowed in the ConfigMap"
+    [[ -n "$v" && "$v" != *[\"\\@\ ]* ]] || die "env value of $k is empty or holds a quote, backslash, space or '@' (no credentials in URLs)"
+    printf '  %s: "%s"\n' "$k" "$v"
+  done < "$LENSA_ENV_FILE"
+}
+
+# B1: the internal write instance lensa-flow (lead/orchestrator, option (a)): same image and per-party client certs, its OWN ConfigMap (no public mode, no sink tokens, no opa), replicas 0.
+flow() {
+  local img="${LENSA_IMAGE:-}"
+  [[ "$img" =~ ^ghcr\.io/radityaaa43/rd-lensa-frontend@sha256:[0-9a-f]{64}$ ]] || die "LENSA_IMAGE must be ghcr.io/radityaaa43/rd-lensa-frontend@sha256:<64 hex> (pinned by digest)"
+  cat <<'EOF'
+# Internal write instance: Fabric-X flows enabled by LENSA_FLOWS=1 (set in the Deployment, never here). No sink tokens, no opa: Kebijakan stays off. Plain values only.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lensa-flow-env
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa}
+data:
+  HOST: "0.0.0.0"
+  PORT: "8790"
+  LENSA_GW_MTLS_DIR: "/certs"
+  LENSA_IN_CLUSTER: "1"
+EOF
+  env_file_lines
+  echo '---'
+  sed "s#\${IMAGE}#$img#" "$here/templates/flow.yaml"
 }
 
 # 5b: ConfigMap lensa-candidate (the 8 verified bundle sources + the expect file) and the verify Job. Public bundle sources only: refuses a key-like member name, PEM key content,
@@ -273,15 +301,15 @@ ingress() {
   sed "s#\${HOST}#$host#g; s#\${ACME_SERVER}#$server#" "$here/templates/ingress.yaml"
 }
 
-emit() { case "$1" in base) base ;; volume) volume ;; app) app ;; dryrun) dryrun ;; seed) seed ;; seedcheck) seedcheck ;; probe) probe ;; ingress) ingress ;; *) die "unknown part '$1'" ;; esac; }
+emit() { case "$1" in base) base ;; volume) volume ;; app) app ;; dryrun) dryrun ;; seed) seed ;; seedcheck) seedcheck ;; probe) probe ;; ingress) ingress ;; flow) flow ;; *) die "unknown part '$1'" ;; esac; }
 
 out=""
 if [[ "${1:-}" == -o ]]; then out="${2:?-o needs a directory}"; shift 2; fi
 case "${1:-}" in
-  base|volume|app|dryrun|seed|seedcheck|probe|ingress)
+  base|volume|app|dryrun|seed|seedcheck|probe|ingress|flow)
     if [[ -n "$out" ]]; then mkdir -p "$out"; emit "$1" > "$out/rd-lensa-$1.yaml"; else emit "$1"; fi ;;
   all)
     if [[ -n "$out" ]]; then mkdir -p "$out"; for p in base volume app; do emit "$p" > "$out/rd-lensa-$p.yaml"; done
     else emit base; echo '---'; emit volume; echo '---'; emit app; fi ;;
-  *) die "usage: render.sh [-o DIR] <base|volume|app|dryrun|seed|seedcheck|probe|ingress|all>" ;;
+  *) die "usage: render.sh [-o DIR] <base|volume|app|dryrun|seed|seedcheck|probe|ingress|flow|all>" ;;
 esac
