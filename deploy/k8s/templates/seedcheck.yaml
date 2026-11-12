@@ -1,0 +1,62 @@
+# Seed proof (analyst condition on the pod GO): a no-egress READ Job. It greps the seeded PVC (mounted read-only) and the data files of the image for key material and prints
+# file NAMES and sha256 only, never a line of content. Rendered by ../render.sh seedcheck; ${IMAGE} is the ghcr digest reference. Pod label is not app=lensa.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lensa-seedcheck
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa, app: lensa-seedcheck}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: {part-of: rd-lensa, app: lensa-seedcheck}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: lensa
+      automountServiceAccountToken: false
+      imagePullSecrets: [{name: ghcr-pull}]
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector: {matchLabels: {app: lensa, role: server}}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: seedcheck
+          image: ${IMAGE}
+          command:
+            - sh
+            - -c
+            - |
+              set -u
+              hits=0
+              pat='PRIVATE KEY|"(privateKey|spendKey|viewKey|seed|mnemonic)"[[:space:]]*:'
+              echo "state files (name sha256):"
+              find /state -type f | sort | xargs -r sha256sum
+              if grep -rIlE "$pat" /state; then hits=1; fi
+              if find /app -xdev -type f \( -name '*.json' -o -name '*.jsonl' -o -name '*.toml' -o -name '*.pem' -o -name '*.key' -o -name '.env*' \) -not -path '*/node_modules/*' -not -path '*/vendor/*' -print0 | xargs -0 -r grep -lE "$pat"; then hits=1; fi
+              if [ -n "$(find /app -xdev -type f \( -name '*.toml' -o -name '*.pem' -o -name '*.key' -o -name '.env*' \) -not -path '*/node_modules/*' -not -path '*/vendor/*')" ]; then hits=1; fi
+              if [ "$hits" = 0 ]; then echo "grep hits: 0"; else echo "grep hits: >0 (the names are listed above; no content is printed)"; fi
+              exit "$hits"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: state, mountPath: /state, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: state
+          persistentVolumeClaim: {claimName: lensa-state, readOnly: true}
