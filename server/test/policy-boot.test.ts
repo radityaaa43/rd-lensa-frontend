@@ -107,3 +107,19 @@ test('host mode (no LENSA_IN_CLUSTER): the publish is not frozen', async () => {
     expect(publish).toHaveBeenCalledOnce();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('pod mode FREEZE: approve and republish are refused with 403 before any state is read or saved (no publish-failed records)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bootfrz-')); writeFileSync(join(dir, 'BI'), 'tok-bi', { mode: 0o440 }); chmodSync(dir, 0o550);
+  vi.stubEnv('LENSA_IN_CLUSTER', '1');
+  const touched = vi.fn();
+  const spyStore = new Proxy({ migrate: () => {} }, { get: (t, k) => (k in t ? (t as never)[k] : (...a: unknown[]) => { touched(String(k), a); }) }) as unknown as PolicyStore;
+  try {
+    const deps = bootPolicy({ LENSA_IN_CLUSTER: '1', OPA_BIN: '/usr/local/bin/opa', LENSA_SINK_TOKENS_DIR: dir }, {
+      makeStore: () => spyStore, makePublisher: () => ({ recoverInterrupted: () => {}, publish: async () => {}, status: async () => [] }),
+    });
+    const wf = deps!.workflow as unknown as { approve(o: string, m: string, a: object): Promise<unknown>; republish(o: string, m: string, a: object): Promise<unknown> };
+    await expect(wf.approve('bi', 'zeto', { by: 'checker', note: '' })).rejects.toMatchObject({ name: 'PolicyError', status: 403, message: expect.stringMatching(/dibekukan/) });
+    await expect(wf.republish('bi', 'zeto', { by: 'checker' })).rejects.toMatchObject({ status: 403 });
+    expect(touched).not.toHaveBeenCalled();
+  } finally { vi.unstubAllEnvs(); chmodSync(dir, 0o700); rmSync(dir, { recursive: true, force: true }); }
+});

@@ -32,6 +32,8 @@ export class PolicyWorkflow {
     private readonly store: PolicyStore,
     private readonly opa: Opa,
     private readonly publish: (owner: Owner, platform: Platform, n: number) => Promise<void>,
+    // FREEZE reason (pod mode): approve and republish end in a publish, so they are refused up front with 403, before any state is read or saved.
+    private readonly frozen?: string,
   ) {}
 
   // One in-process mutex per document (owner and platform): calls on the same document run one after another.
@@ -99,6 +101,7 @@ export class PolicyWorkflow {
   }
 
   approve(owner: Owner, platform: Platform, a: { by: string; note: string }): Promise<Version> {
+    if (this.frozen) return Promise.reject(new PolicyError(403, this.frozen));
     return this.locked(owner, platform, async () => {
       const by = name(a.by);
       const p = this.store.pending(owner, platform);
@@ -155,6 +158,7 @@ export class PolicyWorkflow {
   }
 
   republish(owner: Owner, platform: Platform, a: { by: string }): Promise<void> {
+    if (this.frozen) return Promise.reject(new PolicyError(403, this.frozen));
     return this.locked(owner, platform, async () => {
       const by = name(a.by);
       const p = this.store.pending(owner, platform);
