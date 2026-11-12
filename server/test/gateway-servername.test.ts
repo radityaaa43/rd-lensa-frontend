@@ -8,6 +8,8 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { FetchRequest } from 'ethers';
+import { besuRequest } from '../src/adapters/stealth.ts';
 import { gwFetch, gwTarget } from '../src/gateway.ts';
 
 function makeCerts(dir: string, serverSan: string) {
@@ -68,5 +70,15 @@ describe('gwTarget', () => {
     vi.stubEnv('LENSA_BESU_RPC_BANKS', 'https://10.2.0.2:8545,https://10.2.0.3:8545,https://10.2.0.4:8545');
     expect(gwTarget('https://10.2.0.2:8545')).toEqual({ party: 'A', servername: 'bank-gw-2' });
     expect(gwTarget('https://10.2.0.4:8545')).toEqual({ party: 'C', servername: 'bank-gw-4' });
+  });
+});
+
+describe('stealth besuRequest (ethers path)', () => {
+  it('a bank\'s Besu door at an IP URL is verified as that bank\'s bank-gw: slot A is accepted by a DNS:bank-gw-2 certificate', async () => {
+    vi.stubEnv('LENSA_GW_MTLS_DIR', perParty);
+    vi.stubEnv('LENSA_BESU_RPC_BANKS', `${base},https://10.9.9.3:8545,https://10.9.9.4:8545`);
+    const req = besuRequest(base) as FetchRequest;
+    req.body = '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}';
+    expect((await req.send()).statusCode).toBe(200);
   });
 });

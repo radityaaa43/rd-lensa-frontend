@@ -7,7 +7,7 @@ import { BANKS, FLOWS, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, typ
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import type { Sample } from '../stats.ts';
 import { STATE_DIR, readState, writeState } from '../state.ts';
-import { gwAgent, gwUrl, partyOfUrl } from '../gateway.ts';
+import { gwAgent, gwTarget, gwUrl } from '../gateway.ts';
 // Server code never imports ethers itself: everything chain-related comes from stealth-address, so one ethers copy is in play.
 import {
   Contract, FetchRequest, JsonRpcProvider, TRANCHE_A, Wallet, announcements, artifact, biRows, cert, chainNow, contracts, pay, read,
@@ -102,9 +102,11 @@ export function flowLabel(dvp: boolean, kind: 'rd' | 'bond', fromBI: boolean): F
   return dvp ? (fromBI ? 'award' : 'dvp') : (`${kind === 'rd' ? 'rd' : 'dfabi'}-${fromBI ? 'issue' : 'transfer'}` as FlowId);
 }
 
-// With gateway mTLS on (gateway.ts) ethers must present the client cert: its FetchRequest takes an https agent.
+// With gateway mTLS on (gateway.ts) ethers must present the client cert: its FetchRequest takes an https agent. The agent also carries the
+// door's servername (bank-gw-N), as gwFetch does: a door at a non-loopback IP (bank C's SG LB) is not in the per-party cert's SAN.
 export function besuRequest(url: string): string | FetchRequest {
-  const agent = gwAgent(partyOfUrl(url));
+  const t = gwTarget(url);
+  const agent = gwAgent(t?.party, t?.servername);
   if (!agent) return url;
   const req = new FetchRequest(url);
   req.getUrlFunc = FetchRequest.createGetUrlFunc({ agent });
