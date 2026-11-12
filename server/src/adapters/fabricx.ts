@@ -168,8 +168,8 @@ interface Ctx { report: string; onChain: { label: string; value: string }[] }
 
 // Pod mode (rd-lensa: no kubectl, no kube credential, no state file; design note FABRICX-IN-POD): every command of the exec driver and the committer DB goes through
 // `exec`, which here refuses. The ledger-dependent reads (history's sealed rows, receipt, trace, the post-commit check) therefore fail with an EXPLICIT NotAvailableError
-// (never an empty list) until fabric's gateway read ops exist (F2); no flow is offered meanwhile.
-export const POD_LEDGER_REASON = 'Fabric-X di pod: ledger publik belum tersedia (menunggu operasi baca di gateway)';
+// (never an empty list) unless the gateway read ops answer (F2: `ledger` / `ledgertxs`, below); no flow is offered in the pod.
+export const POD_LEDGER_REASON = 'Fabric-X di pod: hanya baca (alur transaksi belum diaktifkan di pod)';
 const podExec: Exec = async () => { throw new NotAvailableError(POD_LEDGER_REASON); };
 // What a pod can honestly see of the network: whether each party's gateway answers. The committer and the orderers are not visible from here: "unknown", not "down".
 const POD_PROBE_MS = 4_000;
@@ -192,6 +192,7 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall, opts: { pod?: bool
   // wait: how long a fresh tx may take to reach the committer DB (a receipt read of a listed tx does not wait)
   async function readLedger(txId: string, wait = LEDGER_WAIT_MS): Promise<{ block: number; onChain: Ctx['onChain'] }> {
     if (!/^[0-9a-f]{64}$/.test(txId)) throw new Error(`Id transaksi tidak valid: ${txId}`);
+    if (opts.pod) return podReadLedger(txId, wait);
     const sql = `select 'k', encode(key,'escape'), length(value)::text, encode(substring(value from 1 for 32),'hex') from ns_rd_dfabi_v2 where position(convert_to('${txId}','UTF8') in key) > 0 `
       + `union all select 's', status::text, encode(height,'hex'), '' from tx_status where tx_id = convert_to('${txId}','UTF8')`;
     for (const end = Date.now() + wait; ; await sleep(500)) {
@@ -215,6 +216,64 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall, opts: { pod?: bool
       }
       if (Date.now() > end) throw new Error('Ledger publik belum memuat transaksi ini');
     }
+  }
+
+  // Pod mode: the public ledger through the party's OWN gateway (fabric's `ledger` / `ledgertxs` ops; the SQL and the table name live in the gateway, not here).
+  // Every answer carries the token namespace: a change between two reads (a re-deploy) is an explicit error, a 404 (unknown table) is never an empty list.
+  const podNs = new Map<PartyId, string>();
+  async function ledgerOp<T extends object>(party: PartyId, body: Record<string, unknown>): Promise<T> {
+    let out: T;
+    try { out = await gw!(party, body) as T; } catch (e) {
+      const m = (e as Error).message;
+      if (/\(HTTP 501\)/.test(m)) throw new NotAvailableError('Ledger publik belum dikonfigurasi di gateway');
+      if (/\(HTTP 404\)/.test(m)) throw new Error('Ledger publik: tabel namespace token tidak dikenal di gateway (namespace berubah?)');
+      throw e;
+    }
+    const ns = (out as { namespace?: unknown } | null)?.namespace;
+    if (typeof ns !== 'string' || !/^[a-z0-9_]+$/.test(ns)) throw new Error('Jawaban ledger gateway tidak dikenali');
+    const seen = podNs.get(party);
+    if (seen && seen !== ns) throw new Error(`Namespace ledger berubah (${seen} -> ${ns}); muat ulang server`);
+    podNs.set(party, ns);
+    return out;
+  }
+  async function podReadLedger(txId: string, wait: number): Promise<{ block: number; onChain: Ctx['onChain'] }> {
+    for (const end = Date.now() + wait; ; await sleep(500)) {
+      const r = await ledgerOp<{ found?: boolean; block?: number; status?: string | null; rows?: { key: string; valueLen: number; valueHex: string }[] }>('BI', { op: 'ledger', txid: txId });
+      if (r.found) {
+        if (r.status !== 'COMMITTED') throw new Error(`Ledger menolak transaksi ${txId} (status ${r.status ?? '?'})`);
+        if (!Number.isSafeInteger(r.block) || !Array.isArray(r.rows)) throw new Error('Jawaban ledger gateway tidak dikenali');
+        return {
+          block: r.block!,
+          onChain: [
+            { label: 'Tx id', value: txId },
+            ...r.rows.map((x) => {
+              const head = x.valueHex.slice(0, 64); // the first 32 bytes, as the psql read showed
+              return {
+                label: x.key.startsWith('\\x00tr') ? 'Token request (hash)' : `Output ${x.key.slice(x.key.indexOf(txId) + 64).replace(/\\x00/g, '')} (commitment)`,
+                value: x.valueLen > 32 ? `${head}… (${x.valueLen} byte)` : head,
+              };
+            }),
+          ],
+        };
+      }
+      if (Date.now() > end) throw new Error('Ledger publik belum memuat transaksi ini');
+    }
+  }
+  async function podLedgerTxs(party: PartyId): Promise<{ txId: string; block: number }[]> {
+    const out: { txId: string; block: number }[] = [];
+    let before: number | undefined;
+    for (let page = 0; page < 20 && out.length < HISTORY_MAX; page++) { // a page ends on a block boundary, so it may hold fewer than `limit`
+      const r = await ledgerOp<{ txs?: { txId: string; block: number; status: string }[]; nextBefore?: number | null }>(party, { op: 'ledgertxs', limit: Math.min(200, HISTORY_MAX), ...(before === undefined ? {} : { before }) });
+      if (!Array.isArray(r.txs)) throw new Error('Jawaban ledger gateway tidak dikenali');
+      for (const t of r.txs) {
+        if (!/^[0-9a-f]{64}$/.test(t.txId ?? '') || !Number.isSafeInteger(t.block)) throw new Error(`Baris ledger tidak dikenali: ${String(t.txId).slice(0, 100)}`);
+        if (t.status === 'COMMITTED') out.push({ txId: t.txId, block: t.block });
+      }
+      if (r.nextBefore === null || r.nextBefore === undefined) break;
+      if (!Number.isSafeInteger(r.nextBefore) || (before !== undefined && r.nextBefore >= before)) throw new Error('Jawaban ledger gateway tidak dikenali');
+      before = r.nextBefore;
+    }
+    return out.slice(0, HISTORY_MAX);
   }
 
   async function balanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
@@ -330,6 +389,7 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall, opts: { pod?: bool
     + `(select decode(substring(encode(key,'hex') from '^00747200([0-9a-f]{128})00'),'hex') from ns_rd_dfabi_v2 where key >= '\\x00747200'::bytea and key < '\\x00747201'::bytea) order by s.height desc limit ${n}`;
   const PSQL = (db: string, port: string) => `PGPASSWORD=$POSTGRES_PASSWORD psql -U $POSTGRES_USER -d ${db} ${port} -h 127.0.0.1 -At -F'|' -c "${LEDGER_SQL(HISTORY_MAX)}"`;
   async function ledgerTxs(party: PartyId): Promise<{ txId: string; block: number }[]> {
+    if (opts.pod) return podLedgerTxs(party);
     const out = await exec(party === 'BI' ? ['exec', 'committer-db-0', '--', 'sh', '-c', PSQL('sc_db', '-p 5150')]
       : ['exec', `deploy/rdbi-${NODE[party]}`, '-c', 'db', '--', 'sh', '-c', PSQL('committer', '')]);
     return out.split('\n').filter(Boolean).map((line) => {
