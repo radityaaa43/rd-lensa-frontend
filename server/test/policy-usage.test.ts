@@ -26,8 +26,9 @@ test('usage sums transfer and createLock only', async () => {
   expect(res.RD).toEqual({ used: 4_500_000_000, limit: 5_000_000_000 });
   expect(res.DFABI).toEqual({ used: 900, limit: null });
   expect(rpc).toHaveBeenCalledOnce();
+  // besu's gateway rule (rd-besu #100) refuses a ptx_queryTransactionsFull without an integer limit 1..100: every page, the first included
   expect(rpc).toHaveBeenCalledWith('http://127.0.0.1:31648', 'ptx_queryTransactionsFull', [{
-    limit: 1000, eq: [{ field: 'domain', value: 'zeto' }], greaterThan: [{ field: 'created', value: '2026-11-04T17:00:00Z' }],
+    limit: 100, sort: ['created DESC'], eq: [{ field: 'domain', value: 'zeto' }], greaterThan: [{ field: 'created', value: '2026-11-04T17:00:00Z' }],
   }]);
 });
 
@@ -42,8 +43,42 @@ test('day starts at 00:00 WIB: 20:00Z is already tomorrow in WIB', async () => {
   expect(rpc.mock.calls[0]![2]).toMatchObject([{ greaterThan: [{ value: '2026-11-05T17:00:00Z' }] }]);
 });
 
-test('a full page is refused, not undercounted', async () => {
-  await expect(usage('A', {}, 'zeto', fakeRpc(Array.from({ length: 1000 }, () => rows[0])), contracts, now)).rejects.toThrow();
+// a fake node: `created DESC` over a fixed set, honouring limit and the lessThanOrEqual cursor (ties at the boundary included)
+function pagedRpc(all: { id: string; created: string; function: string; to: string; data: object }[]) {
+  const sorted = [...all].sort((a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0));
+  return vi.fn(async (_url: string, _m: string, params: unknown[]) => {
+    const q = params[0] as { limit: number; lessThanOrEqual?: { value: string }[] };
+    const le = q.lessThanOrEqual?.[0]?.value;
+    return sorted.filter((r) => le === undefined || r.created <= le).slice(0, q.limit);
+  }) as unknown as JsonRpc & ReturnType<typeof vi.fn>;
+}
+const tx = (i: number, created: string) => ({ id: `tx-${i}`, created, function: xfer, to: RD, data: { transfers: [{ to: 'bankB@node3', amount: '10' }] } });
+const stamp = (i: number) => new Date(Date.UTC(2026, 10, 5, 0, 0, 0) + i * 1000).toISOString();
+
+test('more than 100 txs are paged: every call has an integer limit <= 100, nothing is missed or counted twice', async () => {
+  const all = Array.from({ length: 250 }, (_, i) => tx(i, stamp(i)));
+  const rpc = pagedRpc(all);
+  const res = await usage('A', {}, 'zeto', rpc, contracts, now);
+  expect(res.RD.used).toBe(250 * 10);
+  expect(rpc.mock.calls.length).toBe(3);
+  for (const c of rpc.mock.calls) { const l = (c[2] as { limit: number }[])[0]!.limit; expect(Number.isInteger(l) && l >= 1 && l <= 100).toBe(true); }
+  expect((rpc.mock.calls[1]![2] as { lessThanOrEqual: unknown }[])[0]).toHaveProperty('lessThanOrEqual');
+});
+
+test('txs sharing one timestamp across a page boundary are neither skipped nor counted twice', async () => {
+  const all = Array.from({ length: 130 }, (_, i) => tx(i, i < 60 ? stamp(500) : stamp(i))); // 60 rows with the SAME created, straddling row 100
+  const res = await usage('A', {}, 'zeto', pagedRpc(all), contracts, now);
+  expect(res.RD.used).toBe(130 * 10);
+});
+
+test('a page that can never advance (100 rows, one timestamp, all seen) is refused, not undercounted or looped', async () => {
+  const same = Array.from({ length: 100 }, (_, i) => tx(i, stamp(7)));
+  await expect(usage('A', {}, 'zeto', pagedRpc(same.concat(same.map((r, i) => ({ ...r, id: `x-${i}` })))), contracts, now)).rejects.toThrow(/halaman|page/i);
+});
+
+test('an absurd number of pages is refused (a bound, not a number that is too low)', async () => {
+  const all = Array.from({ length: 6000 }, (_, i) => tx(i, stamp(i)));
+  await expect(usage('A', {}, 'zeto', pagedRpc(all), contracts, now)).rejects.toThrow(/halaman|page/i);
 });
 
 test('noto rail: transfer and prepareUnlock count, a rollback to the owner does not', async () => {
