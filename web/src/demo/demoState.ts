@@ -2,7 +2,7 @@ import type { LensView, StepEvent } from '../../../server/src/adapter.ts';
 import { BANKS, type FlowId, type FlowRequest, type ModelId, type PartyId } from '../../../server/src/domain.ts';
 
 export type Asset = 'RD' | 'DFABI';
-export interface TxResult { txHash: string; block: number; steps: StepEvent[]; lenses: LensView[] }
+export interface TxResult { txHash: string; block: number; steps: StepEvent[]; lenses: LensView[]; reportPending?: string } // reportPending: settled, but the report to BI is not confirmed yet
 // Model and sender are not here: they come from the route (ARCHITECTURE.md §3.6). The run lives in App.
 export interface DemoState {
   asset: Asset; to: PartyId;

@@ -56,6 +56,7 @@ export function Transfer({ meta, route, run, dispatch, send, stressRunning, dvp 
             <div className="done" role="status">
               <span>Selesai di blok {run.result.block} · <span className="mono">{shortHash(run.result.txHash)}</span></span>
               <a className="btn" {...linkTo({ ...route, screen: 'lensa', tx: run.result.txHash })}>Buka di lensa</a>
+              {run.result.reportPending && <span className="muted" role="note">{run.result.reportPending}</span>}
             </div>
           )}
           {/* the flow as the sender's node and the chain recorded it (DESIGN.md §7.10b) */}

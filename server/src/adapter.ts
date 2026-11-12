@@ -3,7 +3,7 @@ import type { Sample } from './stats.ts';
 
 export type { Counterparty } from './domain.ts';
 export interface StepEvent { index: number; label: string; ms: number }
-export interface FlowResult { txHash: string; block: number; steps: StepEvent[]; context: unknown } // context: adapter-private data lens() needs
+export interface FlowResult { txHash: string; block: number; steps: StepEvent[]; context: unknown; reportPending?: string } // reportPending: the tx settled but its report to BI is not confirmed yet (R21) // context: adapter-private data lens() needs
 export type Verdict = 'clear' | 'reported' | 'notarised' | 'viewkey' | 'partial' | 'sealed';
 export interface LensView {
   party: PartyId; role: Role; verdict: Verdict; amount: string | null; counterparty: Counterparty | null;
@@ -58,6 +58,8 @@ export interface ModelAdapter {
   txDeadlineMs?: number; // run() + lens() deadline when longer than the server default (Iroha 3 APS: minutes)
   capabilities(): Record<FlowId, Capability>;
   health(): Promise<{ ready: boolean; detail: string }>;
+  // Optional: readiness for THIS request (only its own parties' nodes). Without it the whole-platform health() gates a write (Noto: BI is the notary). health() still reports every node.
+  readyFor?(req: FlowRequest): Promise<{ ready: boolean; detail: string }>;
   balanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint>;
   run(req: FlowRequest, amount: bigint, onStep: (s: StepEvent) => void): Promise<FlowResult>;
   lens(req: FlowRequest, result: FlowResult, party: PartyId): Promise<LensView>;

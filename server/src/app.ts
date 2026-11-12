@@ -5,7 +5,7 @@ import fastifyStatic from '@fastify/static';
 import { HISTORY_MAX, NotAvailableError, WarmingUpError, type Capability, type LensView, type ModelAdapter } from './adapter.ts';
 import { withDeadline } from './deadline.ts';
 import {
-  FLOWS, MODEL_NAMES, PARTIES, PRICE_PER_UNIT, validateRequest,
+  FLOWS, MODEL_NAMES, PARTIES, PRICE_PER_UNIT, roleOf, validateRequest,
   type FlowId, type FlowRequest, type ModelId, type PartyId,
 } from './domain.ts';
 import { probeNodes, type Probe } from './health.ts';
@@ -276,8 +276,13 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     try {
       const out = await withDeadline((async () => {
         const result = await adapter.run(req, amount, (s) => emit('step', s));
-        const lenses: LensView[] = await Promise.all(PARTY_IDS.map((p) => adapter.lens(req, result, p)));
-        return { txHash: result.txHash, block: result.block, steps: result.steps, lenses };
+        // BI's own lens may be unreadable while BI's node is down (R21): that degrades to a placeholder, the settled tx is not failed. Another party's lens failing still fails.
+        const lenses: LensView[] = await Promise.all(PARTY_IDS.map((p) => adapter.lens(req, result, p).catch((e): LensView => {
+          if (p !== 'BI' || !result.reportPending) throw e;
+          app.log.error({ err: e }, `lens BI ${req.model} (laporan tertunda)`);
+          return { party: 'BI', role: roleOf(req, 'BI'), verdict: 'partial', amount: null, rdAmount: null, counterparty: null, onChain: [], method: 'Lensa BI belum tersedia: laporan tertunda' };
+        })));
+        return { txHash: result.txHash, block: result.block, steps: result.steps, lenses, ...(result.reportPending ? { reportPending: result.reportPending } : {}) };
       })(), adapter.txDeadlineMs ?? TX_DEADLINE_MS, 'Transaksi');
       emit('result', out);
     } catch (e) {
@@ -305,7 +310,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       const cap = adapter.capabilities()[body.flow];
       if (!cap.enabled) return reply.code(409).send({ reason: `Alur ini tidak tersedia: ${cap.reason}` });
       try {
-        const h = await withDeadline(adapter.health(), HEALTH_MS, 'Cek kesiapan');
+        const h = await withDeadline(adapter.readyFor ? adapter.readyFor(body) : adapter.health(), HEALTH_MS, 'Cek kesiapan');
         if (!h.ready) return reply.code(503).send({ reason: `${MODEL_NAMES[body.model]} belum siap: ${h.detail}` });
       } catch (e) {
         return reply.code(503).send({ reason: `${MODEL_NAMES[body.model]} belum siap: ${msg(e)}` });
