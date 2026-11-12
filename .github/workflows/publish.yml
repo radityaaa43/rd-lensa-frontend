@@ -3,7 +3,7 @@ name: publish
 # Builds the IN-CLUSTER Lensa image and pushes it to ghcr.io under the EXISTING private package rd-lensa-frontend, tag incluster-sha-<sha>.
 # Manual trigger ONLY (`gh workflow run publish.yml --ref main`), and only on the orchestrator's word: a push to the registry is an outward write.
 # Order: build locally (not pushed) -> image checks (non-root, no key names, state dir empty, no cluster/chain tools, PEM content scan, /api/health)
-# -> push with SBOM + max provenance -> signed attestation (public repo) -> assert the package is PRIVATE (fails otherwise) -> pull test of the pushed DIGEST
+# -> push with SBOM + max provenance -> assert the package is PRIVATE (fails otherwise) -> pull test of the pushed DIGEST -> signed attestation (public repo)
 # (same checks on the pulled image). The manifests take the DIGEST from the job output / summary, never the tag.
 on:
   workflow_dispatch:
@@ -65,13 +65,6 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           sbom: true
           provenance: mode=max
-      # the repository is public: the signed attestation is available (it was not for the private repositories)
-      - if: ${{ github.event.repository.private == false }}
-        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
-        with:
-          subject-name: ghcr.io/${{ github.repository_owner }}/rd-lensa-frontend
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
       # The repositories are public: after EVERY push an anonymous client must be refused, else the job fails (script + its fake-curl test from the publish-assert-private change).
       - name: Assert the package is private (an anonymous client must be refused)
         run: |
@@ -85,6 +78,13 @@ jobs:
           docker pull "$ref"
           echo "pulled $ref imageID $(docker image inspect "$ref" --format '{{.Id}}')" | tee -a "$GITHUB_STEP_SUMMARY"
           deploy/ci/image-checks.sh "$ref"
+      # the repository is public: the signed attestation is available. It comes LAST: nothing is attested before the image is proven private (anonymous assert) and pullable by digest (authenticated pull test)
+      - if: ${{ github.event.repository.private == false }}
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/rd-lensa-frontend
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
       - name: Report the digest
         run: |
           { echo "image: $IMAGE@${{ steps.build.outputs.digest }}"; echo "tag: incluster-sha-${{ github.sha }}; SBOM + provenance (mode=max) attached; package visibility asserted private; pull test passed"; } | tee -a "$GITHUB_STEP_SUMMARY"
