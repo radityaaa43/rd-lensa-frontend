@@ -10,7 +10,6 @@ import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type Ba
 import { afterLock, withDeadline } from '../deadline.ts';
 import { gwEndpoint, gwFetch } from '../gateway.ts';
 import { inCluster } from '../incluster.ts';
-import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
 
 // Fabric-X + Panurus ZKAT-DLOG, no auditor. Every operation goes to the initiating party's OPA gateway fx-gw-N
@@ -18,6 +17,7 @@ import type { Sample } from '../stats.ts';
 // lensa-pf@fabricx-gw-N to 127.0.0.1:39440+N, when LENSA_FABRICX_GW=1. Without it (before the cut-over, or to roll back):
 //   kubectl exec deploy/rdbi-driver -- rdbi-driver api <command...>   (stdout = one JSON line, stderr = logs)
 // The public ledger is BI's committer DB, read with kubectl exec either way. No SDK.
+// load() is pod-only (LENSA_IN_CLUSTER=1 + LENSA_FABRICX_GW=1): the host Lensa no longer loads Fabric-X. The exec driver (kubectl()) stays for the bootstrap CLI only.
 export interface FabricxState { kubeconfig: string; namespace: string; funded?: boolean } // funded false while bootstrap runs: load() ignores it
 
 export type Exec = (args: string[]) => Promise<string>; // kubectl arguments after --kubeconfig/-n; resolves with stdout
@@ -563,10 +563,9 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall, opts: { pod?: bool
 
 // flows: the internal write instance only (LENSA_FLOWS=1, deploy part `flow`); the public pod never has it (assertPublicEnv refuses both together)
 export const loadPod = (gw: GwCall = fxGateway, opts: { flows?: boolean } = {}) => createFabricxAdapter(podExec, gw, { pod: true, flows: opts.flows });
-export async function load(stateDir?: string): Promise<ModelAdapter | null> {
-  if (inCluster() && process.env.LENSA_FABRICX_GW === '1') return loadPod(fxGateway, { flows: process.env.LENSA_FLOWS === '1' }); // the pod has no state file and no kubeconfig by design
-  const s = readState<FabricxState>('fabricx', stateDir);
-  return s && s.funded !== false ? createFabricxAdapter(kubectl({ ...s, kubeconfig: process.env.FABRICX_KUBECONFIG ?? s.kubeconfig }), transport()) : null;
+// Pod only. The host Lensa no longer loads Fabric-X: its kubectl exec driver read the old namespace (retired; Fabric-X goes through lensa-flow with each party's identity).
+export async function load(_stateDir?: string): Promise<ModelAdapter | null> {
+  return inCluster() && process.env.LENSA_FABRICX_GW === '1' ? loadPod(fxGateway, { flows: process.env.LENSA_FLOWS === '1' }) : null; // the pod has no state file and no kubeconfig by design
 }
 
 // LENSA_FABRICX_GW=1: through the OPA gateways (the only path once rdbi-driver is scaled to 0); unset: the exec driver.
