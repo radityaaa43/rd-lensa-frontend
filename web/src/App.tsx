@@ -9,6 +9,7 @@ import { Policy } from './screens/Policy.tsx';
 import { Report } from './screens/Report.tsx';
 import { Transfer } from './screens/Transfer.tsx';
 import { Header } from './app/Header.tsx';
+import { PublicBanner } from './app/PublicBanner.tsx';
 import { Sidebar } from './app/Sidebar.tsx';
 import type { Route } from './app/route.ts';
 import { usePoll } from './app/usePoll.ts';
@@ -130,6 +131,7 @@ export default function App() {
   return (
     <>
       <a className="skip" href="#konten">Lewati ke konten</a>
+      {meta && <PublicBanner meta={meta} />}
       {!meta ? (
         <div className="empty">
           <h3>{err ? 'Tidak dapat memuat data' : 'Memuat…'}</h3>
