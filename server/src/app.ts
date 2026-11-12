@@ -5,14 +5,14 @@ import fastifyStatic from '@fastify/static';
 import { HISTORY_MAX, NotAvailableError, WarmingUpError, type Capability, type LensView, type ModelAdapter } from './adapter.ts';
 import { withDeadline } from './deadline.ts';
 import {
-  FLOWS, MODEL_NAMES, PARTIES, PRICE_PER_UNIT, roleOf, validateRequest,
+  FLOWS, MODEL_NAMES, PARTIES, PRICE_PER_UNIT, isDvpFlow, roleOf, validateRequest,
   type FlowId, type FlowRequest, type ModelId, type PartyId,
 } from './domain.ts';
 import { probeNodes, type Probe } from './health.ts';
 import { HEALTH_MS, STAGE_S, StressRun, USERS, effectiveUsers, validateStress, type StressConfig } from './stress.ts';
 import { toCsv } from './stats.ts';
 import { REGISTRY, isPlatform } from './policy/platforms.ts';
-import { HIDDEN, SECURITY_HEADERS, corrId, generic, scrubPublic } from './public.ts';
+import { DVP_PUBLIC_REASON, HIDDEN, HIDDEN_TX, SECURITY_HEADERS, TX_WRITES, corrId, generic, scrubPublic } from './public.ts';
 import { registerPolicyRoutes, registerPolicyUnavailable, type PolicyDeps } from './policy/routes.ts';
 
 type Adapters = Partial<Record<ModelId, ModelAdapter>>;
@@ -92,7 +92,7 @@ function scrub(v: unknown): unknown {
 
 interface Sse { send(event: string, data: unknown): void; end(): void }
 
-export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: Probe; loadFailures?: Partial<Record<ModelId, string>>; policy?: PolicyDeps; public?: boolean } = {}): FastifyInstance {
+export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: Probe; loadFailures?: Partial<Record<ModelId, string>>; policy?: PolicyDeps; public?: boolean; publicTx?: boolean } = {}): FastifyInstance {
   const app = Fastify({
     logger: { level: process.env.VITEST ? 'silent' : 'error' }, // real errors reach the console; tests stay quiet
     forceCloseConnections: true, // shutdown must not wait on keep-alive / SSE sockets
@@ -111,10 +111,11 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
   const out = (v: unknown, log?: { error: (o: object, m: string) => void }): unknown => (opts.public ? scrubPublic(v, corrId(), (original) => log?.error({ original }, 'public response redacted')) : scrub(v));
   app.addHook('preSerialization', async (req, _reply, payload) => out(payload, req.log));
   if (opts.public) {
-    // read-only: every non-GET/HEAD is refused first, then the routes the public host never serves
+    // read-only: every non-GET/HEAD is refused first, then the routes the public host never serves. publicTx (GO-W) lets exactly TX_WRITES through (POST) and opens the Kebijakan reads.
     app.addHook('onRequest', async (req, reply) => {
-      if (req.method !== 'GET' && req.method !== 'HEAD') return reply.code(405).header('allow', 'GET, HEAD').send({ reason: 'Hanya baca (publik)' });
-      if (HIDDEN.test(req.url.split('?')[0]!)) return reply.code(404).send({ reason: 'Tidak ditemukan' });
+      const path = req.url.split('?')[0]!;
+      if (req.method !== 'GET' && req.method !== 'HEAD' && !(opts.publicTx && req.method === 'POST' && TX_WRITES.test(path))) return reply.code(405).header('allow', 'GET, HEAD').send({ reason: 'Hanya baca (publik)' });
+      if ((opts.publicTx ? HIDDEN_TX : HIDDEN).test(path)) return reply.code(404).send({ reason: 'Tidak ditemukan' });
     });
     app.addHook('onSend', async (req, reply, payload) => {
       for (const [k, v] of Object.entries(SECURITY_HEADERS)) reply.header(k, v);
@@ -162,6 +163,10 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     };
   }
 
+  // GO-W: DvP and award are off in the public write mode until the BI report path is proven (R28); the adapters' own capabilities otherwise
+  const capsOf = (a: ModelAdapter): Record<FlowId, Capability> => opts.publicTx
+    ? Object.fromEntries(Object.entries(a.capabilities()).map(([f, c]) => [f, isDvpFlow(f as FlowId) ? { enabled: false, reason: DVP_PUBLIC_REASON } : c])) as Record<FlowId, Capability>
+    : a.capabilities();
   const modelUnavailable = (m: ModelId) => ({ reason: `${MODEL_NAMES[m]} belum tersedia` });
 
   app.get('/api/meta', async () => {
@@ -170,12 +175,13 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     ) as Record<FlowId, Capability>;
     return {
       ...(opts.public ? { public: true } : {}),
+      ...(opts.publicTx ? { publicTx: true } : {}),
       parties: PARTIES, flows: FLOWS,
       models: Object.fromEntries(MODELS.map((m) => {
         const a = adapters[m];
         // Kebijakan: a model with a policy document (the registry in policy/platforms.ts) and whether a gateway enforces it
         const policy = isPlatform(m) ? { registered: true, enforced: REGISTRY[m].enforced } : { registered: false, enforced: false, reason: `Kebijakan belum tersedia untuk ${MODEL_NAMES[m]}` };
-        return [m, { name: MODEL_NAMES[m], available: !!a, stepLabels: a?.stepLabels ?? [], capabilities: a ? a.capabilities() : unavailable, policy }];
+        return [m, { name: MODEL_NAMES[m], available: !!a, stepLabels: a?.stepLabels ?? [], capabilities: a ? capsOf(a) : unavailable, policy }];
       })),
     };
   });
@@ -324,7 +330,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     busy = 'tx'; // taken synchronously, before any await
     let started = false;
     try {
-      const cap = adapter.capabilities()[body.flow];
+      const cap = capsOf(adapter)[body.flow];
       if (!cap.enabled) return reply.code(409).send({ reason: `Alur ini tidak tersedia: ${cap.reason}` });
       try {
         const h = await withDeadline(adapter.readyFor ? adapter.readyFor(body) : adapter.health(), HEALTH_MS, 'Cek kesiapan');

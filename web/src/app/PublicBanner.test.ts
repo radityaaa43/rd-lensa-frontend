@@ -17,3 +17,9 @@ test('non-public meta (the host and every private path): nothing is rendered', (
   expect(render({})).toBe('');
   expect(render({ public: false })).toBe('');
 });
+test('public write mode (publicTx): the same banner plus a visible note that test transactions run without a password', () => {
+  const html = render({ public: true, publicTx: true });
+  expect(html).toContain('Data sandbox / eksplorasi, situs publik');
+  expect(html).toContain('transaksi uji tanpa kata sandi');
+  expect(render({ public: true })).not.toContain('transaksi uji');
+});

@@ -5,7 +5,7 @@ import { buildApp } from './app.ts';
 import { assertGatewayEnv } from './gateway.ts';
 import { assertInClusterEnv } from './incluster.ts';
 import { bindHost } from './listen.ts';
-import { assertPublicEnv, publicMode } from './public.ts';
+import { assertPublicEnv, publicMode, publicTx } from './public.ts';
 import { bootPolicy } from './policy/boot.ts';
 
 assertPublicEnv(process.env);
@@ -17,7 +17,7 @@ const dist = fileURLToPath(new URL('../../web/dist', import.meta.url));
 const { adapters, failures } = await loadAdaptersWithFailures();
 
 const policy = bootPolicy(process.env); // Halaman Kebijakan is optional: undefined makes its routes answer 501
-const app = buildApp(adapters, { webDist: existsSync(dist) ? dist : undefined, loadFailures: failures, policy, public: publicMode(process.env) });
+const app = buildApp(adapters, { webDist: existsSync(dist) ? dist : undefined, loadFailures: failures, policy, public: publicMode(process.env), publicTx: publicTx(process.env) });
 await app.listen({ host: HOST, port: PORT });
 console.log(`Eksplorasi Rupiah Digital: http://${HOST}:${PORT}`);
 if (HOST === '127.0.0.1') console.log(`From a laptop: ssh -L ${PORT}:localhost:${PORT} <host>`);

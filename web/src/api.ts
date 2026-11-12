@@ -6,6 +6,7 @@ import type { TxResult } from './demo/demoState.ts';
 
 export interface Meta {
   public?: boolean; // the public host (LENSA_PUBLIC_READONLY=1): the UI shows a sandbox banner
+  publicTx?: boolean; // the public host also takes test transactions (LENSA_PUBLIC_TX=1, GO-W)
   parties: Record<PartyId, { name: string; node: 1 | 2 | 3 | 4 }>;
   flows: Record<FlowId, { asset: 'RD' | 'DFABI'; issuer: boolean; dvp: boolean }>;
   // policy: does the model have Kebijakan documents (a registered platform), and does a gateway enforce them yet. An unregistered model says why not.

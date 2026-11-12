@@ -1,0 +1,27 @@
+# GO-W (public write mode): the ONLY write path at the entry, POST /api/tx, on its own Ingress so it carries tighter limits than the read paths of lensa-public.
+# Same host and TLS Secret as lensa-public, NO cert-manager annotation (two annotated Ingresses with one secret would make two Certificates). Not part of the render without LENSA_PUBLIC_TX=1.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lensa-public-tx
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa}
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "4k"
+    nginx.ingress.kubernetes.io/limit-rps: "1"
+    nginx.ingress.kubernetes.io/limit-connections: "2"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "3"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [${HOST}]
+      secretName: lensa-public-tls
+  rules:
+    - host: ${HOST}
+      http:
+        paths:
+          - {path: /api/tx, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}

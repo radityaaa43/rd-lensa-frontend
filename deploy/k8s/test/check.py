@@ -392,6 +392,35 @@ pe = os.path.join(fx, "_pub.env"); open(pe, "w").write("LENSA_PUBLIC_READONLY=1\
 check(run(["app"], {"LENSA_ENV_FILE": pe, "LENSA_IMAGE": IMAGE}).returncode != 0, "LENSA_PUBLIC_READONLY through the env file is refused (only LENSA_PUBLIC=1)"); os.remove(pe)
 check(run(["app"], {**ENV, "LENSA_PUBLIC": "2"}).returncode != 0, "LENSA_PUBLIC other than 1 is refused")
 
+# ---- GO-W (public write): LENSA_PUBLIC_TX=1 only on top of LENSA_PUBLIC=1; the ingress then adds the Kebijakan reads, the event stream and a separate, tighter /api/tx Ingress
+check(run(["app"], {**ENV, "LENSA_PUBLIC_TX": "1"}).returncode != 0, "LENSA_PUBLIC_TX without LENSA_PUBLIC=1 is refused")
+check(run(["app"], {**ENV, "LENSA_PUBLIC": "1", "LENSA_PUBLIC_TX": "2"}).returncode != 0, "LENSA_PUBLIC_TX other than 1 is refused")
+ptx = docs(["app"], {**ENV, "LENSA_PUBLIC": "1", "LENSA_PUBLIC_TX": "1"})
+pcm = name(ptx, "ConfigMap", "lensa-env")["data"]
+check(pcm.get("LENSA_PUBLIC_READONLY") == "1" and pcm.get("LENSA_PUBLIC_TX") == "1" and pcm.get("LENSA_IN_CLUSTER") == "1", "W app render: public mode + tx flag + pod mode")
+check("LENSA_PUBLIC_TX" not in name(pub, "ConfigMap", "lensa-env")["data"] and "LENSA_PUBLIC_TX" not in name(app, "ConfigMap", "lensa-env")["data"], "without W the ConfigMap never carries LENSA_PUBLIC_TX")
+pe = os.path.join(fx, "_ptx.env"); open(pe, "w").write("LENSA_PUBLIC_TX=1\n")
+check(run(["app"], {"LENSA_ENV_FILE": pe, "LENSA_IMAGE": IMAGE, "LENSA_PUBLIC": "1"}).returncode != 0, "LENSA_PUBLIC_TX through the env file is refused"); os.remove(pe)
+check(run(["ingress"], {"LENSA_PUBLIC_HOST": "x.example.com", "LENSA_PUBLIC_TX": "yes"}).returncode != 0, "ingress: LENSA_PUBLIC_TX other than 1 is refused")
+ing0 = docs(["ingress"], {"LENSA_PUBLIC_HOST": "x.example.com"})
+ingw = docs(["ingress"], {"LENSA_PUBLIC_HOST": "x.example.com", "LENSA_PUBLIC_TX": "1"})
+paths = lambda ds, n: [p["path"] + ":" + p["pathType"] for p in name(ds, "Ingress", n)["spec"]["rules"][0]["http"]["paths"]]
+check(not [d for d in ing0 if d["kind"] == "Ingress" and d["metadata"]["name"] == "lensa-public-tx"], "without W there is no lensa-public-tx Ingress")
+added = sorted(set(paths(ingw, "lensa-public")) - set(paths(ing0, "lensa-public")))
+check(added == sorted(["/api/policy:Exact", "/api/policy/usage:Exact", "/api/policy/bi/history:Exact", "/api/policy/bank-a/history:Exact", "/api/policy/bank-b/history:Exact", "/api/policy/bank-c/history:Exact", "/api/tx/:Prefix"]), f"W: lensa-public gains exactly the Kebijakan reads + the event stream: {added}")
+check(set(paths(ing0, "lensa-public")) <= set(paths(ingw, "lensa-public")), "W: no path of the read-only entry is removed")
+wtx = name(ingw, "Ingress", "lensa-public-tx")
+check(paths(ingw, "lensa-public-tx") == ["/api/tx:Exact"], f"lensa-public-tx routes exactly POST /api/tx (Exact): {paths(ingw, 'lensa-public-tx')}")
+wa = wtx["metadata"]["annotations"]
+check(wa.get("nginx.ingress.kubernetes.io/limit-rps") == "1" and wa.get("nginx.ingress.kubernetes.io/limit-connections") == "2" and wa.get("nginx.ingress.kubernetes.io/limit-burst-multiplier") == "3" and wa.get("nginx.ingress.kubernetes.io/proxy-body-size") == "4k", f"lensa-public-tx limits {wa}")
+check("cert-manager.io/issuer" not in wa and "cert-manager.io/cluster-issuer" not in wa, "lensa-public-tx has NO cert-manager annotation (two Ingresses with one secret would make two Certificates)")
+check(wtx["spec"]["tls"] == name(ingw, "Ingress", "lensa-public")["spec"]["tls"] and wtx["spec"]["rules"][0]["host"] == "x.example.com", "lensa-public-tx: same host and TLS secret")
+allp = " ".join(paths(ingw, "lensa-public") + paths(ingw, "lensa-public-tx"))
+for hidden in ["/api/stress", "preflight", "readyz", "livez", "approve", "republish", "drafts"]:
+    check(hidden not in allp, f"W: nothing at the entry routes {hidden}")
+check(sorted((d["kind"], d["metadata"]["name"]) for d in ingw) == sorted([(d["kind"], d["metadata"]["name"]) for d in ing0] + [("Ingress", "lensa-public-tx")]), "W ingress render = the read-only render + exactly one Ingress")
+check(not of(ingw, "Secret"), "W ingress render: no Secret")
+
 # ---- flow (B1): the internal write instance lensa-flow. No Service, no Ingress, no PVC, replicas 0, its OWN ConfigMap, LENSA_FLOWS only here
 fl = docs(["flow"], ENV)
 check(sorted((d["kind"], d["metadata"]["name"]) for d in fl) == [("ConfigMap", "lensa-flow-env"), ("Deployment", "lensa-flow")], f"flow part renders exactly ConfigMap lensa-flow-env + Deployment lensa-flow: {[(d['kind'], d['metadata']['name']) for d in fl]}")
