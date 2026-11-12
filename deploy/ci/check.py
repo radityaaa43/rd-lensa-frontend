@@ -90,14 +90,26 @@ check(re.search(r"/opt/yarn\S*", rt) and "/usr/local/bin/yarn" in rt and "/root/
 check("npm npx corepack yarn yarnpkg pnpm" in open(f"{here}/image-checks.sh").read(), "image-checks.sh must fail on yarn/pnpm too")
 check(pl and "set -euo pipefail" in pl[0]["run"], "the pull test must be fail-closed (set -euo pipefail: any pull error is exit 1)")
 
+# ---- the pinned opa in the runtime image (lead, 2026-11-12): one official release, sha256 pinned in the Dockerfile ARG (single source), verified in a build stage
+m = re.search(r"^ARG OPA_SHA256=([0-9a-f]{64})$", df, re.M); PIN = m.group(1) if m else "0" * 64
+check(m is not None and re.search(r"^ARG OPA_VERSION=v1\.21\.1$", df, re.M) is not None, "Dockerfile must pin OPA_VERSION=v1.21.1 and OPA_SHA256 (64 hex) as ARGs")
+check(re.search(r"AS opa\b", df) is not None and re.search(r"releases/download/\$\{OPA_VERSION\}/opa_linux_amd64_static", df) is not None
+      and re.search(r'echo "\$\{OPA_SHA256\}  /opa" \| sha256sum -c -', df) is not None, "Dockerfile: an `opa` build stage must fetch the official static release and verify the sha256 before use")
+check(re.search(r"COPY --from=opa --chown=0:0 --chmod=0555 /opa /usr/local/bin/opa\n", rt) is not None and rt.index("/usr/local/bin/opa") < rt.index("USER 10001"), "runtime stage: opa copied to /usr/local/bin/opa, root-owned, 0555, before USER 10001")
+ci = open(f"{root}/.github/workflows/ci.yml").read()
+check(PIN in ci, "ci.yml opa sha256 must equal the Dockerfile pin (one binary everywhere)")
+check(PIN not in open(f"{here}/image-checks.sh").read() and "OPA_SHA256" in open(f"{here}/image-checks.sh").read(), "image-checks.sh reads the pin from the Dockerfile (single source), no second copy of the hash")
+
 # ---- image-checks.sh behaviour with a docker shim (no docker, no network)
 script = f"{here}/image-checks.sh"
 check(os.stat(script).st_mode & stat.S_IXUSR, "image-checks.sh must be executable")
 SHIM = r'''#!/usr/bin/env bash
-# fake docker: behaviour from env FAKE_USER, FAKE_NAMES, FAKE_HITS, FAKE_HEALTH
+# fake docker: behaviour from env FAKE_USER, FAKE_NAMES, FAKE_HITS, FAKE_HEALTH, FAKE_OPA (lines `<path> <sha256> <uid> <mode>` of every executable file named opa)
 case "$1" in
   image) echo "${FAKE_USER:-10001:10001}" ;;
-  run) if [[ "$*" == *"grep -rIl"* ]]; then printf '%s' "${FAKE_HITS:-}";
+  run) if [[ "$*" == *"-name opa"* ]]; then printf '%s' "${FAKE_OPA-/usr/local/bin/opa $PIN_SHA 0 755
+}";
+       elif [[ "$*" == *"grep -rIl"* ]]; then printf '%s' "${FAKE_HITS:-}";
        elif [[ "$*" == *"-d "* || "$2" == "-d" ]]; then echo cid;
        else if [[ -n "${FAKE_NAMES:-}" ]]; then echo "$FAKE_NAMES"; exit 1; fi; fi ;;
   exec) [[ "${FAKE_HEALTH:-ok}" == ok ]] && exit 0 || exit 1 ;;
@@ -105,7 +117,7 @@ case "$1" in
 esac
 '''
 with tempfile.TemporaryDirectory() as d:
-    open(f"{d}/docker", "w").write(SHIM); os.chmod(f"{d}/docker", 0o755)
+    open(f"{d}/docker", "w").write(SHIM.replace("$PIN_SHA", PIN)); os.chmod(f"{d}/docker", 0o755)
     allow = f"{d}/allow.txt"; open(allow, "w").write("# none\n")
     def run(env=None, args=()):
         e = {**os.environ, "PATH": f"{d}:{os.environ['PATH']}", "KEY_SCAN_ALLOW": allow, "HEALTH_WAIT": "0", **(env or {})}
@@ -121,6 +133,12 @@ with tempfile.TemporaryDirectory() as d:
     open(allow, "w").write("# allowed with a reason\n" + hit)
     check(run({"FAKE_HITS": hit}, ("--no-health",)).returncode == 0, "an allow-listed hit (path + sha256) must pass")
     check(run({"FAKE_HITS": "/usr/lib/x/fixture.pem " + "cd" * 32 + "\n"}, ("--no-health",)).returncode != 0, "same path with another sha256 must fail")
+    for why, opa in (("opa at another path", f"/opt/opa {PIN} 0 755\n"), ("opa with another sha256", "/usr/local/bin/opa " + "ee" * 32 + " 0 755\n"),
+                     ("a second opa copy", f"/usr/local/bin/opa {PIN} 0 755\n/home/x/opa {PIN} 0 755\n"), ("no opa at all", ""),
+                     ("opa owned by the app user", f"/usr/local/bin/opa {PIN} 10001 755\n"), ("opa writable by others", f"/usr/local/bin/opa {PIN} 0 777\n")):
+        r = run({"FAKE_OPA": opa}, ("--no-health",))
+        check(r.returncode != 0, f"{why} must fail the image check")
+    check(run({"FAKE_OPA": f"/usr/local/bin/opa {PIN} 0 555\n"}, ("--no-health",)).returncode == 0, "opa at /usr/local/bin/opa with the pinned sha256, root-owned, read-only passes")
     check(run({"FAKE_HEALTH": "bad"}).returncode != 0, "a container that never answers /api/health must fail")
     check(run().returncode == 0, "healthy container must pass")
 
