@@ -319,6 +319,30 @@ check(all(w in ccmd for w in ("PRIVATE KEY", "privateKey", "spendKey", "viewKey"
 check(all(m.get("readOnly") is True for m in cjc["volumeMounts"] if m["mountPath"] == "/state") and any(v.get("persistentVolumeClaim", {}).get("readOnly") is True for v in cjs["volumes"]), "seedcheck: PVC mounted read-only")
 check(cj["spec"]["template"]["metadata"]["labels"].get("app") == "lensa-seedcheck" and not of(sc, "NetworkPolicy") and cjs.get("automountServiceAccountToken") is False, "seedcheck: own label, no egress, no token")
 
+# ---- probe (egress proofs): the REAL lensa egress policy is tested by a short Job whose pod carries app=lensa (so egress-party-gateways applies) + role=egress-probe (so Service lensa never selects it)
+tf = os.path.join(fx, "_targets.txt"); open(tf, "w").write("# positive targets: host port\nbank-gw-1.rd-zeto-bi.svc.cluster.local 8548\nbank-gw-1.rd-zeto-bi.svc.cluster.local 8545\n203.0.113.7 8443\n")
+PR = {"LENSA_IMAGE": IMAGE, "LENSA_PROBE_TARGETS": tf}
+pr = docs(["probe"], PR)
+pj = name(pr, "Job", "lensa-egress-probe"); ppod = pj["spec"]["template"]["spec"]; pl = pj["spec"]["template"]["metadata"]["labels"]; pc = ppod["containers"][0]
+check(pl.get("app") == "lensa" and pl.get("role") == "egress-probe", f"probe pod labels {pl}: app=lensa (real policy) + role=egress-probe (cleanup selector)")
+check(all(pl.get(k) == v for k, v in gw["podSelector"]["matchLabels"].items()), "the probe pod falls under egress-party-gateways")
+check(not all(pl.get(k) == v for k, v in name(app, "Service", "lensa")["spec"]["selector"].items()), "Service lensa does not select the probe pod")
+check(pj["spec"].get("backoffLimit") == 0 and pj["spec"].get("activeDeadlineSeconds") == 120 and pj["spec"].get("ttlSecondsAfterFinished") == 120 and ppod.get("restartPolicy") == "Never", "probe Job: no retry, deadline 120, TTL 120, Never")
+check(ppod.get("automountServiceAccountToken") is False and ppod.get("serviceAccountName") == "lensa" and pc["image"] == IMAGE, "probe: SA lensa no token, same digest")
+check([v["name"] for v in ppod.get("volumes", [])] == ["tmp"] and not any("secret" in v or "persistentVolumeClaim" in v for v in ppod.get("volumes", [])), "probe: no volume but tmp, no Secret")
+penv = {e["name"]: e.get("value") for e in pc.get("env", [])}
+check(penv.get("PROBE_POS") == "bank-gw-1.rd-zeto-bi.svc.cluster.local:8548,bank-gw-1.rd-zeto-bi.svc.cluster.local:8545,203.0.113.7:8443", f"probe positive targets {penv.get('PROBE_POS')}")
+pcmd = " ".join(pc.get("command", []))
+check(all(w in pcmd for w in ("1.1.1.1", "KUBERNETES_SERVICE_HOST", "8.8.8.8", "Resolver", "dns.lookup")), "probe script: negatives 1.1.1.1:443, the API server ClusterIP, DNS 8.8.8.8:53 and a positive kube-dns lookup")
+check("secrets" not in pcmd.lower() and "token" not in pcmd.lower(), "probe script touches no token")
+def probe_refuse(why, text):
+    open(tf, "w").write(text)
+    check(run(["probe"], PR).returncode != 0, f"probe must refuse: {why}")
+probe_refuse("a shell metacharacter in a host", "a;b 80\n"); probe_refuse("a bad port", "good.example 70000\n"); probe_refuse("0.0.0.0", "0.0.0.0 80\n")
+probe_refuse("an empty targets file", "# nothing\n"); probe_refuse("a missing port", "good.example\n"); probe_refuse("a quote", 'a"b 80\n')
+os.remove(tf)
+check(run(["probe"], {"LENSA_IMAGE": IMAGE}).returncode != 0, "probe without LENSA_PROBE_TARGETS is refused")
+
 allx = docs(["all"], {**GW, **ENV})
 check([d["kind"] for d in allx][0] == "Namespace", "all: namespace first")
 check(not any(d["kind"] == "Secret" for d in allx), "no render path ever emits a Secret")
