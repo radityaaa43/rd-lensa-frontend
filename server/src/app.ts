@@ -12,6 +12,7 @@ import { probeNodes, type Probe } from './health.ts';
 import { HEALTH_MS, STAGE_S, StressRun, USERS, effectiveUsers, validateStress, type StressConfig } from './stress.ts';
 import { toCsv } from './stats.ts';
 import { REGISTRY, isPlatform } from './policy/platforms.ts';
+import { HIDDEN, SECURITY_HEADERS, corrId, generic, scrubPublic } from './public.ts';
 import { registerPolicyRoutes, registerPolicyUnavailable, type PolicyDeps } from './policy/routes.ts';
 
 type Adapters = Partial<Record<ModelId, ModelAdapter>>;
@@ -91,7 +92,7 @@ function scrub(v: unknown): unknown {
 
 interface Sse { send(event: string, data: unknown): void; end(): void }
 
-export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: Probe; loadFailures?: Partial<Record<ModelId, string>>; policy?: PolicyDeps } = {}): FastifyInstance {
+export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: Probe; loadFailures?: Partial<Record<ModelId, string>>; policy?: PolicyDeps; public?: boolean } = {}): FastifyInstance {
   const app = Fastify({
     logger: { level: process.env.VITEST ? 'silent' : 'error' }, // real errors reach the console; tests stay quiet
     forceCloseConnections: true, // shutdown must not wait on keep-alive / SSE sockets
@@ -106,7 +107,22 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
   const streams = new Set<ServerResponse>();
   app.addHook('onClose', async () => { for (const r of streams) r.end(); });
   // one place for every JSON reply (4xx, 5xx, and 200 bodies that carry an error/detail text)
-  app.addHook('preSerialization', async (_req, _reply, payload) => scrub(payload));
+  // public mode (R24): the same scrub plus a pass that removes internals (hosts, IPs, namespaces, errno / stack text) behind a correlation id; the original goes to the pod log
+  const out = (v: unknown, log?: { error: (o: object, m: string) => void }): unknown => (opts.public ? scrubPublic(v, corrId(), (original) => log?.error({ original }, 'public response redacted')) : scrub(v));
+  app.addHook('preSerialization', async (req, _reply, payload) => out(payload, req.log));
+  if (opts.public) {
+    // read-only: every non-GET/HEAD is refused first, then the routes the public host never serves
+    app.addHook('onRequest', async (req, reply) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') return reply.code(405).header('allow', 'GET, HEAD').send({ reason: 'Hanya baca (publik)' });
+      if (HIDDEN.test(req.url.split('?')[0]!)) return reply.code(404).send({ reason: 'Tidak ditemukan' });
+    });
+    app.addHook('onSend', async (req, reply, payload) => {
+      for (const [k, v] of Object.entries(SECURITY_HEADERS)) reply.header(k, v);
+      if (req.url.startsWith('/api/')) reply.header('cache-control', 'no-store');
+      return payload;
+    });
+    app.get('/robots.txt', async (_req, reply) => reply.type('text/plain').send('User-agent: *\nDisallow: /\n'));
+  }
 
   // SPA fallback for History-API deep links: only GET, never /api/, never a path with an extension (a missing asset stays 404)
   app.setNotFoundHandler((req, reply) => {
@@ -124,7 +140,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     }
     const code = err.statusCode && err.statusCode >= 400 ? err.statusCode : 500;
     if (code >= 500) req.log.error(err);
-    reply.code(code).send({ reason: code < 500 ? 'Permintaan tidak valid' : 'Terjadi kesalahan server' });
+    reply.code(code).send({ reason: code < 500 ? 'Permintaan tidak valid' : opts.public ? generic(corrId()) : 'Terjadi kesalahan server' });
   });
 
   function openSse(req: FastifyRequest, reply: FastifyReply, onClose: () => void): Sse {
@@ -141,7 +157,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     raw.on('close', cleanup);
     raw.on('error', () => { /* write to a gone client; close handler cleans up */ });
     return {
-      send: (event, data) => write(`event: ${event}\ndata: ${json(scrub(data))}\n\n`), // SSE bypasses preSerialization
+      send: (event, data) => write(`event: ${event}\ndata: ${json(out(data))}\n\n`), // SSE bypasses preSerialization
       end: () => { clearInterval(beat); try { raw.end(); } catch { /* already closed */ } },
     };
   }
@@ -153,6 +169,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       (Object.keys(FLOWS) as FlowId[]).map((f): [FlowId, Capability] => [f, { enabled: false, reason: NA }]),
     ) as Record<FlowId, Capability>;
     return {
+      ...(opts.public ? { public: true } : {}),
       parties: PARTIES, flows: FLOWS,
       models: Object.fromEntries(MODELS.map((m) => {
         const a = adapters[m];
