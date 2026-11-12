@@ -31,25 +31,33 @@ port_list() { # validates "8548,8545" and prints one "- {protocol: TCP, port: N}
   for p in "${ps[@]}"; do (( p >= 1 && p <= 65535 )) || die "port $p out of range in $gateways"; echo "        - {protocol: TCP, port: $p}"; done
 }
 
-gateway_policy() {
-  cat <<'EOF'
-# Lensa may open connections only to the party gateways listed in gateways.conf (mTLS and the party's OPA stay the control; this narrows who can connect).
+# One NetworkPolicy per pod class (orchestrator ruling, GO-W c7): the PUBLIC pod (role=server, plus the probe pod role=probe-public) reaches only the Zeto/Noto gateways;
+# the FLOW pod (role=flow, probe-flow) reaches the Fabric-X, Iroha 3 and Stealth gateways. A gateways.conf row belongs to the platform in its namespace name
+# (rd-<platform>-<party>) or, for an `ipblock` row, in its 4th field. The union of both policies is the old single policy minus the cross-class rows: nothing is added.
+gateway_policy() { # $1 policy name, $2 role list (YAML flow list), $3 platform regex
+  local name="$1" roles="$2" want="$3"
+  cat <<EOF
+# Lensa may open connections only to the party gateways of its class (gateways.conf rows of platform $want; mTLS and the party's OPA stay the control; this narrows who can connect).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: egress-party-gateways
+  name: $name
   namespace: rd-lensa
   labels: {part-of: rd-lensa}
 spec:
-  podSelector: {matchLabels: {app: lensa}}
+  podSelector:
+    matchLabels: {app: lensa}
+    matchExpressions: [{key: role, operator: In, values: [$roles]}]
   policyTypes: [Egress]
 EOF
-  local rules="" a b c
-  while read -r a b c _; do
+  local rules="" a b c plat
+  while read -r a b c plat _; do
     [[ -z "${a:-}" || "$a" == \#* ]] && continue
     [[ -n "${b:-}" && -n "${c:-}" ]] || die "gateways.conf line needs three fields: '$a $b $c'"
     if [[ "$a" == ipblock ]]; then
       [[ "$b" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/32$ && "$b" != 0.0.0.0/32 ]] || die "ipblock must be one /32 address: '$b'"
+      [[ "${plat:-}" =~ ^(zeto|fabricx|iroha3|stealth)$ ]] || die "ipblock '$b' needs its platform as the 4th field (zeto|fabricx|iroha3|stealth)"
+      [[ "$plat" =~ ^($want)$ ]] || { port_list "$c" >/dev/null; continue; }
       rules+="    - to:
         - ipBlock: {cidr: $b}
       ports:
@@ -58,6 +66,8 @@ $(port_list "$c")
     else
       [[ "$a" =~ ^rd-(zeto|stealth|iroha3|fabricx)-(bi|bank-a|bank-b)$ ]] || die "namespace '$a' is not a cluster-1 party namespace rd-<platform>-<bi|bank-a|bank-b>"
       [[ "$b" =~ ^[a-z0-9./-]+=[A-Za-z0-9._-]+$ ]] || die "pod label '$b' must be key=value"
+      plat="${a#rd-}"; plat="${plat%%-*}"
+      [[ "$plat" =~ ^($want)$ ]] || { port_list "$c" >/dev/null; continue; }
       rules+="    - to:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: $a}}
           podSelector: {matchLabels: {${b%%=*}: ${b#*=}}}
@@ -71,7 +81,8 @@ $(port_list "$c")
 
 base() {
   cat "$here/templates/base.yaml"
-  echo '---'; gateway_policy
+  echo '---'; gateway_policy egress-gateways-public 'server, probe-public' 'zeto'
+  echo '---'; gateway_policy egress-gateways-flow 'flow, probe-flow' 'fabricx|iroha3|stealth'
   if [[ "$entry" == a ]]; then echo '---'; cat "$here/templates/access.yaml"; else echo '---'; cat "$here/templates/entry-b.yaml"; fi
 }
 
@@ -280,7 +291,8 @@ seedcheck() {
 # Egress proof Job from an operator file of positive targets (`host port`, one per line; names of Services or single IPv4 hosts, e.g. the bank C load balancers). The negatives and the
 # DNS checks are fixed in the template. The Job pod carries app=lensa (the real policy applies) + role=egress-probe (the Service never selects it).
 probe() {
-  local img="${LENSA_IMAGE:-}" tf="${LENSA_PROBE_TARGETS:-}" h p pos=""
+  local img="${LENSA_IMAGE:-}" tf="${LENSA_PROBE_TARGETS:-}" df="${LENSA_PROBE_DENY:-}" cls="${LENSA_PROBE_EGRESS:-}" h p pos="" neg=""
+  [[ "$cls" == public || "$cls" == flow ]] || die "LENSA_PROBE_EGRESS must be public or flow (the pod class whose policy is proven)"
   [[ "$img" =~ ^ghcr\.io/radityaaa43/rd-lensa-frontend@sha256:[0-9a-f]{64}$ ]] || die "LENSA_IMAGE must be ghcr.io/radityaaa43/rd-lensa-frontend@sha256:<64 hex> (pinned by digest)"
   [[ -f "$tf" ]] || die "LENSA_PROBE_TARGETS (lines: host port) is required"
   while read -r h p extra; do
@@ -291,7 +303,17 @@ probe() {
     pos+="${pos:+,}$h:$p"
   done < "$tf"
   [[ -n "$pos" ]] || die "no probe target in $tf"
-  sed "s#\${IMAGE}#$img#; s#\${PROBE_POS}#$pos#" "$here/templates/probe.yaml"
+  if [[ -n "$df" ]]; then   # extra targets that must be BLOCKED for this class (the other class's gateways): same line format and validation
+    [[ -f "$df" ]] || die "LENSA_PROBE_DENY file not found"
+    while read -r h p extra; do
+      [[ -z "${h:-}" || "$h" == \#* ]] && continue
+      [[ -n "${p:-}" && -z "${extra:-}" ]] || die "deny target line needs exactly 'host port': '$h $p'"
+      [[ "$h" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ && "$h" != 0.0.0.0 ]] || die "deny host '$h' is not a DNS name or an IPv4 host"
+      [[ "$p" =~ ^[0-9]+$ ]] && (( p >= 1 && p <= 65535 )) || die "deny port '$p' out of range"
+      neg+="${neg:+,}$h:$p"
+    done < "$df"
+  fi
+  sed "s#\${IMAGE}#$img#; s#\${PROBE_POS}#$pos#; s#\${PROBE_NEG}#$neg#; s#\${PROBE_ROLE}#probe-$cls#" "$here/templates/probe.yaml"
 }
 
 # Interim public Lensa (R24): Issuer (ACME HTTP-01, no e-mail), Ingress with a path allow-list, NetworkPolicy from the ingress-nginx pods. LENSA_PUBLIC_HOST required; LENSA_ACME staging (default) | prod.

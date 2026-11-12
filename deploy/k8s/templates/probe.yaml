@@ -1,4 +1,4 @@
-# Egress proof Job (pod GO step 5). The pod carries app=lensa so the REAL egress-party-gateways policy applies to it, and role=egress-probe so Service lensa (which needs role=server)
+# Egress proof Job (pod GO step 5). The pod carries app=lensa and role=probe-public|probe-flow (LENSA_PROBE_EGRESS) so the REAL egress-gateways-public|flow policy of that class applies to it, the Job keeps role=egress-probe so Service lensa (which needs role=server)
 # never selects it and the cleanup selector finds it. Rendered by ../render.sh probe; ${IMAGE} is the ghcr digest, PROBE_POS the positive targets (host:port,...). No volume but /tmp, no Secret, no token.
 apiVersion: batch/v1
 kind: Job
@@ -12,7 +12,7 @@ spec:
   ttlSecondsAfterFinished: 120
   template:
     metadata:
-      labels: {part-of: rd-lensa, app: lensa, role: egress-probe}
+      labels: {part-of: rd-lensa, app: lensa, role: ${PROBE_ROLE}}
     spec:
       restartPolicy: Never
       serviceAccountName: lensa
@@ -28,6 +28,7 @@ spec:
           image: ${IMAGE}
           env:
             - {name: PROBE_POS, value: "${PROBE_POS}"}
+            - {name: PROBE_NEG, value: "${PROBE_NEG}"}
           command:
             - node
             - -e
@@ -38,7 +39,7 @@ spec:
                 let bad = 0;
                 const pos = process.env.PROBE_POS.split(',').map((x) => x.split(/:(?=[0-9]+$)/));
                 for (const [h, p] of pos) { const ok = await tcp(h, p); console.log((ok ? 'OK   ' : 'FAIL ') + 'positive ' + h + ':' + p); if (!ok) bad = 1; }
-                const neg = [['1.1.1.1', 443], [process.env.KUBERNETES_SERVICE_HOST, 443]];
+                const neg = [['1.1.1.1', 443], [process.env.KUBERNETES_SERVICE_HOST, 443], ...(process.env.PROBE_NEG ? process.env.PROBE_NEG.split(',').map((x) => x.split(/:(?=[0-9]+$)/)) : [])];
                 for (const [h, p] of neg) { const ok = await tcp(h, p); console.log((ok ? 'FAIL ' : 'OK   ') + 'negative ' + h + ':' + p + (ok ? ' (connected: must be blocked)' : ' (blocked)')); if (ok) bad = 1; }
                 const name = pos.map((x) => x[0]).find((h) => /[a-z]/.test(h));
                 const ok1 = await new Promise((r) => dns.lookup(name, (e) => r(!e)));

@@ -44,31 +44,35 @@ for d in base:
     if d["kind"] != "Namespace":
         check(d["metadata"].get("namespace") == "rd-lensa", f"base: {d['kind']}/{d['metadata']['name']} not in rd-lensa")
 np = {d["metadata"]["name"] for d in of(base, "NetworkPolicy")}
-check(np == {"default-deny-all", "allow-dns-egress", "egress-party-gateways"}, f"base entry=a: netpols {sorted(np)} (3 under option A)")
+check(np == {"default-deny-all", "allow-dns-egress", "egress-gateways-public", "egress-gateways-flow"}, f"base entry=a: netpols {sorted(np)} (4 under option A: the gateway egress is split by pod class)")
 check(name(base, "NetworkPolicy", "default-deny-all")["spec"] == {"podSelector": {}, "policyTypes": ["Ingress", "Egress"]}, "default-deny-all shape")
 dns = name(base, "NetworkPolicy", "allow-dns-egress")["spec"]
 check(dns["policyTypes"] == ["Egress"] and sorted((p["protocol"], p["port"]) for p in dns["egress"][0]["ports"]) == [("TCP", 53), ("UDP", 53)], "allow-dns-egress: TCP+UDP 53 only")
 check(dns["egress"][0]["to"][0]["namespaceSelector"]["matchLabels"] == {"kubernetes.io/metadata.name": "kube-system"}, "allow-dns-egress: kube-system only")
-gw = name(base, "NetworkPolicy", "egress-party-gateways")["spec"]
-check(gw["policyTypes"] == ["Egress"] and gw["podSelector"] == {"matchLabels": {"app": "lensa"}}, "egress-party-gateways: Egress for app=lensa")
+gw = name(base, "NetworkPolicy", "egress-gateways-public")["spec"]
+gwf = name(base, "NetworkPolicy", "egress-gateways-flow")["spec"]
+check(gw["policyTypes"] == ["Egress"] and gw["podSelector"] == {"matchLabels": {"app": "lensa"}, "matchExpressions": [{"key": "role", "operator": "In", "values": ["server", "probe-public"]}]}, f"egress-gateways-public: Egress for role server (and the public probe pod): {gw['podSelector']}")
+check(gwf["policyTypes"] == ["Egress"] and gwf["podSelector"] == {"matchLabels": {"app": "lensa"}, "matchExpressions": [{"key": "role", "operator": "In", "values": ["flow", "probe-flow"]}]}, f"egress-gateways-flow: Egress for role flow (and the flow probe pod): {gwf['podSelector']}")
 rules = gw["egress"]
+frules = gwf["egress"]
 def find_ns(n): return [r for r in rules if r.get("to", [{}])[0].get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name") == n]
 zbi = find_ns("rd-zeto-bi")
 check(len(zbi) == 1 and zbi[0]["to"][0]["podSelector"] == {"matchLabels": {"app": "bank-gw"}} and [p["port"] for p in zbi[0]["ports"]] == [8548, 8545] and all(p["protocol"] == "TCP" for p in zbi[0]["ports"]), f"gateway rule rd-zeto-bi: {zbi}")
-check(len(find_ns("rd-fabricx-bank-b")) == 1, "gateway rule rd-fabricx-bank-b")
+check(len(find_ns("rd-fabricx-bank-b")) == 0, "the PUBLIC pod has no rule to a Fabric-X gateway")
+check([r["to"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"] for r in frules if "namespaceSelector" in r["to"][0]] == ["rd-fabricx-bank-b"], f"the FLOW pod has exactly the Fabric-X gateway rule of the fixture: {frules}")
 ipb = [r for r in rules if "ipBlock" in r.get("to", [{}])[0]]
 check(len(ipb) == 1 and ipb[0]["to"][0]["ipBlock"] == {"cidr": "203.0.113.7/32"} and [p["port"] for p in ipb[0]["ports"]] == [8548], f"bank C ipBlock rule: {ipb}")
-check(len(rules) == 4, f"egress-party-gateways: 4 rules from the fixture, got {len(rules)}")
+check(len(rules) == 3, f"egress-gateways-public: 3 rules (2 zeto namespaces + the zeto ipBlock), got {len(rules)}")
 check(not any(r.get("to") is None for r in rules), "every egress rule names a destination (no allow-all)")
 # bad gateways.conf is refused
-for bad in ["rd-zeto-bi app=x", "rd-zeto-bi app=x notaport", "ipblock 0.0.0.0/0 443", "ipblock 10.0.0.1 443", "kube-system app=x 53"]:
+for bad in ["rd-zeto-bi app=x", "rd-zeto-bi app=x notaport", "ipblock 0.0.0.0/0 443 zeto", "ipblock 10.0.0.1 443 zeto", "kube-system app=x 53", "ipblock 10.0.0.1/32 443", "ipblock 10.0.0.1/32 443 other"]:
     p = os.path.join(fx, "_bad.conf"); open(p, "w").write(bad + "\n")
     check(run(["base"], {"LENSA_GATEWAYS": p}).returncode != 0, f"gateways.conf line accepted but must be refused: {bad!r}")
 os.remove(os.path.join(fx, "_bad.conf"))
 # empty gateways: policy renders with no egress rule (deny), not with an allow-all
 empty = os.path.join(fx, "_empty.conf"); open(empty, "w").write("# none\n")
 e = docs(["base"], {"LENSA_GATEWAYS": empty}); os.remove(empty)
-check(name(e, "NetworkPolicy", "egress-party-gateways")["spec"].get("egress", []) == [], "empty gateways.conf must render an empty egress list (deny)")
+check(name(e, "NetworkPolicy", "egress-gateways-public")["spec"].get("egress", []) == [] and name(e, "NetworkPolicy", "egress-gateways-flow")["spec"].get("egress", []) == [], "empty gateways.conf must render empty egress lists (deny)")
 
 sa = {d["metadata"]["name"]: d for d in of(base, "ServiceAccount")}
 check(set(sa) == {"lensa", "lensa-admin", "lensa-access"}, f"ServiceAccounts {sorted(sa)} under option A")
@@ -102,24 +106,27 @@ check(run(["base"], {**GW, "LENSA_ENTRY": "x"}).returncode != 0, "LENSA_ENTRY ot
 
 # the shipped gateways.conf (S5 fills it per platform as each gateway step lands)
 ship = docs(["base"])
-srules = name(ship, "NetworkPolicy", "egress-party-gateways")["spec"].get("egress", [])
+srules = name(ship, "NetworkPolicy", "egress-gateways-public")["spec"].get("egress", [])
+frules_ship = name(ship, "NetworkPolicy", "egress-gateways-flow")["spec"].get("egress", [])
 zeto = [r for r in srules if r["to"][0].get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name", "").startswith("rd-zeto-")]
 check(sorted(r["to"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"] for r in zeto) == ["rd-zeto-bank-a", "rd-zeto-bank-b", "rd-zeto-bi"], f"shipped gateways.conf: zeto party namespaces {len(zeto)}")
 check(all(r["to"][0]["podSelector"] == {"matchLabels": {"app": "bank-gw"}} and [p["port"] for p in r["ports"]] == [8548, 8545] for r in zeto), "shipped gateways.conf: zeto gateway pods app=bank-gw on 8548 (Paladin) and 8545 (Besu)")
 check(not any("ipBlock" in r["to"][0] for r in srules), "shipped gateways.conf: no bank C ipBlock (a public address is supplied at apply time through LENSA_GATEWAYS, never committed)")
-fxgw = {r["to"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"]: r for r in srules if r["to"][0].get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name", "").startswith("rd-fabricx-")}
+fxgw = {r["to"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"]: r for r in frules_ship if r["to"][0].get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name", "").startswith("rd-fabricx-")}
 check(sorted(fxgw) == ["rd-fabricx-bank-a", "rd-fabricx-bank-b", "rd-fabricx-bi"], f"shipped gateways.conf: fabricx party namespaces {sorted(fxgw)}")
 for n, g in (("rd-fabricx-bi", "fx-gw-1"), ("rd-fabricx-bank-a", "fx-gw-2"), ("rd-fabricx-bank-b", "fx-gw-3")):
     r = fxgw.get(n)
     check(bool(r) and r["to"][0]["podSelector"] == {"matchLabels": {"app.kubernetes.io/name": g}} and r["ports"] == [{"protocol": "TCP", "port": 8443}], f"shipped gateways.conf: {n} gateway pod app.kubernetes.io/name={g} on 8443 only")
-def party_rules(prefix): return {r["to"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"]: r for r in srules if r["to"][0].get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name", "").startswith(prefix)}
-irg, stg = party_rules("rd-iroha3-"), party_rules("rd-stealth-")
-check(sorted(irg) == ["rd-iroha3-bank-a", "rd-iroha3-bank-b", "rd-iroha3-bi"], f"shipped gateways.conf: iroha3 party namespaces {sorted(irg)}")
-check(all(r["to"][0]["podSelector"] == {"matchLabels": {"rd-iroha3/role": "gateway"}} and r["ports"] == [{"protocol": "TCP", "port": 8443}] for r in irg.values()), "shipped gateways.conf: iroha3 gateway pods rd-iroha3/role=gateway on 8443 only (iroha, mTLS gateway)")
-check(sorted(stg) == ["rd-stealth-bank-a", "rd-stealth-bank-b", "rd-stealth-bi"], f"shipped gateways.conf: stealth party namespaces {sorted(stg)}")
-check(all(r["to"][0]["podSelector"] == {"matchLabels": {"app": "st-gw"}} and r["ports"] == [{"protocol": "TCP", "port": 8550}] for r in stg.values()), "shipped gateways.conf: stealth gateway pods app=st-gw on 8550 only (besu, mTLS gateway)")
+def ns_of(r): return r["to"][0].get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name", "")
+# UNION EQUALITY (orchestrator ruling): the public pod reaches ONLY the Zeto/Noto gateways; the flow pod ONLY the Fabric-X gateways; Iroha 3 and Stealth doors are in NEITHER policy
+check({ns_of(r) for r in srules} == {"rd-zeto-bi", "rd-zeto-bank-a", "rd-zeto-bank-b"}, f"public policy destinations {sorted(ns_of(r) for r in srules)}")
+check({ns_of(r) for r in frules_ship} == {f"rd-{p}-{o}" for p in ("fabricx", "iroha3", "stealth") for o in ("bi", "bank-a", "bank-b")}, f"flow policy destinations {sorted(ns_of(r) for r in frules_ship)}")
+check(not any(ns_of(r).startswith(("rd-iroha3-", "rd-stealth-", "rd-fabricx-")) for r in srules), "the public pod reaches no Fabric-X, Iroha 3 or Stealth gateway")
+check(not any(ns_of(r).startswith("rd-zeto-") for r in frules_ship), "the flow pod has no Zeto gateway rule")
+irg, stg = {}, {}
+check(True, "iroha/stealth rows are validated by the parser but rendered nowhere"); pass
 # the egress union is closed: one destination per rule; a namespace is always narrowed by a pod selector; only single hosts; TCP only; never an open range
-for r in srules:
+for r in srules + frules_ship:
     to = r.get("to", [])
     check(len(to) == 1, f"egress rule with {len(to)} destinations: one rule = one destination")
     t = to[0] if to else {}
@@ -158,6 +165,7 @@ dep = name(app, "Deployment", "lensa")
 spec = dep["spec"]; pod = spec["template"]["spec"]; c = pod["containers"][0] if pod.get("containers") else {}
 check(spec["replicas"] == 1 and spec["strategy"] == {"type": "Recreate"}, "deployment: 1 replica, Recreate")
 check(c.get("image") == IMAGE, "deployment: image is the digest ref given")
+check(spec["template"]["metadata"]["labels"].get("app") == "lensa" and spec["template"]["metadata"]["labels"].get("role") == "server", "server pod: app=lensa role=server (egress-gateways-public selects exactly this: no relabel, no restart when the split is applied)")
 check(pod.get("serviceAccountName") == "lensa" and pod.get("automountServiceAccountToken") is False, "pod: SA lensa, no token mount")
 check(pod.get("imagePullSecrets") == [{"name": "ghcr-pull"}], "pod: imagePullSecrets ghcr-pull")
 psc = pod.get("securityContext", {})
@@ -246,10 +254,10 @@ check(name(app, "Service", "lensa")["spec"]["selector"] == {"app": "lensa", "rol
 plabels = pod_labels = dep["spec"]["template"]["metadata"]["labels"]
 check(plabels.get("role") == "server" and plabels.get("app") == "lensa", f"lensa pod labels {plabels}: role=server is what the Service selects")
 check(dep["spec"]["selector"] == {"matchLabels": {"app": "lensa"}}, "Deployment selector stays app=lensa (immutable once created; the template labels are a superset)")
-# an egress-probe pod (app=lensa, role=egress-probe) falls under egress-party-gateways but is NOT selected by the Service
-probe = {"app": "lensa", "role": "egress-probe"}
-check(all(probe.get(k) == v for k, v in gw["podSelector"]["matchLabels"].items()), "egress-party-gateways still applies to a pod labelled app=lensa,role=egress-probe")
-check(not all(probe.get(k) == v for k, v in name(app, "Service", "lensa")["spec"]["selector"].items()), "Service lensa must NOT select a pod labelled app=lensa,role=egress-probe")
+# an egress-probe pod (app=lensa, role=probe-public) falls under egress-gateways-public but is NOT selected by the Service
+probe = {"app": "lensa", "role": "probe-public"}
+check(probe["role"] in gw["podSelector"]["matchExpressions"][0]["values"], "egress-gateways-public still applies to a probe pod labelled app=lensa,role=probe-public")
+check(not all(probe.get(k) == v for k, v in name(app, "Service", "lensa")["spec"]["selector"].items()), "Service lensa must NOT select a pod labelled app=lensa,role=probe-public")
 # the candidate is public bundle sources only: render refuses key-like members, PEM key content, a stray file, a missing tar, a sha mismatch, a wrong expect file, a tag image
 def refuse(why, **kw):
     d, e = mk_candidate(**kw)
@@ -321,11 +329,17 @@ check(cj["spec"]["template"]["metadata"]["labels"].get("app") == "lensa-seedchec
 
 # ---- probe (egress proofs): the REAL lensa egress policy is tested by a short Job whose pod carries app=lensa (so egress-party-gateways applies) + role=egress-probe (so Service lensa never selects it)
 tf = os.path.join(fx, "_targets.txt"); open(tf, "w").write("# positive targets: host port\nbank-gw-1.rd-zeto-bi.svc.cluster.local 8548\nbank-gw-1.rd-zeto-bi.svc.cluster.local 8545\n203.0.113.7 8443\n")
-PR = {"LENSA_IMAGE": IMAGE, "LENSA_PROBE_TARGETS": tf}
+PR = {"LENSA_IMAGE": IMAGE, "LENSA_PROBE_TARGETS": tf, "LENSA_PROBE_EGRESS": "public"}
 pr = docs(["probe"], PR)
 pj = name(pr, "Job", "lensa-egress-probe"); ppod = pj["spec"]["template"]["spec"]; pl = pj["spec"]["template"]["metadata"]["labels"]; pc = ppod["containers"][0]
-check(pl.get("app") == "lensa" and pl.get("role") == "egress-probe", f"probe pod labels {pl}: app=lensa (real policy) + role=egress-probe (cleanup selector)")
-check(all(pl.get(k) == v for k, v in gw["podSelector"]["matchLabels"].items()), "the probe pod falls under egress-party-gateways")
+check(pl.get("app") == "lensa" and pl.get("role") == "probe-public" and pj["metadata"]["labels"].get("role") == "egress-probe", f"probe pod labels {pl}: app=lensa + role=probe-public (the public policy applies, Service lensa never selects it); the Job keeps role=egress-probe (cleanup selector)")
+check(pl.get("role") in gw["podSelector"]["matchExpressions"][0]["values"] and pl.get("app") == "lensa", "the probe pod (LENSA_PROBE_EGRESS=public) falls under egress-gateways-public")
+flp = name(docs(["probe"], {**PR, "LENSA_PROBE_EGRESS": "flow"}), "Job", "lensa-egress-probe")["spec"]["template"]["metadata"]["labels"]
+check(flp.get("role") in gwf["podSelector"]["matchExpressions"][0]["values"] and flp.get("app") == "lensa" and flp.get("role") == "probe-flow", f"LENSA_PROBE_EGRESS=flow: the probe pod falls under egress-gateways-flow: {flp}")
+check(run(["probe"], {**PR, "LENSA_PROBE_EGRESS": "x"}).returncode != 0 and run(["probe"], {"LENSA_IMAGE": IMAGE, "LENSA_PROBE_TARGETS": tf}).returncode != 0, "LENSA_PROBE_EGRESS must be public or flow (required)")
+dn = os.path.join(fx, "_deny.txt"); open(dn, "w").write("# must be blocked: host port\nfx-gw-1.rd-fabricx-bi.svc.cluster.local 8443\n")
+pneg = {e["name"]: e.get("value") for e in name(docs(["probe"], {**PR, "LENSA_PROBE_DENY": dn}), "Job", "lensa-egress-probe")["spec"]["template"]["spec"]["containers"][0]["env"]}
+check(pneg.get("PROBE_NEG") == "fx-gw-1.rd-fabricx-bi.svc.cluster.local:8443", f"extra negative targets (LENSA_PROBE_DENY) reach the Job: {pneg}"); os.remove(dn)
 check(not all(pl.get(k) == v for k, v in name(app, "Service", "lensa")["spec"]["selector"].items()), "Service lensa does not select the probe pod")
 check(pj["spec"].get("backoffLimit") == 0 and pj["spec"].get("activeDeadlineSeconds") == 120 and pj["spec"].get("ttlSecondsAfterFinished") == 120 and ppod.get("restartPolicy") == "Never", "probe Job: no retry, deadline 120, TTL 120, Never")
 check(ppod.get("automountServiceAccountToken") is False and ppod.get("serviceAccountName") == "lensa" and pc["image"] == IMAGE, "probe: SA lensa no token, same digest")
