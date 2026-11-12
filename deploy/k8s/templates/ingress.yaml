@@ -27,6 +27,7 @@ metadata:
   labels: {part-of: rd-lensa}
   annotations:
     cert-manager.io/issuer: lensa-acme
+    cert-manager.io/private-key-rotation-policy: Always   # explicit: a new key at every re-issue (cert-manager v1.18 default; a changed default must not move it silently)
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
     nginx.ingress.kubernetes.io/proxy-body-size: "64k"
