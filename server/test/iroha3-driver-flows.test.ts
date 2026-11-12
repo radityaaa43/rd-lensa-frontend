@@ -76,12 +76,41 @@ describe('iroha3 on the new chain: writes through the drivers', () => {
     expect(new Set(intents).size).toBe(2);
   });
 
-  it('award: BI mints exactly the awarded DFABI through its driver (no stock read without a balance read), the bank grants, BI settles', async () => {
+  it('award: the bank grants FIRST (it needs no BI stock), then BI mints exactly the awarded DFABI through its driver, then BI settles', async () => {
     const r = readCli(); const d = fakeDriver();
     await createIroha3Adapter(state, r.cli, withRead(r), undefined, d.driver).run(req('award', 'BI', 'A', '2'), 2n, () => {});
-    expect(d.calls.map((c) => `${c.party}:${c.fn}`)).toEqual(['BI:mint', 'A:settleGrant', 'BI:dvpNative']);
-    expect(d.calls[0]!.terms).toEqual({ to: 'BI', asset: DFABI, amount: 2n });
+    expect(d.calls.map((c) => `${c.party}:${c.fn}`)).toEqual(['A:settleGrant', 'BI:mint', 'BI:dvpNative']);
+    expect(d.calls[1]!.terms).toEqual({ to: 'BI', asset: DFABI, amount: 2n });
     expect(r.calls).toEqual([]);
+  });
+
+  it('award, the grant fails: NOTHING is minted (BI keeps no stray DFABI)', async () => {
+    const r = readCli(); const d = fakeDriver();
+    d.driver.settleGrant = async () => { throw new Error('Rantai menolak: insufficient'); };
+    await expect(createIroha3Adapter(state, r.cli, withRead(r), undefined, d.driver).run(req('award', 'BI', 'A', '2'), 2n, () => {})).rejects.toThrow(/Rantai menolak/);
+    expect(d.calls.map((c) => c.fn)).toEqual([]);
+  });
+
+  it('award, the settlement fails after the mint: the error reaches the caller unchanged and the server log says what BI kept (party, asset, amount, mint tx hash)', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const r = readCli(); const d = fakeDriver();
+    d.driver.dvpNative = async () => { throw new Error('Rantai menolak: balance'); };
+    await expect(createIroha3Adapter(state, r.cli, withRead(r), undefined, d.driver).run(req('award', 'BI', 'A', '2'), 2n, () => {})).rejects.toThrow(/Rantai menolak: balance/);
+    const text = log.mock.calls.map((c) => c.map(String).join(' ')).join('\n');
+    expect(text).toContain('[iroha3]');
+    expect(text).toMatch(/award/i);
+    expect(text).toContain(DFABI); expect(text).toContain('2'); expect(text).toContain(H);
+    expect(text).toMatch(/BI (tetap|keeps|menyimpan)/);
+    log.mockRestore();
+  });
+
+  it('award, the mint fails after the grant: logged as a consent left open (one-shot intent, bound to this exact settlement)', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const r = readCli(); const d = fakeDriver();
+    d.driver.mint = async () => { throw new Error('Rantai menolak: mint'); };
+    await expect(createIroha3Adapter(state, r.cli, withRead(r), undefined, d.driver).run(req('award', 'BI', 'A', '2'), 2n, () => {})).rejects.toThrow(/mint/);
+    expect(log.mock.calls.map((c) => c.map(String).join(' ')).join('\n')).toMatch(/izin|consent|grant/i);
+    log.mockRestore();
   });
 
   it('no balance pre-check in driver mode: a poor buyer is refused by the chain (502 reason reaches the user)', async () => {
@@ -185,6 +214,23 @@ describe('iroha3 load(): the CLI with host keys is gated on the genesis hash', (
     const a = await load(stateDir(NEW, { drivers, keys }));
     expect(a).not.toBeNull();
     expect(a!.capabilities()['rd-transfer']).toMatchObject({ enabled: false });
+  });
+
+  it('keys that miss a party, or hold a malformed key, are refused at load naming the party (else `to: undefined` would reach the driver)', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { C: _drop, ...three } = keys;
+    expect(await load(stateDir(NEW, { drivers, keys: three }))).toBeNull();
+    expect(log.mock.calls.map((c) => c.map(String).join(' ')).join('\n')).toMatch(/\bC\b/);
+    log.mockClear();
+    expect(await load(stateDir(NEW, { drivers, keys: { ...keys, B: 'not-a-key' } }))).toBeNull();
+    expect(log.mock.calls.map((c) => c.map(String).join(' ')).join('\n')).toMatch(/\bB\b/);
+  });
+
+  it('drivers that miss a party are refused too', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { A: _drop, ...three } = drivers;
+    expect(await load(stateDir(NEW, { drivers: three, keys }))).toBeNull();
+    expect(log.mock.calls.map((c) => c.map(String).join(' ')).join('\n')).toMatch(/\bA\b/);
   });
 
   it('drivers without keys: refused (the counterparty is addressed by its public key)', async () => {
