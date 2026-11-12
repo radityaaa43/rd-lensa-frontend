@@ -83,6 +83,7 @@ jobs:
           set -euo pipefail
           ref="$IMAGE@${{ steps.build.outputs.digest }}"
           docker pull "$ref"
+          echo "pulled $ref imageID $(docker image inspect "$ref" --format '{{.Id}}')" | tee -a "$GITHUB_STEP_SUMMARY"
           deploy/ci/image-checks.sh "$ref"
       - name: Report the digest
         run: |

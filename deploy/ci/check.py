@@ -85,6 +85,9 @@ check(re.search(r"rm -rf /usr/local/lib/node_modules/npm\b.*corepack.*/usr/local
 check("tsx" in rt.split("CMD")[-1] and "npm" not in rt.split("CMD")[-1], "runtime CMD must not use npm")
 check("npm npx corepack" in open(f"{here}/image-checks.sh").read(), "image-checks.sh must fail when npm/npx/corepack are in the image")
 pl = [s for s in steps if "Pull test" in s.get("name", "")]
+check(pl and "docker image inspect" in pl[0]["run"] and "{{.Id}}" in pl[0]["run"] and "GITHUB_STEP_SUMMARY" in pl[0]["run"], "the pull test must print the pulled imageID (to the log and the summary) so the deployed digest can be matched")
+check(re.search(r"/opt/yarn\S*", rt) and "/usr/local/bin/yarn" in rt and "/root/.npm" in rt, "runtime stage must also drop yarn and the package-manager caches (~/.npm)")
+check("npm npx corepack yarn yarnpkg pnpm" in open(f"{here}/image-checks.sh").read(), "image-checks.sh must fail on yarn/pnpm too")
 check(pl and "set -euo pipefail" in pl[0]["run"], "the pull test must be fail-closed (set -euo pipefail: any pull error is exit 1)")
 
 # ---- image-checks.sh behaviour with a docker shim (no docker, no network)
