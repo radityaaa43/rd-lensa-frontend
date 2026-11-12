@@ -51,9 +51,17 @@ jobs:
           docker logs lensa
           exit 1
       - name: Log in to ghcr.io
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+        env: # the token goes through the environment (masked), never into the script text
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
       - name: Push and print the digest
         run: |
           docker push "$IMAGE:sha-${{ github.sha }}"
           digest=$(docker buildx imagetools inspect "$IMAGE:sha-${{ github.sha }}" --format '{{.Manifest.Digest}}')
           echo "digest $IMAGE@$digest" | tee -a "$GITHUB_STEP_SUMMARY"
+      # The repositories are public; a package linked to a public repository can become public. After EVERY push an anonymous client must be refused, else the job fails.
+      - name: Assert the package is private (an anonymous client must be refused)
+        run: |
+          set -o pipefail # the default `bash -e` has no pipefail: without it `| tee` would hide the assert's failure
+          bash .github/scripts/assert-package-private.sh "${{ github.repository }}" "sha-${{ github.sha }}" | tee -a "$GITHUB_STEP_SUMMARY"

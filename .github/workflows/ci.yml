@@ -36,3 +36,4 @@ jobs:
       - run: npm test -w server
       - run: deploy/k8s/test.sh
       - run: deploy/mtls/test.sh
+      - run: bash .github/scripts/test-assert-package-private.sh # the publish workflow's "package must be private" assert, against a fake curl (no network)
