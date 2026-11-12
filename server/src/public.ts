@@ -2,14 +2,22 @@ import { randomBytes } from 'node:crypto';
 
 // Public Lensa (R24, interim by user waiver): LENSA_PUBLIC_READONLY=1. Read-only, no server internals in any body, hardened headers.
 export const publicMode = (env: Record<string, string | undefined>): boolean => env.LENSA_PUBLIC_READONLY === '1';
+// GO-W (R24 waiver extension): the public pod also accepts Zeto/Noto transactions. Only on top of the public mode, only in the pod (so the Kebijakan freeze is on).
+export const publicTx = (env: Record<string, string | undefined>): boolean => env.LENSA_PUBLIC_TX === '1';
 export function assertPublicEnv(env: Record<string, string | undefined>): void {
   if (env.LENSA_PUBLIC_READONLY !== undefined && env.LENSA_PUBLIC_READONLY !== '1') throw new Error('LENSA_PUBLIC_READONLY must be 1 or unset');
   if (env.LENSA_FLOWS !== undefined && env.LENSA_FLOWS !== '1') throw new Error('LENSA_FLOWS must be 1 or unset');
   if (env.LENSA_FLOWS === '1' && env.LENSA_PUBLIC_READONLY === '1') throw new Error('LENSA_FLOWS (write instance) and LENSA_PUBLIC_READONLY exclude each other');
+  if (env.LENSA_PUBLIC_TX !== undefined && env.LENSA_PUBLIC_TX !== '1') throw new Error('LENSA_PUBLIC_TX must be 1 or unset');
+  if (env.LENSA_PUBLIC_TX === '1' && (env.LENSA_PUBLIC_READONLY !== '1' || env.LENSA_IN_CLUSTER !== '1')) throw new Error('LENSA_PUBLIC_TX needs LENSA_PUBLIC_READONLY=1 and LENSA_IN_CLUSTER=1 (the policy freeze must be on)');
 }
 
 // routes the public host never serves (the kubelet probes livez/readyz stay: the entry hides readyz)
 export const HIDDEN = /^\/api\/(?:policy|stress|preflight-capacity)(?:\/|$)/;
+// with LENSA_PUBLIC_TX the Kebijakan reads open; stress and the capacity probe stay closed. The only writes that pass: a transaction, and approve / republish (the freeze answers 403).
+export const HIDDEN_TX = /^\/api\/(?:stress|preflight-capacity)(?:\/|$)/;
+export const TX_WRITES = /^\/api\/(?:tx|policy\/(?:bi|bank-a|bank-b|bank-c)\/(?:approve|republish))$/;
+export const DVP_PUBLIC_REASON = 'DvP dinonaktifkan di mode publik sampai laporan BI pulih (R28)';
 
 // What must never reach a public client: IPs, URLs, cluster hosts, namespaces, node / gateway names.
 const PATTERNS: RegExp[] = [

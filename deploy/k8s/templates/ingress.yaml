@@ -57,6 +57,7 @@ spec:
           - {path: /api/receipt, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
           - {path: /api/trace, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
           - {path: /api/balance, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          #TX_PATHS
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

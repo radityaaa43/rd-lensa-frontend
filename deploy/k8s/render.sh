@@ -4,7 +4,7 @@
 #     base    S4a: namespace rd-lensa, default-deny + DNS + gateway egress policies, SAs and Roles
 #     volume  S4b: PVC lensa-state (Secrets are never rendered: their owners create them)
 #     app     S6:  ConfigMap lensa-env, Deployment lensa, Service lensa (needs LENSA_IMAGE)
-#     ingress interim public entry: Issuer (HTTP-01, no e-mail) + Ingress (path allow-list) + NetworkPolicy; LENSA_PUBLIC_HOST, LENSA_ACME=staging|prod. NOT part of `all`.
+#     ingress interim public entry (LENSA_PUBLIC_TX=1, GO-W: + Kebijakan reads, event stream, Ingress lensa-public-tx for POST /api/tx): Issuer (HTTP-01, no e-mail) + Ingress (path allow-list) + NetworkPolicy; LENSA_PUBLIC_HOST, LENSA_ACME=staging|prod. NOT part of `all`.
 #     flow    B1: the internal write instance: ConfigMap lensa-flow-env + Deployment lensa-flow (replicas 0, LENSA_FLOWS=1, no Service, no Ingress, emptyDir state, no sink tokens); needs LENSA_IMAGE; NOT part of `all`.
 #     probe   egress proof Job from LENSA_PROBE_TARGETS (host port lines); app=lensa + role=egress-probe; NOT part of `all`.
 #     seed    state seed: ConfigMap lensa-seed + Job lensa-seed from LENSA_SEED_DIR (seed-state --out); seedcheck: no-egress read Job that greps the PVC + image for key material. NOT part of `all`.
@@ -102,6 +102,11 @@ data:
 EOF
   [[ -z "${LENSA_PUBLIC:-}" || "$LENSA_PUBLIC" == 1 ]] || die "LENSA_PUBLIC must be 1 or unset"
   [[ "${LENSA_PUBLIC:-}" == 1 ]] && echo '  LENSA_PUBLIC_READONLY: "1"'
+  [[ -z "${LENSA_PUBLIC_TX:-}" || "$LENSA_PUBLIC_TX" == 1 ]] || die "LENSA_PUBLIC_TX must be 1 or unset"
+  if [[ "${LENSA_PUBLIC_TX:-}" == 1 ]]; then   # GO-W: public write mode (Zeto/Noto transactions); only on top of the public mode
+    [[ "${LENSA_PUBLIC:-}" == 1 ]] || die "LENSA_PUBLIC_TX=1 needs LENSA_PUBLIC=1"
+    echo '  LENSA_PUBLIC_TX: "1"'
+  fi
   env_file_lines
   echo '---'
   sed "s#\${IMAGE}#$img#" "$here/templates/app.yaml"
@@ -298,7 +303,21 @@ ingress() {
     prod) server=https://acme-v02.api.letsencrypt.org/directory ;;
     *) die "LENSA_ACME must be staging or prod, not '$acme'" ;;
   esac
-  sed "s#\${HOST}#$host#g; s#\${ACME_SERVER}#$server#" "$here/templates/ingress.yaml"
+  [[ -z "${LENSA_PUBLIC_TX:-}" || "$LENSA_PUBLIC_TX" == 1 ]] || die "LENSA_PUBLIC_TX must be 1 or unset"
+  local sub="s#\${HOST}#$host#g; s#\${ACME_SERVER}#$server#"
+  if [[ "${LENSA_PUBLIC_TX:-}" == 1 ]]; then   # GO-W: Kebijakan reads (Exact paths, no write path), the event stream, and a separate tighter Ingress for POST /api/tx
+    sed "$sub; s#^ *\#TX_PATHS\$#$(printf '%s' "$(tx_paths)" | sed 's/[#&\\]/\\&/g' | sed ':a;N;$!ba;s/\n/\\n/g')#" "$here/templates/ingress.yaml"
+    echo '---'; sed "$sub" "$here/templates/ingress-tx.yaml"
+  else
+    sed "$sub; /^ *#TX_PATHS$/d" "$here/templates/ingress.yaml"
+  fi
+}
+tx_paths() {
+  local p
+  for p in /api/policy /api/policy/usage /api/policy/bi/history /api/policy/bank-a/history /api/policy/bank-b/history /api/policy/bank-c/history; do
+    echo "          - {path: $p, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}"
+  done
+  echo "          - {path: /api/tx/, pathType: Prefix, backend: {service: {name: lensa, port: {number: 8790}}}}"
 }
 
 emit() { case "$1" in base) base ;; volume) volume ;; app) app ;; dryrun) dryrun ;; seed) seed ;; seedcheck) seedcheck ;; probe) probe ;; ingress) ingress ;; flow) flow ;; *) die "unknown part '$1'" ;; esac; }
