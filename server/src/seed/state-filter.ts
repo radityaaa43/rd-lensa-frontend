@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 export class SeedRefused extends Error {}
 
-export interface SeedOptions { notoWrittenAfter: string; targetStateDir: string; oldZetoFile?: string }
+// without: ['noto'] leaves Noto out of the seed (pod seed until the Noto owner writes contract-data for the new report groups): nothing under noto is read, notoWrittenAfter is not needed.
+export interface SeedOptions { notoWrittenAfter: string; targetStateDir: string; oldZetoFile?: string; without?: 'noto'[] }
 export interface SeedFile { path: string; content: Buffer }
 export interface SeedPlan {
   files: SeedFile[]; notCarried: string[];
@@ -72,8 +73,10 @@ function parse(buf: Buffer, file: string, problems: Problems): unknown {
 
 // Plans the seed from `srcDir` (the host server/state). Throws SeedRefused (all violations at once) or returns the files to copy.
 export function planSeed(srcDir: string, opts: SeedOptions): SeedPlan {
-  if (!opts || typeof opts.notoWrittenAfter !== 'string' || !opts.notoWrittenAfter) throw new SeedRefused('option notoWrittenAfter is required: the time noto-pente wrote the NEW contract data and group ids');
-  const after = Date.parse(opts.notoWrittenAfter);
+  if (opts?.without?.some((x) => x !== 'noto')) throw new SeedRefused("option without accepts only: noto");
+  const noNoto = !!opts?.without?.includes('noto');
+  if (!noNoto && (!opts || typeof opts.notoWrittenAfter !== 'string' || !opts.notoWrittenAfter)) throw new SeedRefused('option notoWrittenAfter is required: the time noto-pente wrote the NEW contract data and group ids');
+  const after = noNoto ? 0 : Date.parse(opts.notoWrittenAfter);
   if (Number.isNaN(after)) throw new SeedRefused('option notoWrittenAfter is not a date');
   const problems: Problems = [];
   const files: SeedFile[] = [];
@@ -86,7 +89,7 @@ export function planSeed(srcDir: string, opts: SeedOptions): SeedPlan {
     for (const e of readdirSync(join(srcDir, rel), { withFileTypes: true })) {
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.name.endsWith('.tmp')) problems.push(`${r}: leftover of an atomic write (may hold keys), refused`);
-      else if (e.isDirectory() && ['noto', 'policy'].some((d) => r === d || r.startsWith(`${d}/`))) tmpScan(r);
+      else if (e.isDirectory() && ['noto', 'policy'].filter((d) => !(noNoto && d === 'noto')).some((d) => r === d || r.startsWith(`${d}/`))) tmpScan(r);
     }
   };
   tmpScan('');
@@ -109,8 +112,8 @@ export function planSeed(srcDir: string, opts: SeedOptions): SeedPlan {
   }
 
   // noto: noto.json re-pointed, the newest contract-data (must be newer than notoWrittenAfter), trades.jsonl without PENDING
-  if (existsSync(join(srcDir, 'noto.json'))) {
-    carriedTop.add('noto.json');
+  if (!noNoto && existsSync(join(srcDir, 'noto.json'))) {
+    carriedTop.add('noto.json'); carriedTop.add('noto');
     const doc = parse(read('noto.json'), 'noto.json', problems) as Record<string, unknown> | undefined;
     if (doc) {
       for (const k of Object.keys(doc)) if (k !== 'dataDir') problems.push(`noto.json: field ${k} is not on the allow-list (refused)`);
@@ -178,7 +181,7 @@ export function planSeed(srcDir: string, opts: SeedOptions): SeedPlan {
   if (problems.length) throw new SeedRefused(`seed refused (${problems.length}):\n${problems.map((p) => `  - ${p}`).join('\n')}`);
 
   const notCarried = readdirSync(srcDir, { withFileTypes: true })
-    .filter((e) => !carriedTop.has(e.name) && e.name !== 'noto')
+    .filter((e) => !carriedTop.has(e.name))
     .map((e) => (e.isDirectory() ? `${e.name}/` : e.name)).sort();
   files.sort((a, b) => (a.path < b.path ? -1 : 1));
   const bytes = files.reduce((n, f) => n + f.content.length, 0);

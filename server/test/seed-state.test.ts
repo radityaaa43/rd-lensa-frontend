@@ -158,6 +158,25 @@ describe('stealth.json, noto, policy', () => {
       expect(p.notCarried).toEqual(expect.arrayContaining(['stealth.json', 'iroha3.json', 'iroha3/']));
     } finally { chmodSync(join(src, 'iroha3'), 0o700); }
   });
+  describe('without noto (the pod seed has no Noto until its owner writes contract-data for the new report groups)', () => {
+    const woNoto = { targetStateDir: opts.targetStateDir, without: ['noto'] } as never;
+    it('noto is skipped entirely: not required, not read (mode 000), listed by name in notCarried; zeto and the policy store are still carried', () => {
+      const src = fixture({ contractAge: '2026-11-01T00:00:00.000Z' }); // stale noto data would refuse a normal run
+      expect(() => planSeed(src, opts)).toThrow(/stale/);
+      for (const f of ['noto.json', 'noto/trades.jsonl', 'noto/contract-data-2026-11-12T00-00-00-000Z.json']) chmodSync(join(src, f), 0o000);
+      chmodSync(join(src, 'noto'), 0o000);
+      try {
+        const p = planSeed(src, woNoto);
+        expect(names(p)).toEqual(['policy/bank-a/pending.json', 'policy/bank-a/zeto/v1.json', 'policy/bi/audit.jsonl', 'policy/bi/v1.json', 'zeto.json']);
+        expect(p.notCarried).toEqual(expect.arrayContaining(['noto.json', 'noto/', 'stealth.json', 'iroha3.json', 'iroha3/']));
+        expect(p.files.some((f) => /dataDir|contract-data|trade/.test(f.path + f.content.toString()))).toBe(false);
+      } finally { chmodSync(join(src, 'noto'), 0o700); }
+    });
+    it('an unknown `without` value is refused; the default (no option) still requires noto', () => {
+      expect(() => planSeed(fixture(), { targetStateDir: opts.targetStateDir, without: ['zeto'] } as never)).toThrow(/without/);
+      expect(() => planSeed(fixture(), { targetStateDir: opts.targetStateDir } as never)).toThrow(/notoWrittenAfter/);
+    });
+  });
   it('a leftover <file>.<pid>.tmp of an atomic write (it may hold keys) refuses the whole seed', () => {
     expect(() => planSeed(fixture({ extra: { 'stealth.json.4242.tmp': '{}' } }), opts)).toThrow(/stealth\.json\.4242\.tmp/);
   });
