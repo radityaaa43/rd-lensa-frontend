@@ -67,6 +67,7 @@ spec:
             - {name: tmp, mountPath: /tmp}
             - {name: state, mountPath: /app/frontend/server/state}
             - {name: certs, mountPath: /certs, readOnly: true}
+            - {name: sink-tokens, mountPath: /sink-tokens, readOnly: true}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -89,6 +90,25 @@ spec:
               - secret:
                   name: lensa-gw-mtls-c
                   items: [{key: ca.crt, path: C/ca.crt}, {key: lensa.crt, path: C/lensa.crt}, {key: lensa.key, path: C/lensa.key}]
+        # LENSA_SINK_TOKENS_DIR: one bearer token per party, file <BI|A|B|C>, from Secret lensa-sink-token-<bi|a|b|c> (key `token`, 64 hex, no newline). Each party
+        # creates only its own Secret; they are never rendered here. Mode 0440 so the pod group (fsGroup 10001) reads it: server/src/policy/sink.ts pod mode
+        # (LENSA_IN_CLUSTER=1 and this read-only mount) accepts exactly that. Not optional: a half-configured pod must not start.
+        - name: sink-tokens
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: lensa-sink-token-bi
+                  items: [{key: token, path: BI}]
+              - secret:
+                  name: lensa-sink-token-a
+                  items: [{key: token, path: A}]
+              - secret:
+                  name: lensa-sink-token-b
+                  items: [{key: token, path: B}]
+              - secret:
+                  name: lensa-sink-token-c
+                  items: [{key: token, path: C}]
 ---
 apiVersion: v1
 kind: Service
