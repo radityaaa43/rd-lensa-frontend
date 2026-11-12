@@ -374,6 +374,11 @@ npi = name(ing, "NetworkPolicy", "allow-ingress-controller")["spec"]
 check(npi["podSelector"] == {"matchLabels": {"app": "lensa", "role": "server"}} and npi["policyTypes"] == ["Ingress"], f"ingress NP selects the lensa server pod only: {npi['podSelector']}")
 check(npi["ingress"] == [{"from": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}, "podSelector": {"matchLabels": {"app": "ingress-nginx"}}}], "ports": [{"protocol": "TCP", "port": 8790}]}], f"ingress NP: ONE rule, only the ingress-nginx pods of kube-system, 8790: {npi['ingress']}")
 check(not any("ipBlock" in str(r) for r in npi["ingress"]), "ingress NP: no ipBlock, never 0.0.0.0/0")
+# the HTTP-01 solver pod cert-manager creates in THIS namespace is selected by default-deny-all: without its own narrow rule the challenge can never be reached and no certificate is issued
+nps = name(ing, "NetworkPolicy", "allow-acme-solver-ingress")["spec"]
+check(nps["podSelector"] == {"matchLabels": {"acme.cert-manager.io/http01-solver": "true"}} and nps["policyTypes"] == ["Ingress"], f"acme solver NP selects only the solver pods: {nps['podSelector']}")
+check(nps["ingress"] == [{"from": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}, "podSelector": {"matchLabels": {"app": "ingress-nginx"}}}], "ports": [{"protocol": "TCP", "port": 8089}]}], f"acme solver NP: one rule, only the ingress-nginx pods, 8089: {nps['ingress']}")
+check("app" not in nps["podSelector"]["matchLabels"], "the acme solver NP never selects the lensa pod (no app label in its selector)")
 for d in ing: check(d["metadata"].get("namespace") == "rd-lensa", f"ingress part: {d['kind']}/{d['metadata']['name']} namespace")
 check(not of(ing, "Secret") and not any("PRIVATE" in str(d) for d in ing), "ingress part renders no Secret and no key material")
 for bad in ["Bad Host", "a/b", "host;x", "", "-x.com", "x..com", "*.example.com"]:
