@@ -665,3 +665,5 @@ fieldset.polhours{border:1px solid var(--line);border-radius:var(--r-tile);paddi
 .polcheck{display:flex;flex-direction:column;gap:4px;font-size:14px}
 .polcheck li::before{content:"\2713";color:var(--clear);font-weight:700;margin-right:8px}
 @media (max-width:700px){.polpair,.polpair.add{grid-template-columns:1fr}.polform,.polcard{padding:16px}}
+/* R24 public host: sandbox note on every page; --partial / --partial-bg already pass contrast in both themes */
+.public-banner{background:var(--partial-bg);color:var(--partial);border-bottom:1px solid var(--partial);padding:8px 16px;font-size:13px;font-weight:600;text-align:center}
