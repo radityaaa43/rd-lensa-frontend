@@ -65,6 +65,9 @@ pull = idx(lambda s: "docker pull" in s.get("run", ""))
 check(pull > build, "pull test: docker pull of the pushed digest after the push")
 if pull >= 0:
     check("@${{ steps.build.outputs.digest }}" in steps[pull]["run"], "pull test must pull by DIGEST, not by tag")
+# attest hygiene (orchestrator, parity with rd-fabric-x): the signed attestation is made only for an image that passed BOTH the anonymous private assert and the authenticated pull test
+check(att > vis >= 0 and att > pull >= 0, f"attest-build-provenance (step {att}) must come AFTER the private assert (step {vis}) and the authenticated pull test (step {pull}): nothing is attested before it is proven private and pullable")
+check(job["permissions"].get("id-token") == "write" and job["permissions"].get("attestations") == "write", "attest needs id-token: write and attestations: write on the push job")
 for s in steps:
     run = s.get("run", "")
     check(not re.search(r"docker build(?!x)|docker push", run), f"plain docker build/push step: {s.get('name')}")
