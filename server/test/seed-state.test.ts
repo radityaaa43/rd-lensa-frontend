@@ -147,6 +147,17 @@ describe('stealth.json, noto, policy', () => {
     expect(() => planSeed(fixture({ policy: { 'bi/v1.json': '{"note":"-----BEGIN PRIVATE KEY-----"}' } }), opts)).toThrow(SeedRefused);
     expect(() => planSeed(fixture({ policy: { 'bi/v1.json': `{"a":"${hex(40, 'a')}","d":"${NOW}"}` } }), opts)).not.toThrow();
   });
+  it('never OPENS an out-of-scope file: stealth.json, iroha3 and the backups are unreadable (mode 000) and the plan still works', () => {
+    const src = fixture();
+    const locked = ['stealth.json', 'iroha3.json', 'iroha3/bi.toml', 'zeto.v0-backup-20261021.json', 'fabricx.json'];
+    for (const f of locked) if (existsSync(join(src, f))) chmodSync(join(src, f), 0o000);
+    chmodSync(join(src, 'iroha3'), 0o000);
+    try {
+      const p = planSeed(src, opts);
+      expect(names(p)).not.toContain('stealth.json');
+      expect(p.notCarried).toEqual(expect.arrayContaining(['stealth.json', 'iroha3.json', 'iroha3/']));
+    } finally { chmodSync(join(src, 'iroha3'), 0o700); }
+  });
   it('a leftover <file>.<pid>.tmp of an atomic write (it may hold keys) refuses the whole seed', () => {
     expect(() => planSeed(fixture({ extra: { 'stealth.json.4242.tmp': '{}' } }), opts)).toThrow(/stealth\.json\.4242\.tmp/);
   });
