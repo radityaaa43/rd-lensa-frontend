@@ -37,12 +37,13 @@ export function bootPolicy(env: NodeJS.ProcessEnv, parts: BootParts = {}): Polic
     // a failure that is not already a PolicyError came from publishing: say so, keep the original in the server log
     // FREEZE (lead, 2026-11-12): in the pod opa is only a tester / tar tool and a LIVE publish stays refused until the freeze is lifted by a later change.
     const frozen = inCluster(env);
-    const publish = (o: Parameters<Publisher['publish']>[0], m: Platform, n: number) => (frozen ? Promise.reject(new PolicyError(403, 'Terbit kebijakan dibekukan di pod (hanya uji coba)')) : publisher.publish(o, m, n)).catch((e) => {
+    const FROZEN = 'Terbit kebijakan dibekukan di pod (hanya uji coba)';
+    const publish = (o: Parameters<Publisher['publish']>[0], m: Platform, n: number) => (frozen ? Promise.reject(new PolicyError(403, FROZEN)) : publisher.publish(o, m, n)).catch((e) => {
       if (e instanceof PolicyError) throw e;
       console.error(`Terbit kebijakan ${o} ${m} v${n} gagal:`, e);
       throw new PolicyError(502, 'Gagal terbit ke gateway');
     });
-    return { store, workflow: new PolicyWorkflow(store, opa, publish), status: () => publisher.status(),
+    return { store, workflow: new PolicyWorkflow(store, opa, publish, frozen ? FROZEN : undefined), status: () => publisher.status(),
       usage: (p, m) => REGISTRY[m].usage!(p, (store.current(OWNER_OF_PARTY[p], m).doc as BankPolicy).daily_limit) };
   } catch (e) {
     console.error('Kebijakan dinonaktifkan, gagal dimulai:', e);
