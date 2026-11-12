@@ -76,3 +76,34 @@ test('sink mode with an unreadable token directory: no policy deps, logged witho
   expect(bootPolicy({ OPA_BIN: '/nonexistent/opa', LENSA_SINK_TOKENS_DIR: '/definitely/not/here' }, { makeStore: () => store })).toBeUndefined();
   expect(log).toHaveBeenCalledOnce();
 });
+
+// ---- pod mode (LENSA_IN_CLUSTER=1): Kebijakan is available (pinned opa as tester) but a LIVE publish stays refused (freeze: dry-run proof only)
+test('pod mode: policy deps exist (the routes are not 501) and a live publish is refused before the publisher is called', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bootpod-')); writeFileSync(join(dir, 'BI'), 'tok-bi', { mode: 0o440 }); chmodSync(dir, 0o550); // read-only dir = a Secret mount
+  vi.stubEnv('LENSA_IN_CLUSTER', '1');
+  const publish = vi.fn(async () => {});
+  try {
+    const deps = bootPolicy({ LENSA_IN_CLUSTER: '1', OPA_BIN: '/usr/local/bin/opa', LENSA_SINK_TOKENS_DIR: dir }, {
+      makeStore: () => store, makePublisher: () => ({ recoverInterrupted: () => {}, publish, status: async () => [] }),
+    });
+    expect(deps).toBeDefined();
+    const wf = deps!.workflow as unknown as { publish(o: string, m: string, n: number): Promise<void> };
+    await expect(wf.publish('bi', 'zeto', 1)).rejects.toMatchObject({ name: 'PolicyError', status: 403, message: expect.stringMatching(/dibekukan/) });
+    expect(publish).not.toHaveBeenCalled();
+  } finally { vi.unstubAllEnvs(); chmodSync(dir, 0o700); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('pod mode never takes the host way: without LENSA_SINK_TOKENS_DIR there are no policy deps, even with OPA_KEYS_DIR', () => {
+  expect(bootPolicy({ LENSA_IN_CLUSTER: '1', OPA_BIN: '/usr/local/bin/opa', OPA_KEYS_DIR: '/k' }, { makeStore: () => store })).toBeUndefined();
+  expect(log).toHaveBeenCalledOnce();
+});
+
+test('host mode (no LENSA_IN_CLUSTER): the publish is not frozen', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'boothost-')); chmodSync(dir, 0o700); writeFileSync(join(dir, 'BI'), 'tok-bi', { mode: 0o600 });
+  const publish = vi.fn(async () => {});
+  try {
+    const deps = bootPolicy({ OPA_BIN: '/nonexistent/opa', LENSA_SINK_TOKENS_DIR: dir }, { makeStore: () => store, makePublisher: () => ({ recoverInterrupted: () => {}, publish, status: async () => [] }) });
+    await (deps!.workflow as unknown as { publish(o: string, m: string, n: number): Promise<void> }).publish('bi', 'zeto', 1);
+    expect(publish).toHaveBeenCalledOnce();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
