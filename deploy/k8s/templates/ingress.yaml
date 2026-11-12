@@ -1,0 +1,75 @@
+# Interim public Lensa (R24, user waiver: no login): the entry. Rendered by ../render.sh ingress; ${HOST} and ${ACME_SERVER} come from LENSA_PUBLIC_HOST / LENSA_ACME.
+# - Issuer lensa-acme: ACME HTTP-01 on the shared ingress-nginx (class nginx), NO e-mail; cert-manager keeps the account key in Secret lensa-acme-account of this namespace and the
+#   certificate key in Secret lensa-public-tls (nothing in git).
+# - Ingress lensa-public: a path ALLOW-LIST (no Prefix /): the SPA routes, the assets and the read-only API reads the UI needs. Hidden at the entry: /api/policy*, /api/stress*,
+#   /api/preflight-capacity, /api/readyz, /api/livez, /api/tx*; the app itself refuses non-GET (405) and hides the same routes. The shared controller allows no snippet annotation.
+# - NetworkPolicy: the lensa server pod accepts traffic only from the ingress-nginx pods of kube-system.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: lensa-acme
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa}
+spec:
+  acme:
+    server: ${ACME_SERVER}
+    privateKeySecretRef: {name: lensa-acme-account}
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lensa-public
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa}
+  annotations:
+    cert-manager.io/issuer: lensa-acme
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "64k"
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "3"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [${HOST}]
+      secretName: lensa-public-tls
+  rules:
+    - host: ${HOST}
+      http:
+        paths:
+          - {path: /, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /robots.txt, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /assets, pathType: Prefix, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /besu, pathType: Prefix, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /fabricx, pathType: Prefix, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /iroha3, pathType: Prefix, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/meta, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/health, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/history, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/network, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/receipt, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/trace, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/balance, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-controller
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa}
+spec:
+  podSelector: {matchLabels: {app: lensa, role: server}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {app: ingress-nginx}}
+      ports:
+        - {protocol: TCP, port: 8790}

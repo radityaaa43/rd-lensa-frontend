@@ -4,6 +4,7 @@
 #     base    S4a: namespace rd-lensa, default-deny + DNS + gateway egress policies, SAs and Roles
 #     volume  S4b: PVC lensa-state (Secrets are never rendered: their owners create them)
 #     app     S6:  ConfigMap lensa-env, Deployment lensa, Service lensa (needs LENSA_IMAGE)
+#     ingress interim public entry: Issuer (HTTP-01, no e-mail) + Ingress (path allow-list) + NetworkPolicy; LENSA_PUBLIC_HOST, LENSA_ACME=staging|prod. NOT part of `all`.
 #     probe   egress proof Job from LENSA_PROBE_TARGETS (host port lines); app=lensa + role=egress-probe; NOT part of `all`.
 #     seed    state seed: ConfigMap lensa-seed + Job lensa-seed from LENSA_SEED_DIR (seed-state --out); seedcheck: no-egress read Job that greps the PVC + image for key material. NOT part of `all`.
 #     dryrun  5b:  ConfigMap lensa-candidate + Job lensa-dryrun (candidate verify, no sink IO; needs LENSA_IMAGE, LENSA_CANDIDATE_DIR, LENSA_CANDIDATE_EXPECT; NOT part of `all`)
@@ -98,6 +99,8 @@ data:
   LENSA_SINK_TOKENS_DIR: "/sink-tokens"
   OPA_BIN: "/usr/local/bin/opa"
 EOF
+  [[ -z "${LENSA_PUBLIC:-}" || "$LENSA_PUBLIC" == 1 ]] || die "LENSA_PUBLIC must be 1 or unset"
+  [[ "${LENSA_PUBLIC:-}" == 1 ]] && echo '  LENSA_PUBLIC_READONLY: "1"'
   if [[ -n "${LENSA_ENV_FILE:-}" ]]; then
     local k v
     while IFS='=' read -r k v; do
@@ -258,15 +261,27 @@ probe() {
   sed "s#\${IMAGE}#$img#; s#\${PROBE_POS}#$pos#" "$here/templates/probe.yaml"
 }
 
-emit() { case "$1" in base) base ;; volume) volume ;; app) app ;; dryrun) dryrun ;; seed) seed ;; seedcheck) seedcheck ;; probe) probe ;; *) die "unknown part '$1'" ;; esac; }
+# Interim public Lensa (R24): Issuer (ACME HTTP-01, no e-mail), Ingress with a path allow-list, NetworkPolicy from the ingress-nginx pods. LENSA_PUBLIC_HOST required; LENSA_ACME staging (default) | prod.
+ingress() {
+  local host="${LENSA_PUBLIC_HOST:-}" acme="${LENSA_ACME:-staging}" server
+  [[ "$host" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || die "LENSA_PUBLIC_HOST must be a DNS name (lower case, no wildcard)"
+  case "$acme" in
+    staging) server=https://acme-staging-v02.api.letsencrypt.org/directory ;;
+    prod) server=https://acme-v02.api.letsencrypt.org/directory ;;
+    *) die "LENSA_ACME must be staging or prod, not '$acme'" ;;
+  esac
+  sed "s#\${HOST}#$host#g; s#\${ACME_SERVER}#$server#" "$here/templates/ingress.yaml"
+}
+
+emit() { case "$1" in base) base ;; volume) volume ;; app) app ;; dryrun) dryrun ;; seed) seed ;; seedcheck) seedcheck ;; probe) probe ;; ingress) ingress ;; *) die "unknown part '$1'" ;; esac; }
 
 out=""
 if [[ "${1:-}" == -o ]]; then out="${2:?-o needs a directory}"; shift 2; fi
 case "${1:-}" in
-  base|volume|app|dryrun|seed|seedcheck|probe)
+  base|volume|app|dryrun|seed|seedcheck|probe|ingress)
     if [[ -n "$out" ]]; then mkdir -p "$out"; emit "$1" > "$out/rd-lensa-$1.yaml"; else emit "$1"; fi ;;
   all)
     if [[ -n "$out" ]]; then mkdir -p "$out"; for p in base volume app; do emit "$p" > "$out/rd-lensa-$p.yaml"; done
     else emit base; echo '---'; emit volume; echo '---'; emit app; fi ;;
-  *) die "usage: render.sh [-o DIR] <base|volume|app|dryrun|seed|seedcheck|probe|all>" ;;
+  *) die "usage: render.sh [-o DIR] <base|volume|app|dryrun|seed|seedcheck|probe|ingress|all>" ;;
 esac
