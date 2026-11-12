@@ -1,0 +1,62 @@
+# Egress proof Job (pod GO step 5). The pod carries app=lensa so the REAL egress-party-gateways policy applies to it, and role=egress-probe so Service lensa (which needs role=server)
+# never selects it and the cleanup selector finds it. Rendered by ../render.sh probe; ${IMAGE} is the ghcr digest, PROBE_POS the positive targets (host:port,...). No volume but /tmp, no Secret, no token.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lensa-egress-probe
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa, app: lensa, role: egress-probe}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  ttlSecondsAfterFinished: 120
+  template:
+    metadata:
+      labels: {part-of: rd-lensa, app: lensa, role: egress-probe}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: lensa
+      automountServiceAccountToken: false
+      imagePullSecrets: [{name: ghcr-pull}]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: probe
+          image: ${IMAGE}
+          env:
+            - {name: PROBE_POS, value: "${PROBE_POS}"}
+          command:
+            - node
+            - -e
+            - |
+              const net = require('net'), dns = require('dns');
+              const tcp = (h, p) => new Promise((r) => { const s = net.connect({ host: h, port: Number(p), timeout: 4000 }); s.on('connect', () => { s.destroy(); r(true); }); s.on('timeout', () => { s.destroy(); r(false); }); s.on('error', () => r(false)); });
+              (async () => {
+                let bad = 0;
+                const pos = process.env.PROBE_POS.split(',').map((x) => x.split(/:(?=[0-9]+$)/));
+                for (const [h, p] of pos) { const ok = await tcp(h, p); console.log((ok ? 'OK   ' : 'FAIL ') + 'positive ' + h + ':' + p); if (!ok) bad = 1; }
+                const neg = [['1.1.1.1', 443], [process.env.KUBERNETES_SERVICE_HOST, 443]];
+                for (const [h, p] of neg) { const ok = await tcp(h, p); console.log((ok ? 'FAIL ' : 'OK   ') + 'negative ' + h + ':' + p + (ok ? ' (connected: must be blocked)' : ' (blocked)')); if (ok) bad = 1; }
+                const name = pos.map((x) => x[0]).find((h) => /[a-z]/.test(h));
+                const ok1 = await new Promise((r) => dns.lookup(name, (e) => r(!e)));
+                console.log((ok1 ? 'OK   ' : 'FAIL ') + 'positive dns.lookup via kube-dns ' + name); if (!ok1) bad = 1;
+                const rs = new dns.Resolver({ timeout: 3000, tries: 1 }); rs.setServers(['8.8.8.8:53']);
+                const ok2 = await new Promise((r) => rs.resolve4('example.com', (e) => r(!e)));
+                console.log((ok2 ? 'FAIL ' : 'OK   ') + 'negative dns resolver 8.8.8.8:53' + (ok2 ? ' (answered: must be blocked)' : ' (blocked)')); if (ok2) bad = 1;
+                process.exit(bad);
+              })();
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 200m, memory: 256Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {}

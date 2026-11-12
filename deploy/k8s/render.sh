@@ -4,6 +4,7 @@
 #     base    S4a: namespace rd-lensa, default-deny + DNS + gateway egress policies, SAs and Roles
 #     volume  S4b: PVC lensa-state (Secrets are never rendered: their owners create them)
 #     app     S6:  ConfigMap lensa-env, Deployment lensa, Service lensa (needs LENSA_IMAGE)
+#     probe   egress proof Job from LENSA_PROBE_TARGETS (host port lines); app=lensa + role=egress-probe; NOT part of `all`.
 #     seed    state seed: ConfigMap lensa-seed + Job lensa-seed from LENSA_SEED_DIR (seed-state --out); seedcheck: no-egress read Job that greps the PVC + image for key material. NOT part of `all`.
 #     dryrun  5b:  ConfigMap lensa-candidate + Job lensa-dryrun (candidate verify, no sink IO; needs LENSA_IMAGE, LENSA_CANDIDATE_DIR, LENSA_CANDIDATE_EXPECT; NOT part of `all`)
 # Environment:
@@ -240,15 +241,32 @@ seedcheck() {
   sed "s#\${IMAGE}#$img#" "$here/templates/seedcheck.yaml"
 }
 
-emit() { case "$1" in base) base ;; volume) volume ;; app) app ;; dryrun) dryrun ;; seed) seed ;; seedcheck) seedcheck ;; *) die "unknown part '$1'" ;; esac; }
+# Egress proof Job from an operator file of positive targets (`host port`, one per line; names of Services or single IPv4 hosts, e.g. the bank C load balancers). The negatives and the
+# DNS checks are fixed in the template. The Job pod carries app=lensa (the real policy applies) + role=egress-probe (the Service never selects it).
+probe() {
+  local img="${LENSA_IMAGE:-}" tf="${LENSA_PROBE_TARGETS:-}" h p pos=""
+  [[ "$img" =~ ^ghcr\.io/radityaaa43/rd-lensa-frontend@sha256:[0-9a-f]{64}$ ]] || die "LENSA_IMAGE must be ghcr.io/radityaaa43/rd-lensa-frontend@sha256:<64 hex> (pinned by digest)"
+  [[ -f "$tf" ]] || die "LENSA_PROBE_TARGETS (lines: host port) is required"
+  while read -r h p extra; do
+    [[ -z "${h:-}" || "$h" == \#* ]] && continue
+    [[ -n "${p:-}" && -z "${extra:-}" ]] || die "probe target line needs exactly 'host port': '$h $p'"
+    [[ "$h" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ && "$h" != 0.0.0.0 ]] || die "probe host '$h' is not a DNS name or an IPv4 host"
+    [[ "$p" =~ ^[0-9]+$ ]] && (( p >= 1 && p <= 65535 )) || die "probe port '$p' out of range"
+    pos+="${pos:+,}$h:$p"
+  done < "$tf"
+  [[ -n "$pos" ]] || die "no probe target in $tf"
+  sed "s#\${IMAGE}#$img#; s#\${PROBE_POS}#$pos#" "$here/templates/probe.yaml"
+}
+
+emit() { case "$1" in base) base ;; volume) volume ;; app) app ;; dryrun) dryrun ;; seed) seed ;; seedcheck) seedcheck ;; probe) probe ;; *) die "unknown part '$1'" ;; esac; }
 
 out=""
 if [[ "${1:-}" == -o ]]; then out="${2:?-o needs a directory}"; shift 2; fi
 case "${1:-}" in
-  base|volume|app|dryrun|seed|seedcheck)
+  base|volume|app|dryrun|seed|seedcheck|probe)
     if [[ -n "$out" ]]; then mkdir -p "$out"; emit "$1" > "$out/rd-lensa-$1.yaml"; else emit "$1"; fi ;;
   all)
     if [[ -n "$out" ]]; then mkdir -p "$out"; for p in base volume app; do emit "$p" > "$out/rd-lensa-$p.yaml"; done
     else emit base; echo '---'; emit volume; echo '---'; emit app; fi ;;
-  *) die "usage: render.sh [-o DIR] <base|volume|app|dryrun|seed|seedcheck|all>" ;;
+  *) die "usage: render.sh [-o DIR] <base|volume|app|dryrun|seed|seedcheck|probe|all>" ;;
 esac
