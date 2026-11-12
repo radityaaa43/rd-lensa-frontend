@@ -20,9 +20,9 @@ SH
 }
 t "anonymous token refused (401) -> private" pass 401 000
 t "anonymous token refused (403) -> private" pass 403 000
-t "anonymous token refused (404) -> private" pass 404 000
+t "token endpoint 404 -> ghcr does not answer 404 there (401 private, 403 unknown) -> cannot tell -> fail" fail 404 000
 t "token granted but the manifest is refused (401) -> private" pass 200 401
-t "token granted but the manifest is not found (404) -> private" pass 200 404
+t "token granted but the manifest is not found (404) -> ref missing or push did not land -> fail" fail 200 404
 t "token granted and the manifest is readable (200) -> PUBLIC -> fail" fail 200 200
 t "no answer from the token endpoint (000) -> cannot tell -> fail" fail 000 000
 t "token endpoint 500 -> cannot tell -> fail" fail 500 000
