@@ -398,6 +398,8 @@ check(not of(ing, "Secret") and not any("PRIVATE" in str(d) for d in ing), "ingr
 for bad in ["Bad Host", "a/b", "host;x", "", "-x.com", "x..com", "*.example.com"]:
     check(run(["ingress"], {"LENSA_PUBLIC_HOST": bad}).returncode != 0, f"LENSA_PUBLIC_HOST {bad!r} must be refused")
 check(run(["ingress"], {}).returncode != 0, "ingress without LENSA_PUBLIC_HOST is refused")
+# the certificate key policy is explicit (analyst: cert-manager v1.18 defaults to Always; say it so a default change cannot move it silently)
+check(name(ing, "Ingress", "lensa-public")["metadata"]["annotations"].get("cert-manager.io/private-key-rotation-policy") == "Always", "lensa-public: cert-manager.io/private-key-rotation-policy is explicitly Always")
 # the pod config: LENSA_PUBLIC_READONLY only when asked, never through the env file
 pub = docs(["app"], {**ENV, "LENSA_PUBLIC": "1"})
 check(name(pub, "ConfigMap", "lensa-env")["data"].get("LENSA_PUBLIC_READONLY") == "1", "LENSA_PUBLIC=1 puts LENSA_PUBLIC_READONLY=1 in the ConfigMap")
@@ -434,6 +436,7 @@ for hidden in ["/api/stress", "preflight", "readyz", "livez", "approve", "republ
     check(hidden not in allp, f"W: nothing at the entry routes {hidden}")
 check(sorted((d["kind"], d["metadata"]["name"]) for d in ingw) == sorted([(d["kind"], d["metadata"]["name"]) for d in ing0] + [("Ingress", "lensa-public-tx")]), "W ingress render = the read-only render + exactly one Ingress")
 check(not of(ingw, "Secret"), "W ingress render: no Secret")
+check(not any(k.startswith("cert-manager.io/") for k in wa), "lensa-public-tx carries no cert-manager annotation at all (incl. the key policy)")
 
 # ---- flow (B1): the internal write instance lensa-flow. No Service, no Ingress, no PVC, replicas 0, its OWN ConfigMap, LENSA_FLOWS only here
 fl = docs(["flow"], ENV)
