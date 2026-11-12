@@ -112,6 +112,12 @@ check(sorted(fxgw) == ["rd-fabricx-bank-a", "rd-fabricx-bank-b", "rd-fabricx-bi"
 for n, g in (("rd-fabricx-bi", "fx-gw-1"), ("rd-fabricx-bank-a", "fx-gw-2"), ("rd-fabricx-bank-b", "fx-gw-3")):
     r = fxgw.get(n)
     check(bool(r) and r["to"][0]["podSelector"] == {"matchLabels": {"app.kubernetes.io/name": g}} and r["ports"] == [{"protocol": "TCP", "port": 8443}], f"shipped gateways.conf: {n} gateway pod app.kubernetes.io/name={g} on 8443 only")
+def party_rules(prefix): return {r["to"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"]: r for r in srules if r["to"][0].get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name", "").startswith(prefix)}
+irg, stg = party_rules("rd-iroha3-"), party_rules("rd-stealth-")
+check(sorted(irg) == ["rd-iroha3-bank-a", "rd-iroha3-bank-b", "rd-iroha3-bi"], f"shipped gateways.conf: iroha3 party namespaces {sorted(irg)}")
+check(all(r["to"][0]["podSelector"] == {"matchLabels": {"rd-iroha3/role": "gateway"}} and r["ports"] == [{"protocol": "TCP", "port": 8443}] for r in irg.values()), "shipped gateways.conf: iroha3 gateway pods rd-iroha3/role=gateway on 8443 only (iroha, mTLS gateway)")
+check(sorted(stg) == ["rd-stealth-bank-a", "rd-stealth-bank-b", "rd-stealth-bi"], f"shipped gateways.conf: stealth party namespaces {sorted(stg)}")
+check(all(r["to"][0]["podSelector"] == {"matchLabels": {"app": "st-gw"}} and r["ports"] == [{"protocol": "TCP", "port": 8550}] for r in stg.values()), "shipped gateways.conf: stealth gateway pods app=st-gw on 8550 only (besu, mTLS gateway)")
 # the egress union is closed: one destination per rule; a namespace is always narrowed by a pod selector; only single hosts; TCP only; never an open range
 for r in srules:
     to = r.get("to", [])
