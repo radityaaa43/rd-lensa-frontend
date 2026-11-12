@@ -4,6 +4,8 @@ import { randomBytes } from 'node:crypto';
 export const publicMode = (env: Record<string, string | undefined>): boolean => env.LENSA_PUBLIC_READONLY === '1';
 export function assertPublicEnv(env: Record<string, string | undefined>): void {
   if (env.LENSA_PUBLIC_READONLY !== undefined && env.LENSA_PUBLIC_READONLY !== '1') throw new Error('LENSA_PUBLIC_READONLY must be 1 or unset');
+  if (env.LENSA_FLOWS !== undefined && env.LENSA_FLOWS !== '1') throw new Error('LENSA_FLOWS must be 1 or unset');
+  if (env.LENSA_FLOWS === '1' && env.LENSA_PUBLIC_READONLY === '1') throw new Error('LENSA_FLOWS (write instance) and LENSA_PUBLIC_READONLY exclude each other');
 }
 
 // routes the public host never serves (the kubelet probes livez/readyz stay: the entry hides readyz)

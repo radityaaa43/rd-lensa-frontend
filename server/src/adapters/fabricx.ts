@@ -174,7 +174,7 @@ const podExec: Exec = async () => { throw new NotAvailableError(POD_LEDGER_REASO
 // What a pod can honestly see of the network: whether each party's gateway answers. The committer and the orderers are not visible from here: "unknown", not "down".
 const POD_PROBE_MS = 4_000;
 
-export function createFabricxAdapter(exec: Exec, gw?: GwCall, opts: { pod?: boolean } = {}) {
+export function createFabricxAdapter(exec: Exec, gw?: GwCall, opts: { pod?: boolean; flows?: boolean } = {}) {
   const api = async <T>(cmd: string[]): Promise<T> => {
     if (!gw) return JSON.parse(await exec(['exec', 'deploy/rdbi-driver', '-c', 'driver', '--', 'rdbi-driver', 'api', ...cmd])) as T;
     const { party, body, others } = gwRequest(cmd);
@@ -495,7 +495,7 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall, opts: { pod?: bool
     id: 'fabricx',
     txDeadlineMs: LOCK_WAIT_MS + TX_DEADLINE_MS + LEDGER_WAIT_MS + 30_000 + 15_000,
     stepLabels: ['Bukti ZK & endorsement 3-of-4', 'Final di ledger', 'Laporan ke BI', 'Cek ledger publik'],
-    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, opts.pod ? { enabled: false, reason: POD_LEDGER_REASON } : { enabled: true }])) as Record<FlowId, Capability>,
+    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, opts.pod && !opts.flows ? { enabled: false, reason: POD_LEDGER_REASON } : { enabled: true }])) as Record<FlowId, Capability>,
     async health() {
       try {
         await balanceOf('A', 'RD');
@@ -561,9 +561,10 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall, opts: { pod?: bool
   return adapter;
 }
 
-export const loadPod = (gw: GwCall = fxGateway) => createFabricxAdapter(podExec, gw, { pod: true });
+// flows: the internal write instance only (LENSA_FLOWS=1, deploy part `flow`); the public pod never has it (assertPublicEnv refuses both together)
+export const loadPod = (gw: GwCall = fxGateway, opts: { flows?: boolean } = {}) => createFabricxAdapter(podExec, gw, { pod: true, flows: opts.flows });
 export async function load(stateDir?: string): Promise<ModelAdapter | null> {
-  if (inCluster() && process.env.LENSA_FABRICX_GW === '1') return loadPod(); // the pod has no state file and no kubeconfig by design
+  if (inCluster() && process.env.LENSA_FABRICX_GW === '1') return loadPod(fxGateway, { flows: process.env.LENSA_FLOWS === '1' }); // the pod has no state file and no kubeconfig by design
   const s = readState<FabricxState>('fabricx', stateDir);
   return s && s.funded !== false ? createFabricxAdapter(kubectl({ ...s, kubeconfig: process.env.FABRICX_KUBECONFIG ?? s.kubeconfig }), transport()) : null;
 }

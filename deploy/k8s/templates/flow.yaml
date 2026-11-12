@@ -1,0 +1,88 @@
+# B1: the internal write instance (replicas 0 until a test window: `kubectl scale`). Reached ONLY by a port-forward to the pod (SA lensa-access): no Service, no Ingress.
+# app=lensa puts it under the real egress policy (egress-party-gateways selects app=lensa); role=flow keeps it out of Service lensa and of the ingress NetworkPolicy.
+# State is an emptyDir: it never mounts the PVC lensa-state. No sink tokens, no opa (Kebijakan off). Only the existing per-party client certs.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lensa-flow
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa, app: lensa, role: flow}
+spec:
+  replicas: 0
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: lensa, role: flow}
+  template:
+    metadata:
+      labels: {part-of: rd-lensa, app: lensa, role: flow}
+    spec:
+      serviceAccountName: lensa
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: kubernetes.io/hostname, operator: NotIn, values: [member-16033-node, member-16034-node]}
+      containers:
+        - name: lensa
+          image: ${IMAGE}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8790, protocol: TCP}
+          envFrom:
+            - configMapRef: {name: lensa-flow-env}
+          env:
+            - {name: HOME, value: /tmp}
+            - {name: LENSA_FLOWS, value: "1"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          startupProbe:
+            httpGet: {path: /api/livez, port: http}
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /api/readyz, port: http}
+            periodSeconds: 10
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: {path: /api/livez, port: http}
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: state, mountPath: /app/frontend/server/state}
+            - {name: certs, mountPath: /certs, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: state
+          emptyDir: {}
+        - name: certs
+          projected:
+            sources:
+              - secret:
+                  name: lensa-gw-mtls-bi
+                  items: [{key: ca.crt, path: BI/ca.crt}, {key: lensa.crt, path: BI/lensa.crt}, {key: lensa.key, path: BI/lensa.key}]
+              - secret:
+                  name: lensa-gw-mtls-a
+                  items: [{key: ca.crt, path: A/ca.crt}, {key: lensa.crt, path: A/lensa.crt}, {key: lensa.key, path: A/lensa.key}]
+              - secret:
+                  name: lensa-gw-mtls-b
+                  items: [{key: ca.crt, path: B/ca.crt}, {key: lensa.crt, path: B/lensa.crt}, {key: lensa.key, path: B/lensa.key}]
+              - secret:
+                  name: lensa-gw-mtls-c
+                  items: [{key: ca.crt, path: C/ca.crt}, {key: lensa.crt, path: C/lensa.crt}, {key: lensa.key, path: C/lensa.key}]
