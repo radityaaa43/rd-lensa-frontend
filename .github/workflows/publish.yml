@@ -1,8 +1,10 @@
 name: publish
 
-# Pushes the Lensa image to ghcr.io (final-design/lensa/PLAN.md S3). Manual trigger ONLY: a push to the registry is an outward write, so it runs
-# when someone starts it (`gh workflow run publish.yml --ref main`) inside an approved GO window, never on merge.
-# The image is pushed under a commit tag; the manifests take the DIGEST printed in the job summary, never the tag.
+# Builds the IN-CLUSTER Lensa image and pushes it to ghcr.io under the EXISTING private package rd-lensa-frontend, tag incluster-sha-<sha>.
+# Manual trigger ONLY (`gh workflow run publish.yml --ref main`), and only on the orchestrator's word: a push to the registry is an outward write.
+# Order: build locally (not pushed) -> image checks (non-root, no key names, state dir empty, no cluster/chain tools, PEM content scan, /api/health)
+# -> push with SBOM + max provenance -> signed attestation (public repo) -> assert the package is PRIVATE (fails otherwise) -> pull test of the pushed DIGEST
+# (same checks on the pulled image). The manifests take the DIGEST from the job output / summary, never the tag.
 on:
   workflow_dispatch:
 
@@ -15,53 +17,74 @@ env:
 jobs:
   push:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    # packages: write on this job only
+    timeout-minutes: 30
+    # packages: write (and the attestation permissions) on this job only
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
       - name: Pin the base image by digest
         id: base
         run: |
           d=$(docker buildx imagetools inspect node:22-bookworm-slim --format '{{.Manifest.Digest}}')
           echo "image=node@$d" >> "$GITHUB_OUTPUT"
-      - name: Build
-        run: >
-          docker build --build-arg NODE_IMAGE="${{ steps.base.outputs.image }}"
-          --label org.opencontainers.image.source="https://github.com/${{ github.repository }}"
-          --label org.opencontainers.image.revision="${{ github.sha }}"
-          -t "$IMAGE:sha-${{ github.sha }}" .
-      - name: Same checks as the image workflow (non-root, no key files, no cluster tooling, health)
-        run: |
-          test "$(docker image inspect "$IMAGE:sha-${{ github.sha }}" --format '{{.Config.User}}')" = "10001:10001"
-          docker run --rm --entrypoint sh "$IMAGE:sha-${{ github.sha }}" -c '
-            bad=$(find /app -xdev \( -name "*.key" -o -name "*.pem" -o -name "*.crt" -o -name "*.toml" -o -name ".env*" -o -name "alibaba.yaml" -o -name "kubeconfig*" \) -not -path "*/node_modules/*" -not -path "*/vendor/*")
-            test -z "$bad" || { echo "$bad"; exit 1; }
-            test -z "$(ls -A /app/frontend/server/state)"
-            for t in kubectl docker opa iroha; do command -v "$t" && exit 1; done; exit 0'
-          docker run -d --name lensa "$IMAGE:sha-${{ github.sha }}"
-          for i in $(seq 1 30); do
-            docker exec lensa node -e "fetch('http://127.0.0.1:8790/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" && exit 0
-            sleep 2
-          done
-          docker logs lensa
-          exit 1
-      - name: Log in to ghcr.io
-        env: # the token goes through the environment (masked), never into the script text
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_USER: ${{ github.actor }}
-        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-      - name: Push and print the digest
-        run: |
-          docker push "$IMAGE:sha-${{ github.sha }}"
-          digest=$(docker buildx imagetools inspect "$IMAGE:sha-${{ github.sha }}" --format '{{.Manifest.Digest}}')
-          echo "digest $IMAGE@$digest" | tee -a "$GITHUB_STEP_SUMMARY"
-      # The repositories are public; a package linked to a public repository can become public. After EVERY push an anonymous client must be refused, else the job fails.
+          echo "base image node@$d" >> "$GITHUB_STEP_SUMMARY"
+      - name: Build locally for the image checks (not pushed)
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: rd-lensa:ci
+          build-args: NODE_IMAGE=${{ steps.base.outputs.image }}
+      - name: Image checks on the local build
+        run: deploy/ci/image-checks.sh rd-lensa:ci
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/rd-lensa-frontend:incluster-sha-${{ github.sha }}
+          build-args: NODE_IMAGE=${{ steps.base.outputs.image }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          sbom: true
+          provenance: mode=max
+      # the repository is public: the signed attestation is available (it was not for the private repositories)
+      - if: ${{ github.event.repository.private == false }}
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/rd-lensa-frontend
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      # The repositories are public: after EVERY push an anonymous client must be refused, else the job fails (script + its fake-curl test from the publish-assert-private change).
       - name: Assert the package is private (an anonymous client must be refused)
         run: |
           set -o pipefail # the default `bash -e` has no pipefail: without it `| tee` would hide the assert's failure
-          bash .github/scripts/assert-package-private.sh "${{ github.repository }}" "sha-${{ github.sha }}" | tee -a "$GITHUB_STEP_SUMMARY"
+          bash .github/scripts/assert-package-private.sh "${{ github.repository }}" "${{ steps.build.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Pull test by digest (same checks on the pulled image)
+        # fail-closed: the anonymous assert above only proves "not public" (an unknown package also answers 403); that the image EXISTS is proven only by this authenticated pull of repo@digest
+        run: |
+          set -euo pipefail
+          ref="$IMAGE@${{ steps.build.outputs.digest }}"
+          docker pull "$ref"
+          echo "pulled $ref imageID $(docker image inspect "$ref" --format '{{.Id}}')" | tee -a "$GITHUB_STEP_SUMMARY"
+          deploy/ci/image-checks.sh "$ref"
+      - name: Report the digest
+        run: |
+          { echo "image: $IMAGE@${{ steps.build.outputs.digest }}"; echo "tag: incluster-sha-${{ github.sha }}; SBOM + provenance (mode=max) attached; package visibility asserted private; pull test passed"; } | tee -a "$GITHUB_STEP_SUMMARY"

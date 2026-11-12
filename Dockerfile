@@ -29,6 +29,9 @@ FROM ${NODE_IMAGE} AS runtime
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 \
  && rm -rf /var/lib/apt/lists/*
+# CMD is tsx; npm, npx and corepack are never used at runtime. Their bundled docs carry text that matches a private-key scan and the pod does not need a package manager.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+    /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg /root/.npm /root/.cache /usr/local/share/.cache /tmp/*
 ENV NODE_ENV=production PORT=8790
 WORKDIR /app/frontend
 COPY --from=server-deps /app/frontend/node_modules node_modules
