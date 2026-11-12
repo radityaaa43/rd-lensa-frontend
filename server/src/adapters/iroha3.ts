@@ -268,10 +268,23 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
       // driver grants (consents to this payment leg), then the seller's driver settles; both carry the same one-shot intent.
       const price = amount * PRICE_PER_UNIT;
       const intent = randomBytes(32).toString('hex');
-      if (f.issuer) await driver!.mint({ to: req.from, asset: s.assets.DFABI, amount }); // award: BI mints exactly what it sells (the batch rule needs a balance read)
+      // The grant is a permission on the BUYER's own RD balance, bound to this settlement's intent: it reads nothing of the seller's stock (driver dvp_native.rs
+      // build_grant), so it goes FIRST. An award whose grant is refused then mints nothing; BI cannot be left with DFABI it never sold.
       await driver!.settleGrant(req.to, { to: req.from, give: { asset: s.assets.RD, amount: price }, take: { asset: s.assets.DFABI, amount }, intent });
+      let minted: string | undefined;
+      if (f.issuer) { // award: BI mints exactly what it sells (the batch rule needs a balance read)
+        try { minted = (await driver!.mint({ to: req.from, asset: s.assets.DFABI, amount })).txHash; } catch (e) {
+          console.error(`[iroha3] award ${req.to}: mint DFABI ${amount} gagal setelah izin (grant) diberikan; izin itu terikat intent ini saja dan tidak dipakai (intent ${intent}): ${errMsg(e)}`);
+          throw e;
+        }
+      }
       signer = req.from;
-      hash = (await driver!.dvpNative(req.from, { counterparty: req.to, give: { asset: s.assets.DFABI, amount }, take: { asset: s.assets.RD, amount: price }, intent })).txHash;
+      try {
+        hash = (await driver!.dvpNative(req.from, { counterparty: req.to, give: { asset: s.assets.DFABI, amount }, take: { asset: s.assets.RD, amount: price }, intent })).txHash;
+      } catch (e) {
+        if (minted) console.error(`[iroha3] award ke ${req.to} gagal setelah mint: BI tetap memegang ${amount} DFABI (aset ${s.assets.DFABI}, tx mint ${minted}); BI keeps the minted DFABI, ${errMsg(e)}`);
+        throw e;
+      }
     }
     emit(0, Date.now() - t0);
     emit(1, 0);
@@ -773,6 +786,13 @@ export async function load(stateDir?: string): Promise<ModelAdapter | null> {
     if (!s.drivers || !s.keys) {
       console.error('[iroha3] genesis bukan rantai lama dan state tanpa drivers/keys publik: adapter tidak dimuat (CLI dengan kunci host tidak dipakai di rantai baru)');
       return null;
+    }
+    // Every party needs its driver URL and a public key (ed0120 + 64 hex): a missing one would reach the driver as `to: undefined`.
+    for (const p of Object.keys(PARTIES) as PartyId[]) {
+      if (!s.drivers[p] || !/^ed0120[0-9a-f]{64}$/i.test(s.keys[p] ?? '')) {
+        console.error(`[iroha3] state iroha3: pihak ${p} tanpa driver atau tanpa kunci publik ed0120<64 hex> yang sah: adapter tidak dimuat`);
+        return null;
+      }
     }
     // Keyless: no operator accounts on the new chain (analyst Q16). Signed reads are refused; the lens/history rows stay NOT-RUN in window A.
     const noSigned = async (): Promise<never> => { throw new Error('Pembacaan bertanda tangan tidak tersedia di rantai baru (jendela A: hanya baca tanpa kunci)'); };
