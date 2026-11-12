@@ -25,16 +25,17 @@ describe('F1: load in pod mode', () => {
     vi.stubEnv('LENSA_IN_CLUSTER', '1');
     expect(await load(emptyState())).toBeNull();
   });
-  it('the pod adapter never spawns kubectl: health answers through the gateway; the ledger-dependent reads fail EXPLICITLY (NotAvailableError), never as an empty list', async () => {
-    const a = loadPod(gwOk);
+  it('the pod adapter never spawns kubectl: health answers through the gateway; a ledger read the gateway cannot serve (501) fails EXPLICITLY (NotAvailableError), never as an empty list (F2 has the working reads)', async () => {
+    const gw: GwCall = async (_p, body) => { if (body.op === 'balance') return { amount: '5000' }; if (body.op === 'history') return { records: [] }; throw new Error('Gateway Bank Indonesia gagal (HTTP 501)'); };
+    const a = loadPod(gw);
     expect(await a.health()).toMatchObject({ ready: true });
     await expect(a.history('A', 5)).rejects.toBeInstanceOf(NotAvailableError);
     await expect(a.receipt!('ab'.repeat(32), 'A')).rejects.toBeInstanceOf(NotAvailableError);
     await expect(a.trace!('ab'.repeat(32), 'A')).rejects.toBeInstanceOf(NotAvailableError);
   });
-  it('until the ledger read exists no flow is offered: every capability is disabled with a reason that says so (a tx must not commit and then fail its ledger check)', () => {
+  it('no flow is offered in the pod: every capability is disabled with a reason (a transaction path in the pod is its own GO)', () => {
     const caps = loadPod(gwOk).capabilities();
-    for (const c of Object.values(caps)) { expect(c.enabled).toBe(false); expect((c as { reason: string }).reason).toMatch(/ledger/i); }
+    for (const c of Object.values(caps)) { expect(c.enabled).toBe(false); expect((c as { reason: string }).reason).toMatch(/pod/i); }
   });
 });
 
