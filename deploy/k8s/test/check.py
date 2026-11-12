@@ -343,6 +343,50 @@ probe_refuse("an empty targets file", "# nothing\n"); probe_refuse("a missing po
 os.remove(tf)
 check(run(["probe"], {"LENSA_IMAGE": IMAGE}).returncode != 0, "probe without LENSA_PROBE_TARGETS is refused")
 
+# ---- ingress (R24 interim public Lensa; PR-C): Issuer HTTP-01 without e-mail, Ingress with a path ALLOW-LIST (no Prefix "/"), annotation limits, NetworkPolicy only from the ingress-nginx pods
+HOST = "eksplorasi-rd.kld.bi-sandbox.com"
+IN = {"LENSA_PUBLIC_HOST": HOST}
+ing = docs(["ingress"], IN)
+iss = name(ing, "Issuer", "lensa-acme"); acme = iss["spec"].get("acme", {})
+check(acme.get("server") == "https://acme-staging-v02.api.letsencrypt.org/directory", f"default ACME server is the STAGING one: {acme.get('server')}")
+check("email" not in acme, "Issuer: no ACME e-mail (the field is optional; no personal address)")
+check(acme.get("solvers") == [{"http01": {"ingress": {"ingressClassName": "nginx"}}}] and acme.get("privateKeySecretRef", {}).get("name") == "lensa-acme-account", f"Issuer solver/key ref {acme.get('solvers')} {acme.get('privateKeySecretRef')}: HTTP-01 on class nginx, the account key lives in a Secret in the namespace, never in git")
+check(docs(["ingress"], {**IN, "LENSA_ACME": "prod"}) and name(docs(["ingress"], {**IN, "LENSA_ACME": "prod"}), "Issuer", "lensa-acme")["spec"]["acme"]["server"] == "https://acme-v02.api.letsencrypt.org/directory", "LENSA_ACME=prod selects the production server")
+check(run(["ingress"], {**IN, "LENSA_ACME": "x"}).returncode != 0, "LENSA_ACME other than staging|prod is refused")
+ig = name(ing, "Ingress", "lensa-public"); isp = ig["spec"]; ian = ig["metadata"].get("annotations", {})
+check(isp.get("ingressClassName") == "nginx" and ian.get("cert-manager.io/issuer") == "lensa-acme" and "cert-manager.io/cluster-issuer" not in ian, f"ingress class/issuer {isp.get('ingressClassName')} {ian.get('cert-manager.io/issuer')}: the namespaced Issuer, class nginx")
+check(isp.get("tls") == [{"hosts": [HOST], "secretName": "lensa-public-tls"}] and [r["host"] for r in isp["rules"]] == [HOST], f"ingress tls/host {isp.get('tls')}")
+check(ian.get("nginx.ingress.kubernetes.io/ssl-redirect") == "true" and ian.get("nginx.ingress.kubernetes.io/force-ssl-redirect") == "true", "ingress: http redirects to https")
+check(ian.get("nginx.ingress.kubernetes.io/proxy-body-size") == "64k", "ingress: request body limit 64k")
+check(all(ian.get(f"nginx.ingress.kubernetes.io/{k}") for k in ("limit-rps", "limit-connections", "limit-burst-multiplier")), "ingress: rate limits (rps, connections, burst) = the interim throttle")
+check(not any("snippet" in k or "auth" in k for k in ian), f"ingress: no snippet annotation (the shared controller does not allow them) and no auth annotation: {sorted(ian)}")
+paths = [(p["path"], p["pathType"], p["backend"]["service"]["name"], p["backend"]["service"]["port"]["number"]) for p in isp["rules"][0]["http"]["paths"]]
+check(all((x[2], x[3]) == ("lensa", 8790) for x in paths), "every ingress path goes to Service lensa:8790")
+def matches(url):  # Kubernetes Ingress path semantics: Exact = equal, Prefix = whole segments
+    u = url.split("?")[0]
+    return any((t == "Exact" and u == p) or (t == "Prefix" and (p == "/" or u == p or u.startswith(p.rstrip("/") + "/"))) for p, t, *_ in paths)
+check(not any(p == "/" and t == "Prefix" for p, t, *_ in paths), "no Prefix / path: that would route everything, hidden routes included")
+for ok in ["/", "/robots.txt", "/assets/index-abc.js", "/besu/zeto/dasbor", "/besu/zeto/dasbor?pihak=A", "/fabricx/riwayat", "/iroha3/lensa/0xabc", "/api/meta", "/api/health", "/api/history", "/api/network", "/api/receipt", "/api/trace", "/api/balance"]:
+    check(matches(ok), f"public path must be routed: {ok}")
+for hidden in ["/api/policy", "/api/policy/usage", "/api/policy/bi/approve", "/api/stress", "/api/stress/csv", "/api/stress/events", "/api/preflight-capacity", "/api/readyz", "/api/livez", "/api/tx", "/api/tx/abc/events", "/api/login", "/admin", "/.env", "/metrics", "/api"]:
+    check(not matches(hidden), f"path must NOT be routed at the entry: {hidden}")
+npi = name(ing, "NetworkPolicy", "allow-ingress-controller")["spec"]
+check(npi["podSelector"] == {"matchLabels": {"app": "lensa", "role": "server"}} and npi["policyTypes"] == ["Ingress"], f"ingress NP selects the lensa server pod only: {npi['podSelector']}")
+check(npi["ingress"] == [{"from": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}, "podSelector": {"matchLabels": {"app": "ingress-nginx"}}}], "ports": [{"protocol": "TCP", "port": 8790}]}], f"ingress NP: ONE rule, only the ingress-nginx pods of kube-system, 8790: {npi['ingress']}")
+check(not any("ipBlock" in str(r) for r in npi["ingress"]), "ingress NP: no ipBlock, never 0.0.0.0/0")
+for d in ing: check(d["metadata"].get("namespace") == "rd-lensa", f"ingress part: {d['kind']}/{d['metadata']['name']} namespace")
+check(not of(ing, "Secret") and not any("PRIVATE" in str(d) for d in ing), "ingress part renders no Secret and no key material")
+for bad in ["Bad Host", "a/b", "host;x", "", "-x.com", "x..com", "*.example.com"]:
+    check(run(["ingress"], {"LENSA_PUBLIC_HOST": bad}).returncode != 0, f"LENSA_PUBLIC_HOST {bad!r} must be refused")
+check(run(["ingress"], {}).returncode != 0, "ingress without LENSA_PUBLIC_HOST is refused")
+# the pod config: LENSA_PUBLIC_READONLY only when asked, never through the env file
+pub = docs(["app"], {**ENV, "LENSA_PUBLIC": "1"})
+check(name(pub, "ConfigMap", "lensa-env")["data"].get("LENSA_PUBLIC_READONLY") == "1", "LENSA_PUBLIC=1 puts LENSA_PUBLIC_READONLY=1 in the ConfigMap")
+check("LENSA_PUBLIC_READONLY" not in name(app, "ConfigMap", "lensa-env")["data"], "default render: not public")
+pe = os.path.join(fx, "_pub.env"); open(pe, "w").write("LENSA_PUBLIC_READONLY=1\n")
+check(run(["app"], {"LENSA_ENV_FILE": pe, "LENSA_IMAGE": IMAGE}).returncode != 0, "LENSA_PUBLIC_READONLY through the env file is refused (only LENSA_PUBLIC=1)"); os.remove(pe)
+check(run(["app"], {**ENV, "LENSA_PUBLIC": "2"}).returncode != 0, "LENSA_PUBLIC other than 1 is refused")
+
 allx = docs(["all"], {**GW, **ENV})
 check([d["kind"] for d in allx][0] == "Namespace", "all: namespace first")
 check(not any(d["kind"] == "Secret" for d in allx), "no render path ever emits a Secret")
