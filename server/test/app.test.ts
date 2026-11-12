@@ -121,6 +121,36 @@ test('503 when adapter not ready', async () => {
   expect(res.json()).toEqual({ reason: 'Zeto belum siap: node mati' });
 });
 
+// R21 (R2 live, 2026-11-12): with Paladin node1 (BI) offline a Zeto A->B write answered 503 "Zeto belum siap" although settlement does not need BI. An adapter that offers
+// readyFor(req) is gated on the nodes of the request's own parties; health() still shows every node, so BI down stays visible. Adapters without it (Noto: BI = notary) keep
+// the whole-platform health gate.
+test('a write is gated on readyFor(req) when the adapter has it: platform health not ready (BI node down) but the request parties ready = accepted', async () => {
+  const z = fakeAdapter('zeto', { ready: false, readyFor: () => ({ ready: true, detail: 'node pengirim dan penerima siap' }) });
+  expect((await post(make({ zeto: z }), '/api/tx', req)).statusCode).toBe(202);
+});
+
+test('readyFor says a party node is down: 503 naming it, even when the platform health is ready', async () => {
+  const z = fakeAdapter('zeto', { ready: true, readyFor: () => ({ ready: false, detail: 'Node Paladin 2 tidak menjawab' }) });
+  const res = await post(make({ zeto: z }), '/api/tx', req);
+  expect(res.statusCode).toBe(503);
+  expect(res.json()).toEqual({ reason: 'Zeto belum siap: Node Paladin 2 tidak menjawab' });
+});
+
+test('readyFor gets the request (from, to, flow); /api/health still reports the platform not ready (node1 down stays visible)', async () => {
+  const seen: unknown[] = [];
+  const z = fakeAdapter('zeto', { ready: false, readyFor: (r) => { seen.push([r.from, r.to, r.flow]); return { ready: true, detail: 'ok' }; } });
+  const app = make({ zeto: z });
+  await post(app, '/api/tx', req);
+  expect(seen).toEqual([[req.from, req.to, req.flow]]);
+  expect((await app.inject('/api/health')).json().models.zeto.ready).toBe(false);
+});
+
+test('an adapter WITHOUT readyFor (Noto: BI is the notary) with the platform not ready is still 503', async () => {
+  const n = fakeAdapter('noto', { ready: false });
+  const res = await post(make({ noto: n }), '/api/tx', { ...req, model: 'noto' });
+  expect(res.statusCode).toBe(503);
+});
+
 test('503 when the model has no adapter', async () => {
   const res = await post(make(), '/api/tx', { ...req, model: 'noto' });
   expect(res.statusCode).toBe(503);
@@ -167,6 +197,38 @@ test('issue flows skip the balance check', async () => {
   expect(res.statusCode).toBe(202);
   expect((await post(make({ zeto: z }), '/api/tx', { ...req, flow: 'dfabi-issue', from: 'BI' })).statusCode).toBe(202);
   expect(asked).toEqual([]);
+});
+
+test('BI down, Zeto A->B settles: the result event still arrives with reportPending and a placeholder BI lens; the other lenses are unchanged', async () => {
+  const z = fakeAdapter('zeto', { ready: false, readyFor: () => ({ ready: true, detail: 'ok' }) });
+  const run0 = z.run.bind(z); const lens0 = z.lens.bind(z);
+  z.run = async (r, a, on) => ({ ...(await run0(r, a, on)), reportPending: 'Laporan ke BI tertunda' });
+  z.lens = async (r, res, p) => { if (p === 'BI') throw new Error('Request failed with status code 503'); return lens0(r, res, p); };
+  const a = make({ zeto: z });
+  const base = await listen(a);
+  const res = await post(a, '/api/tx', req);
+  expect(res.statusCode).toBe(202);
+  const events = await readSse(base, `/api/tx/${res.json().runId}/events`);
+  expect(events.find((e) => e.event === 'error')).toBeUndefined();
+  const result = events.find((e) => e.event === 'result')!.data;
+  expect(result.reportPending).toBe('Laporan ke BI tertunda');
+  expect(result.lenses.map((l: any) => l.party)).toEqual(['BI', 'A', 'B', 'C']);
+  expect(result.lenses[0]).toMatchObject({ party: 'BI', verdict: 'partial', amount: null });
+  expect(JSON.stringify(result)).not.toMatch(/status code 503/); // the raw error stays in the server log
+});
+
+test('BI lens failing WITHOUT a pending report still fails the tx (no silent degradation), and a non-BI lens failure fails it too', async () => {
+  const z = fakeAdapter('zeto'); const lens0 = z.lens.bind(z);
+  z.lens = async (r, res, p) => { if (p === 'BI') throw new Error('bi lens boom'); return lens0(r, res, p); };
+  const a = make({ zeto: z }); const base = await listen(a);
+  const e1 = await readSse(base, `/api/tx/${(await post(a, '/api/tx', req)).json().runId}/events`);
+  expect(e1.find((e) => e.event === 'error')).toBeDefined();
+  const z2 = fakeAdapter('zeto'); const l2 = z2.lens.bind(z2); const r2 = z2.run.bind(z2);
+  z2.run = async (r, a2, on) => ({ ...(await r2(r, a2, on)), reportPending: 'x' });
+  z2.lens = async (r, res, p) => { if (p === 'A') throw new Error('a lens boom'); return l2(r, res, p); };
+  const b = make({ zeto: z2 }); const base2 = await listen(b);
+  const e2 = await readSse(base2, `/api/tx/${(await post(b, '/api/tx', req)).json().runId}/events`);
+  expect(e2.find((e) => e.event === 'error')).toBeDefined();
 });
 
 test('202 then SSE delivers 4 steps and result with 4 lenses in order BI,A,B,C', async () => {

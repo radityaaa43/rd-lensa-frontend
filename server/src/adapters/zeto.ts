@@ -10,6 +10,7 @@ import { besuNetwork, besuReceipt, holdBack, joinInFlight, paladinNodeReceipt, r
 import type { EventLike } from './noto.ts';
 import { afterLock } from '../deadline.ts';
 import { zetoConnections } from './zeto-connections.ts';
+import { nodesReady, settleReports, withIoFallback } from './zeto-degrade.ts';
 import { readState } from '../state.ts';
 import type { Sample } from '../stats.ts';
 import { REPORT_PAGE, ZETO_MOVEMENT_TOPICS, buildReport } from '../../vendor/besu/zeto/src/bi-report.ts';
@@ -310,9 +311,9 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
 
   // The outputs/inputs a tx created/spent on one Zeto contract, read from BI's own indexer. Waits until
   // BI's node has indexed the block, so BI never judges a report against a chain it has not read yet.
-  async function ioOf(token: Token, txHash: string): Promise<Io> {
+  async function ioOf(token: Token, txHash: string, via: PartyId = 'BI'): Promise<Io> {
     for (const end = Date.now() + DEADLINE_MS; Date.now() < end; await sleep(500)) {
-      const { outputs, inputs } = await within(chainIO(P.BI.c, txHash, address[token]), left(end), 'Baca tx di node BI');
+      const { outputs, inputs } = await within(chainIO(P[via].c, txHash, address[token]), left(end), `Baca tx di node ${PARTIES[via].name}`);
       if (outputs.length) return { token, outputs: outputs.map(String), inputs: inputs.map(String) };
     }
     throw new Error(`Node BI belum mengindeks tx ${txHash}`);
@@ -388,11 +389,11 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
     emit(2, tx.receiptAt - tx.publicAt);
 
     const txHash = tx.receipt.transactionHash;
-    const io = await Promise.all(tokens.map((t) => ioOf(t, txHash)));
-    await after();
-    await untilVerified(io.flatMap((i) => i.outputs));
-    emit(3, Date.now() - tx.receiptAt);
-    return { txHash, block: tx.receipt.blockNumber, steps, context: { io } satisfies Ctx };
+    // BI down (R21): the outputs are read from the sender's node instead, and a failed report / unverified report is "report pending", never a failed tx.
+    const io = await Promise.all(tokens.map((t) => withIoFallback(() => ioOf(t, txHash), () => ioOf(t, txHash, req.from))));
+    const { pending } = await settleReports(after, () => untilVerified(io.flatMap((i) => i.outputs)));
+    if (!pending) emit(3, Date.now() - tx.receiptAt);
+    return { txHash, block: tx.receipt.blockNumber, steps, context: { io } satisfies Ctx, ...(pending ? { reportPending: pending } : {}) };
   }
 
   // Proves a node has indexed the tx before its (empty) answer is read as "holds nothing".
@@ -527,9 +528,15 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
     id: 'zeto',
     stepLabels: ['Bangun bukti ZK', 'Kirim ke node Paladin', 'Masuk block Besu', 'Laporan BI terverifikasi'],
     capabilities: () => Object.fromEntries((Object.keys(FLOWS) as FlowId[]).map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
+    // Platform health names EVERY node that is down (BI's node 1 too: never hidden); a write is gated on readyFor() = its own parties' nodes only (R21).
     async health() {
-      const heights = await Promise.all(clients.map((c) => c.bidx.getConfirmedBlockHeight()));
-      return { ready: true, detail: `4 node Paladin siap, block ${heights[0]}` };
+      let height: unknown;
+      const probe = async (id: PartyId) => { const h = await P[id].c.bidx.getConfirmedBlockHeight(); if (id === 'BI') height = h; };
+      const r = await nodesReady(probe, PARTY_IDS);
+      return r.ready ? { ready: true, detail: `4 node Paladin siap, block ${height}` } : r;
+    },
+    async readyFor(req: FlowRequest) {
+      return nodesReady(async (id) => { await P[id].c.bidx.getConfirmedBlockHeight(); }, [...new Set<PartyId>([req.from, req.to])]);
     },
     balanceOf: balance,
     run,
