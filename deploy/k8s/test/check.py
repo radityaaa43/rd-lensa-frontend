@@ -198,6 +198,67 @@ check(c.get("ports") == [{"name": "http", "containerPort": 8790, "protocol": "TC
 for d in app:
     check(d["metadata"].get("namespace") == "rd-lensa" and d["metadata"].get("labels", {}).get("part-of") == "rd-lensa", f"app: {d['kind']}/{d['metadata']['name']} namespace/label")
 
+# ---- dryrun (5b): candidate verify Job, rendered from a candidate dir at apply time. No egress, no certs, no tokens read, never --apply.
+import hashlib, io, shutil, tarfile, tempfile
+def mk_candidate(extra=None, key_member=None, key_body=None, drop=None, stray=None):
+    d = tempfile.mkdtemp(); expect = []
+    for n in (1, 2, 3, 4):
+        os.makedirs(f"{d}/node{n}")
+        for k in ("bi", "bank"):
+            rel = f"node{n}/{k}.tar.gz"
+            if rel == drop: continue
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w:gz") as t:
+                for name, body in ((".manifest", b'{"revision":"r1"}'), (f"{k}/config/data.json", b'{"policy":{}}'), *([(key_member, key_body or b"x")] if key_member and rel == "node1/bi.tar.gz" else [])):
+                    ti = tarfile.TarInfo(name); ti.size = len(body); t.addfile(ti, io.BytesIO(body))
+            open(f"{d}/{rel}", "wb").write(buf.getvalue()); expect.append(f"{hashlib.sha256(buf.getvalue()).hexdigest()}  {rel}")
+    if stray: open(f"{d}/{stray}", "w").write("x")
+    ef = f"{d}.expect"; open(ef, "w").write("\n".join(expect) + "\n")
+    return d, ef
+cand, cexp = mk_candidate()
+DRY = {"LENSA_IMAGE": IMAGE, "LENSA_CANDIDATE_DIR": cand, "LENSA_CANDIDATE_EXPECT": cexp}
+dry = docs(["dryrun"], DRY)
+cmc = name(dry, "ConfigMap", "lensa-candidate")
+check(sorted(cmc.get("binaryData", {})) == sorted(f"node{n}_{k}.tar.gz" for n in (1, 2, 3, 4) for k in ("bi", "bank")) and "expect.sha256" in cmc.get("data", {}), f"lensa-candidate keys {sorted(cmc.get('binaryData', {}))} {sorted(cmc.get('data', {}))}")
+job = name(dry, "Job", "lensa-dryrun"); jp = job["spec"]["template"]; jpod = jp["spec"]; jc = jpod["containers"][0]
+check(jp["metadata"]["labels"].get("app") == "lensa-dryrun" and jp["metadata"]["labels"].get("app") != "lensa", f"dryrun pod label {jp['metadata']['labels']}: must not be app=lensa (Service lensa and egress-party-gateways must not select it)")
+check(job["spec"].get("backoffLimit") == 0 and job["spec"].get("ttlSecondsAfterFinished", 0) > 0 and 0 < job["spec"].get("activeDeadlineSeconds", 0) <= 600, f"dryrun Job spec {job['spec'].get('backoffLimit')} {job['spec'].get('ttlSecondsAfterFinished')} {job['spec'].get('activeDeadlineSeconds')}: no retries, TTL, deadline")
+check(jc["image"] == IMAGE and jpod.get("serviceAccountName") == "lensa" and jpod.get("automountServiceAccountToken") is False and jpod.get("restartPolicy") == "Never", "dryrun: same digest, SA lensa, no token, restartPolicy Never")
+cmd = " ".join(jc.get("command", []) + jc.get("args", []))
+check("policy-publish.ts" in cmd and "--candidate=/candidate" in cmd and "--expect-sha256-file=/expect/expect.sha256" in cmd, f"dryrun command {cmd}")
+check("--apply" not in cmd and "--out" not in cmd, "dryrun command must not carry --apply (verify only, no sink write)")
+envs = {e["name"]: e.get("value") for e in jc.get("env", [])}
+check(envs.get("LENSA_IN_CLUSTER") == "1" and envs.get("LENSA_SINK_TOKENS_DIR") and not any(k in envs for k in ("OPA_KEYS_DIR", "KUBECONFIG", "OPA_BIN")) and not jc.get("envFrom"), f"dryrun env {sorted(envs)}: pod mode signal only; no key, no kubeconfig")
+jcs = jc.get("securityContext", {}); jps = jpod.get("securityContext", {})
+check(jcs.get("allowPrivilegeEscalation") is False and jcs.get("readOnlyRootFilesystem") is True and jcs.get("capabilities") == {"drop": ["ALL"]} and jps.get("runAsNonRoot") is True and jps.get("runAsUser") == 10001 and jps.get("seccompProfile") == {"type": "RuntimeDefault"}, "dryrun: restricted security context")
+jm = {m["mountPath"]: m for m in jc.get("volumeMounts", [])}
+check(set(jm) == {"/tmp", "/candidate", "/expect"} and jm["/candidate"].get("readOnly") is True and jm["/expect"].get("readOnly") is True, f"dryrun mounts {sorted(jm)}: no certs, no tokens, no state")
+jv = jpod.get("volumes", [])
+check(not any("secret" in v or "projected" in v or "persistentVolumeClaim" in v or "hostPath" in v for v in jv), "dryrun: no Secret, no PVC, no hostPath volume")
+check(all(v.get("configMap", {}).get("defaultMode") == 0o444 for v in jv if "configMap" in v), "dryrun: candidate files 0444")
+# network: nothing but default-deny and the namespace DNS policy applies to the Job pod, and no policy that selects app=lensa applies to it
+check(not of(dry, "NetworkPolicy"), "dryrun renders no NetworkPolicy: the verify path makes no network call, default-deny stands")
+for pol in of(base, "NetworkPolicy"):
+    sel = pol["spec"]["podSelector"].get("matchLabels", {})
+    if pol["metadata"]["name"] in ("default-deny-all", "allow-dns-egress"): check(sel == {}, f"{pol['metadata']['name']} must select every pod")
+    else: check(sel.get("app") != "lensa-dryrun" and sel != {}, f"{pol['metadata']['name']} must not select the dryrun pod")
+check(name(app, "Service", "lensa")["spec"]["selector"] == {"app": "lensa"}, "Service lensa selects app=lensa only (never the dryrun Job)")
+# the candidate is public bundle sources only: render refuses key-like members, PEM key content, a stray file, a missing tar, a sha mismatch, a wrong expect file, a tag image
+def refuse(why, **kw):
+    d, e = mk_candidate(**kw)
+    check(run(["dryrun"], {**DRY, "LENSA_CANDIDATE_DIR": d, "LENSA_CANDIDATE_EXPECT": e}).returncode != 0, f"dryrun must refuse: {why}")
+    shutil.rmtree(d); os.remove(e)
+refuse("a tar member with a key-like name", key_member="x/server.key")
+refuse("a tar member that is a .pem", key_member="x/ca.pem")
+refuse("PEM PRIVATE KEY content inside a tar", key_member="x/notes.txt", key_body=b"-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n")
+refuse("a stray file in the candidate dir", stray="stray.txt")
+refuse("a missing tar", drop="node3/bank.tar.gz")
+first = open(cexp).read().split()[0]; open(cexp, "w").write(open(cexp).read().replace(first, "0" * 64, 1))
+check(run(["dryrun"], DRY).returncode != 0, "dryrun must refuse a sha256 mismatch against the expect file")
+check(run(["dryrun"], {**DRY, "LENSA_IMAGE": "ghcr.io/radityaaa43/rd-lensa-frontend:latest"}).returncode != 0, "dryrun: an image without digest is refused")
+check(run(["dryrun"], {"LENSA_IMAGE": IMAGE}).returncode != 0, "dryrun without a candidate dir is refused")
+shutil.rmtree(cand); os.remove(cexp)
+
 allx = docs(["all"], {**GW, **ENV})
 check([d["kind"] for d in allx][0] == "Namespace", "all: namespace first")
 check(not any(d["kind"] == "Secret" for d in allx), "no render path ever emits a Secret")

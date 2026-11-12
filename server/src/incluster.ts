@@ -1,9 +1,15 @@
+import { accessSync, constants } from 'node:fs';
 // In-cluster mode: the rd-lensa pod's manifest sets LENSA_IN_CLUSTER=1. The pod holds no kube credential and no signing key (final-design/lensa AFTER),
 // so it refuses to start when one is configured; the host (variable unset) keeps its kubeconfig and keys unchanged.
 type Env = Record<string, string | undefined>;
 const FORBIDDEN = ['KUBECONFIG', 'FABRICX_KUBECONFIG', 'OPA_KEYS_DIR', 'DEPLOYER_KEY'];
 
 export const inCluster = (env: Env = process.env): boolean => env.LENSA_IN_CLUSTER === '1';
+
+// A read-only mount (Secret, ConfigMap) is not writable for us: access(2) answers EROFS/EACCES. The pod-mode relaxations apply only to such a path.
+export function readOnlyMount(path: string): boolean {
+  try { accessSync(path, constants.W_OK); return false; } catch { return true; }
+}
 
 export function assertInClusterEnv(env: Env = process.env): void {
   if (env.LENSA_IN_CLUSTER !== undefined && env.LENSA_IN_CLUSTER !== '1') throw new Error('LENSA_IN_CLUSTER must be 1 or unset');

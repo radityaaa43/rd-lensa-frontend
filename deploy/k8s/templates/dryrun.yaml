@@ -1,0 +1,66 @@
+# 5b: the Kebijakan candidate VERIFY Job (pod mode, no sink IO). Rendered by ../render.sh dryrun; ${IMAGE} is the ghcr digest reference.
+# It runs `policy-publish --candidate` WITHOUT --apply: it hashes the 8 verified bundle sources against the expect file and prints what the gateways would read; it makes
+# no network call, so it has no egress (default-deny stands), no mTLS certs and no tokens (LENSA_SINK_TOKENS_DIR only has to be set: the CLI refuses without it and
+# does not read it before an --apply). Its pod label is NOT app=lensa: Service lensa and egress-party-gateways must never select it. The Job removes itself (TTL).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: lensa-dryrun
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa, app: lensa-dryrun}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: {part-of: rd-lensa, app: lensa-dryrun}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: lensa
+      automountServiceAccountToken: false
+      imagePullSecrets: [{name: ghcr-pull}]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: dryrun
+          image: ${IMAGE}
+          command: ["../node_modules/.bin/tsx", "src/cli/policy-publish.ts", "--candidate=/candidate", "--expect-sha256-file=/expect/expect.sha256", "--state-dir=/tmp/policy-state"]
+          env:
+            - {name: LENSA_IN_CLUSTER, value: "1"}
+            - {name: LENSA_SINK_TOKENS_DIR, value: /sink-tokens}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: candidate, mountPath: /candidate, readOnly: true}
+            - {name: expect, mountPath: /expect, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: candidate
+          configMap:
+            name: lensa-candidate
+            defaultMode: 0444
+            items:
+              - {key: node1_bi.tar.gz, path: node1/bi.tar.gz}
+              - {key: node1_bank.tar.gz, path: node1/bank.tar.gz}
+              - {key: node2_bi.tar.gz, path: node2/bi.tar.gz}
+              - {key: node2_bank.tar.gz, path: node2/bank.tar.gz}
+              - {key: node3_bi.tar.gz, path: node3/bi.tar.gz}
+              - {key: node3_bank.tar.gz, path: node3/bank.tar.gz}
+              - {key: node4_bi.tar.gz, path: node4/bi.tar.gz}
+              - {key: node4_bank.tar.gz, path: node4/bank.tar.gz}
+        - name: expect
+          configMap:
+            name: lensa-candidate
+            defaultMode: 0444
+            items: [{key: expect.sha256, path: expect.sha256}]

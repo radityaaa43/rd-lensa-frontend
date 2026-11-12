@@ -17,6 +17,7 @@ import { readSourceTar } from '../policy/source-tar.ts';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PartyId } from '../domain.ts';
+import { inCluster, readOnlyMount } from '../incluster.ts';
 import { Opa } from '../policy/opa.ts';
 import { buildBundles, revisionOf, versionOf, type PublisherTiming } from '../policy/publish.ts';
 import type { GatewayBundles } from '../policy/kube.ts';
@@ -93,14 +94,17 @@ async function runCandidate(dir: string, expectFile: string | undefined, apply: 
   const fail = (msg: string) => { out(`refused: ${msg}`); return 5; };
   if (want.size !== TARS.length || !TARS.every((t) => want.has(t))) return fail(`the expect file must list exactly: ${TARS.join(', ')}`);
   let st; try { st = lstatSync(dir); } catch { return fail(`candidate directory ${dir} not found`); }
-  if (!st.isDirectory() || (st.mode & 0o077) !== 0) return fail('the candidate directory must be a real directory with mode 0700 (it must not change between the verdict and the apply)');
+  // pod mode (LENSA_IN_CLUSTER=1) AND a read-only mount (the dry-run Job's ConfigMap): it cannot change under us, so 0700 is not needed there; the host keeps 0700 strict
+  const pod = inCluster(env) && readOnlyMount(dir);
+  if (!st.isDirectory() || (!pod && (st.mode & 0o077) !== 0)) return fail('the candidate directory must be a real directory with mode 0700 (it must not change between the verdict and the apply)');
   const allowed = new Set([...TARS.map((t) => t.split('/')[0]!), 'summary.txt']);
-  for (const e of readdirSync(dir)) if (!allowed.has(e)) return fail(`extra entry ${e} in the candidate directory`);
+  for (const e of readdirSync(dir)) if (!allowed.has(e) && !(pod && e.startsWith('..'))) return fail(`extra entry ${e} in the candidate directory`); // `..data` / `..<timestamp>`: bookkeeping of a ConfigMap mount
   const bytes = new Map<string, Buffer>();
   for (const t of TARS) {
     const f = join(dir, t);
     let s; try { s = lstatSync(f); } catch { return fail(`missing tar ${t}`); }
     if (!s.isFile()) return fail(`${t} is not a regular file`);
+    if (pod && (s.mode & 0o222) !== 0) return fail(`${t} has a write bit (a read-only mount has none)`);
     bytes.set(t, readFileSync(f));
   }
   for (let n = 1; n <= 4; n++) for (const e of readdirSync(join(dir, `node${n}`))) if (!['bi.tar.gz', 'bank.tar.gz'].includes(e)) return fail(`extra entry node${n}/${e}`);
