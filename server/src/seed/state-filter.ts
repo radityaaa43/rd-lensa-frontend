@@ -138,13 +138,21 @@ export function planSeed(srcDir: string, opts: SeedOptions): SeedPlan {
     }
     if (existsSync(join(dir, 'trades.jsonl'))) {
       const buf = read('noto/trades.jsonl');
+      // trades.jsonl is an APPEND-ONLY log: loadTrades (vendor/besu/noto+pente/bond/src/lib/platform.ts:151-162) keeps the LATEST line per tradeId (a later line, e.g. a recovery, supersedes
+      // earlier ones). The check follows exactly that rule: a PENDING line that a later line of the same tradeId superseded is history, only a LATEST status that is PENDING (or not a
+      // TradeStatus, outright.ts:41) refuses. A line without a tradeId can never be shown superseded, so it is keyed by its own line. The file is carried byte-identical.
+      const latest = new Map<string, { line: number; status: unknown }>();
       buf.toString('utf8').split('\n').forEach((line, i) => {
         if (!line.trim()) return;
         let t: Record<string, unknown> | undefined;
         try { t = JSON.parse(line); } catch { problems.push(`noto/trades.jsonl: line ${i + 1} is not valid JSON (refused)`); return; }
-        if (t && t.status === 'PENDING') problems.push(`noto/trades.jsonl: line ${i + 1} is PENDING: its recovery is impossible on the new nodes (refused)`);
+        if (t && typeof t === 'object') latest.set(typeof t.tradeId === 'string' ? t.tradeId : `line ${i + 1}`, { line: i + 1, status: t.status });
         screen(t, 'noto/trades.jsonl', HEX64_OK['noto/trades.jsonl'], problems);
       });
+      for (const [id, { line, status }] of latest) {
+        if (status === 'PENDING') problems.push(`noto/trades.jsonl: trade ${id} (latest line ${line}) is PENDING: its recovery is impossible on the new nodes (refused)`);
+        else if (!['SETTLED', 'ROLLED_BACK', 'FAILED'].includes(status as string)) problems.push(`noto/trades.jsonl: trade ${id} (latest line ${line}) has an unknown status (refused)`);
+      }
       files.push({ path: 'noto/trades.jsonl', content: buf });
     }
   }
