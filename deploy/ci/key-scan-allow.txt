@@ -1,0 +1,2 @@
+# Files in the Lensa image that may contain a PEM PRIVATE KEY header, one per line: `<absolute path> <sha256>`.
+# Empty by default. Anything else fails deploy/ci/image-checks.sh. A line needs a reason in the PR that adds it.
