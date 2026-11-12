@@ -77,6 +77,16 @@ check(any("deploy/ci/image-checks.sh" in s.get("run", "") for s in img["jobs"]["
 check("push: true" not in open(f"{root}/.github/workflows/image.yml").read(), "image.yml must not push")
 check("deploy/ci/**" in img[True]["pull_request"]["paths"], "image.yml must run when deploy/ci changes")
 
+# runtime stage: npm/npx/corepack are not needed (CMD is tsx) and carry config docs that look like key material to the PEM scan; removed as root before USER
+df = open(f"{root}/Dockerfile").read()
+rt = df[df.index("AS runtime"):]
+check(re.search(r"rm -rf /usr/local/lib/node_modules/npm\b.*corepack.*/usr/local/bin/npm\b.*npx.*corepack", rt, re.S) is not None
+      and rt.index("/usr/local/lib/node_modules") < rt.index("USER 10001"), "Dockerfile runtime stage must remove npm, npx and corepack as root before USER 10001")
+check("tsx" in rt.split("CMD")[-1] and "npm" not in rt.split("CMD")[-1], "runtime CMD must not use npm")
+check("npm npx corepack" in open(f"{here}/image-checks.sh").read(), "image-checks.sh must fail when npm/npx/corepack are in the image")
+pl = [s for s in steps if "Pull test" in s.get("name", "")]
+check(pl and "set -euo pipefail" in pl[0]["run"], "the pull test must be fail-closed (set -euo pipefail: any pull error is exit 1)")
+
 # ---- image-checks.sh behaviour with a docker shim (no docker, no network)
 script = f"{here}/image-checks.sh"
 check(os.stat(script).st_mode & stat.S_IXUSR, "image-checks.sh must be executable")

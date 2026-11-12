@@ -78,7 +78,9 @@ jobs:
           set -o pipefail # the default `bash -e` has no pipefail: without it `| tee` would hide the assert's failure
           bash .github/scripts/assert-package-private.sh "${{ github.repository }}" "${{ steps.build.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Pull test by digest (same checks on the pulled image)
+        # fail-closed: the anonymous assert above only proves "not public" (an unknown package also answers 403); that the image EXISTS is proven only by this authenticated pull of repo@digest
         run: |
+          set -euo pipefail
           ref="$IMAGE@${{ steps.build.outputs.digest }}"
           docker pull "$ref"
           deploy/ci/image-checks.sh "$ref"
