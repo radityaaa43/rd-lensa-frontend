@@ -37,7 +37,7 @@ function fixture(over: { contract?: unknown; zeto?: unknown; stealth?: unknown; 
   put('noto/contract-data-2026-11-12T00-00-00-000Z.json', JSON.stringify(over.contract ?? contract()));
   utimesSync(join(d, 'noto/contract-data-2026-11-12T00-00-00-000Z.json'), new Date(over.contractAge ?? NOW), new Date(over.contractAge ?? NOW));
   put('noto/trades.jsonl', over.trades ?? `${trade()}\n${trade({ tradeId: 't-2' })}\n`);
-  put('stealth.json', JSON.stringify(over.stealth ?? stealth()));
+  put('stealth.json', typeof over.stealth === 'string' ? over.stealth : JSON.stringify(over.stealth ?? stealth()));
   const policy = over.policy ?? { 'bi/v1.json': '{"max_per_tx":{"RD":1}}', 'bi/audit.jsonl': '{"at":"x","by":"y","event":"e","note":"n"}\n', 'bank-a/zeto/v1.json': '{"counterparties":["bi@node1"]}', 'bank-a/pending.json': '{"state":"draft"}' };
   for (const [k, v] of Object.entries(policy)) put(`policy/${k}`, v);
   // never carried
@@ -50,12 +50,10 @@ const opts = { notoWrittenAfter: AFTER, targetStateDir: '/app/frontend/server/st
 const names = (p: ReturnType<typeof planSeed>) => p.files.map((f) => f.path).sort();
 
 describe('planSeed: what is carried', () => {
-  it('carries exactly the allow-listed files; the rest is listed as not carried; stealth.json is projected to deployed + chainId; noto.json is re-pointed', () => {
+  it('carries exactly the allow-listed files; the rest is listed as not carried (stealth.json and iroha3 are out of scope: never carried); noto.json is re-pointed', () => {
     const p = planSeed(fixture(), opts);
-    expect(names(p)).toEqual(['noto.json', 'noto/contract-data-2026-11-12T00-00-00-000Z.json', 'noto/trades.jsonl', 'policy/bank-a/pending.json', 'policy/bank-a/zeto/v1.json', 'policy/bi/audit.jsonl', 'policy/bi/v1.json', 'stealth.json', 'zeto.json']);
-    expect(p.notCarried).toEqual(expect.arrayContaining(['fabricx.json', 'iroha3.json', 'iroha3/', 'zeto.v0-backup-20261021.json']));
-    const st = JSON.parse(p.files.find((f) => f.path === 'stealth.json')!.content.toString());
-    expect(Object.keys(st).sort()).toEqual(['chainId', 'deployed']);
+    expect(names(p)).toEqual(['noto.json', 'noto/contract-data-2026-11-12T00-00-00-000Z.json', 'noto/trades.jsonl', 'policy/bank-a/pending.json', 'policy/bank-a/zeto/v1.json', 'policy/bi/audit.jsonl', 'policy/bi/v1.json', 'zeto.json']);
+    expect(p.notCarried).toEqual(expect.arrayContaining(['fabricx.json', 'iroha3.json', 'iroha3/', 'stealth.json', 'zeto.v0-backup-20261021.json']));
     expect(JSON.parse(p.files.find((f) => f.path === 'noto.json')!.content.toString())).toEqual({ dataDir: '/app/frontend/server/state/noto' });
     expect(p.files.every((f) => !/key|seed|secret|mnemonic|token|password|kubeconfig/i.test(f.content.toString().replace(/"keyid"/g, '')) || f.path.startsWith('policy/'))).toBe(true);
   });
@@ -63,7 +61,7 @@ describe('planSeed: what is carried', () => {
   it('a dry run lists names, sizes and counts only, never a value', () => {
     const p = planSeed(fixture(), opts);
     const text = JSON.stringify(p.summary);
-    expect(p.summary.carried).toBe(9);
+    expect(p.summary.carried).toBe(8);
     expect(p.summary.notCarried).toBeGreaterThan(0);
     expect(text).not.toContain('0xaaaa');
     expect(text).not.toMatch(/0x[0-9a-f]{40}/);
@@ -122,10 +120,13 @@ describe('zeto.json', () => {
 });
 
 describe('stealth.json, noto, policy', () => {
-  it('stealth.json: a key-named field inside the carried `deployed` is refused, a missing `deployed` is refused', () => {
-    const s = stealth(); (s.deployed as Record<string, unknown>).deployerKey = hex(64, 'a');
-    expect(() => planSeed(fixture({ stealth: s }), opts)).toThrow(/stealth\.json.*deployerKey/);
-    expect(() => planSeed(fixture({ stealth: { chainId: 1 } }), opts)).toThrow(/deployed/);
+  it('stealth.json is never carried and never parsed (analyst: out of scope, it held all banks\' spend/view keys): keys, a missing `deployed` or broken JSON do not matter and no byte of it reaches the plan', () => {
+    for (const st of [stealth(), { chainId: 1 }, 'not json at all {{{']) {
+      const p = planSeed(fixture({ stealth: st }), opts);
+      expect(names(p)).not.toContain('stealth.json');
+      expect(p.notCarried).toContain('stealth.json');
+      expect(p.files.some((f) => /spendKey|viewKey|deployerKey|stealth/.test(f.content.toString()))).toBe(false);
+    }
   });
   it('noto contract-data older than the time noto-pente wrote the new ids is stale and refused; the option is required', () => {
     expect(() => planSeed(fixture({ contractAge: '2026-11-10T00:00:00.000Z' }), opts)).toThrow(/stale/);
