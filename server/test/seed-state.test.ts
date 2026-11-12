@@ -132,6 +132,18 @@ describe('stealth.json, noto, policy', () => {
     expect(() => planSeed(fixture({ contractAge: '2026-11-10T00:00:00.000Z' }), opts)).toThrow(/stale/);
     expect(() => planSeed(fixture(), { targetStateDir: opts.targetStateDir } as never)).toThrow(/notoWrittenAfter/);
   });
+  it('trades.jsonl is an append-only log: a PENDING line superseded by a LATER line of the same tradeId is history (the app keeps the latest line, platform.ts loadTrades) and does not refuse; a trade whose LATEST line is PENDING does', () => {
+    const log = (...ls: string[]) => `${ls.join('\n')}\n`;
+    const bytes = (t: string) => planSeed(fixture({ trades: t }), opts).files.find((f) => f.path === 'noto/trades.jsonl')!.content.toString();
+    const superseded = log(trade({ tradeId: 't-1', status: 'PENDING' }), trade({ tradeId: 't-2', status: 'PENDING' }), trade({ tradeId: 't-1', status: 'SETTLED' }), trade({ tradeId: 't-2', status: 'SETTLED' }));
+    expect(bytes(superseded)).toBe(superseded); // carried byte-identical: no line dropped, no hand filtering
+    expect(() => planSeed(fixture({ trades: log(trade({ tradeId: 't-1', status: 'SETTLED' }), trade({ tradeId: 't-1', status: 'PENDING' })) }), opts)).toThrow(/PENDING/); // latest line is PENDING
+    expect(() => planSeed(fixture({ trades: log(trade({ tradeId: 't-1', status: 'PENDING' }), trade({ tradeId: 't-2', status: 'SETTLED' })) }), opts)).toThrow(/t-1.*PENDING|PENDING.*t-1/); // another trade settling does not clear t-1
+    expect(() => planSeed(fixture({ trades: log(trade({ tradeId: 't-1', status: 'PENDING' }), trade({ tradeId: 't-2', status: 'PENDING' }), trade({ tradeId: 't-1', status: 'SETTLED' })) }), opts)).toThrow(/t-2/); // interleaved: t-1 resolved, t-2 not
+    expect(() => planSeed(fixture({ trades: log(JSON.stringify({ status: 'PENDING' })) }), opts)).toThrow(/PENDING/); // a PENDING line without an id can never be shown superseded
+    expect(() => planSeed(fixture({ trades: log(trade({ tradeId: 't-1', status: 'WHATEVER' })) }), opts)).toThrow(/status/); // an unknown latest status refuses
+    for (const ok of ['SETTLED', 'ROLLED_BACK', 'FAILED']) expect(() => planSeed(fixture({ trades: log(trade({ tradeId: 't-1', status: 'PENDING' }), trade({ tradeId: 't-1', status: ok })) }), opts)).not.toThrow(); // the other TradeStatus values (outright.ts:41) are final
+  });
   it('a PENDING trade, a broken trade line and a key-named trade field are refused', () => {
     expect(() => planSeed(fixture({ trades: `${trade({ status: 'PENDING' })}\n` }), opts)).toThrow(/PENDING/);
     expect(() => planSeed(fixture({ trades: '{not json\n' }), opts)).toThrow(/trades\.jsonl/);
