@@ -8,8 +8,10 @@ import { DeadlineError, withDeadline } from '../deadline.ts';
 import { besuDoor, gwFetch, stealthEndpoints } from '../gateway.ts';
 import { join } from 'node:path';
 import { STATE_DIR, readState, writeState } from '../state.ts';
-import { JsonRpcProvider } from '../../vendor/besu/stealth-address/ts/chain.ts';
-import { LABELS, besuRequest, flowLabel, outsiderVerdict, planInventory } from './stealth.ts';
+import { JsonRpcProvider, announcements as chainAnnouncements } from '../../vendor/besu/stealth-address/ts/chain.ts';
+import { parseBondMetadata } from '../../vendor/besu/stealth-address/ts/bond.ts';
+import { parseTokenMetadata } from '../../vendor/besu/stealth-address/ts/token.ts';
+import { LABELS, STEALTH_HISTORY_BLOCKS, besuRequest, flowLabel, outsiderVerdict, planInventory } from './stealth.ts';
 
 // S17: the Lensa stealth adapter WITHOUT keys. Every secret (spend, view and issuer keys) lives in the signer of its own party (besu stealth-address/signer);
 // Lensa only orchestrates: it asks each party's signer, through that party's st-gw-N door (mTLS + OPA), for the party's meta-address, holdings and history,
@@ -20,6 +22,8 @@ const PARTY_IDS: PartyId[] = ['BI', 'A', 'B', 'C'];
 const CALL_MS = 60_000; // the st-gw route allows 60 s; a cold /holdings takes 3-5 s
 const HEALTH_MS = 3000;
 const TX_MS = 120_000;
+const MAX_CANCEL_TRIES = 3; // a failing refund is retried at the next ticks this many times, then left alone until a restart
+const REFUND_WINDOW_S = 600; // besu: the stored refund certificate is valid until expiry + 600 s
 const NO_BALANCE = 'Saldo di satu alamat stealth tidak cukup';
 const UNSUPPORTED = 'Uji beban stealth hanya berjalan di host (kunci ada di signer), tidak di pod';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -30,7 +34,11 @@ export interface SignerChain {
   blockOf(hash: string): Promise<number>;
   blockTime(block: number): Promise<string>; // ISO-8601
   head(): Promise<number>;
+  // The public Announcement log of [from, to] through a Besu door (no key): absent = the adapter lists no outsider rows and reads outsider amounts from the run.
+  announcements?(from: number, to: number, c: PublicContracts): Promise<PublicAnn[]>;
 }
+export interface PublicContracts { rd: string; bond: string; announcer: string; dvpFactory: string }
+export interface PublicAnn { txHash: string; blockNumber: number; caller: string; stealthAddress: string; metadata: string }
 // Public bookkeeping, no secret: which tx a bank sent to whom (a bank's own /history lists only what it RECEIVED) and the DvP escrows that were created and did not settle.
 export interface SentRecord {
   sent: Record<string, { from: PartyId; to: PartyId; block: number; flow: FlowId }>;
@@ -48,11 +56,12 @@ export interface SignerDeps {
 
 interface Holding { stealthAddress: string; token: string; amount: bigint; partition: string | null }
 interface Row { txHash: string; blockNumber: number; stealthAddress: string; token: string; amount: string; sender: string | null; kind: 'rd' | 'bond' | null }
+type PubGroup = { block: number; rd?: bigint; bond?: bigint }; // one tx of the public log: the amount of each token leg (a dvp has both)
 interface Leg { amount: string; sender: string | null; bank: string | null; block: number | null }
 type Group = { rd?: Leg; bond?: Leg };
 type Ctx = { kind: 'rd' | 'bond'; amount: bigint; from: string | null }; // what the run result carries to lens()
 
-export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
+export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { sweepEscrows(): Promise<void> } {
   const { urls, chain, record } = deps;
   const doFetch = deps.fetch ?? gwFetch;
   // A signer scans the chain for every /holdings, /history and /ledger and answers /health from the same thread: duplicate reads (a page load asks the same signer
@@ -68,7 +77,7 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
     e.p.catch(() => { if (cache.get(key) === e) cache.delete(key); }); // a failure is never cached
     return e.p as Promise<T>;
   };
-  const names = new Map<string, string>(); // token address -> 'RD' | 'DFABI', learned from /holdings (the signers do not publish the contract addresses)
+  const names = new Map<string, string>(); // contract address -> name for the trace: from /meta-address `contracts`, and from /holdings for an older signer
 
   async function call<T>(p: PartyId, method: 'GET' | 'POST', path: string, payload?: unknown): Promise<T> {
     let res: Response;
@@ -90,11 +99,17 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
   }
 
   // Public data a signer serves about itself; stable, so read once per party (reset on failure).
-  const metaP = new Map<PartyId, Promise<{ metaAddress: string; identityAddress: string }>>();
+  type Meta = { metaAddress: string; identityAddress: string; contracts?: PublicContracts }; // contracts: served by newer signers (besu #120), absent on an older one
+  const metaP = new Map<PartyId, Promise<Meta>>();
   const meta = (p: PartyId) => {
     let m = metaP.get(p);
-    if (!m) { m = call<{ metaAddress: string; identityAddress: string }>(p, 'GET', '/meta-address'); metaP.set(p, m); m.catch(() => metaP.delete(p)); }
+    if (!m) { m = call<Meta>(p, 'GET', '/meta-address'); metaP.set(p, m); m.catch(() => metaP.delete(p)); }
     return m;
+  };
+  const contractsOf = async () => (await meta('BI').catch(() => undefined))?.contracts;
+  const learnNames = async () => {
+    const c = await contractsOf();
+    if (c) for (const [k, n] of [['rd', 'RD'], ['bond', 'DFABI'], ['dvpFactory', 'DvPFactory'], ['announcer', 'Announcer']] as const) names.set(lc(c[k]), n);
   };
   // The authenticated sender of a payment is an identity ACCOUNT address; the four /meta-address answers name the four parties.
   async function partyOf(addr: string | null): Promise<PartyId | null> {
@@ -108,28 +123,30 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
     for (const h of r.holdings) names.set(lc(h.token), h.partition === null ? 'RD' : 'DFABI');
     return r.holdings.map((h) => ({ ...h, amount: BigInt(h.amount) }));
   }
-  // The party's own received payments, each with its asset. TODO-GAP (besu): /history rows carry the token ADDRESS but not the asset or partition; the asset is joined from
-  // /holdings by stealth address (holdings list every match, balance 0 included, so every history row has one). Ask besu to add `partition` to the history row.
+  // The party's own received payments, each with its asset: the row's `partition` (null = RD, a tranche = DFABI; besu #120). An older signer's rows have none: the asset is then
+  // joined from /holdings by stealth address (holdings list every match, balance 0 included, so every history row has one).
   async function rowsOf(p: PartyId, fresh = false): Promise<Row[]> {
-    const [h, hs] = await Promise.all([cached(`history:${p}`, () => call<{ history: Omit<Row, 'kind'>[] }>(p, 'GET', '/history'), fresh), holdings(p, fresh)]);
-    const kindOf = new Map(hs.map((x) => [lc(x.stealthAddress), x.partition === null ? 'rd' as const : 'bond' as const]));
-    return h.history.map((r) => ({ ...r, kind: kindOf.get(lc(r.stealthAddress)) ?? null }));
+    const h = await cached(`history:${p}`, () => call<{ history: (Omit<Row, 'kind'> & { partition?: string | null })[] }>(p, 'GET', '/history'), fresh);
+    const join = h.history.some((r) => r.partition === undefined)
+      ? new Map((await holdings(p, fresh)).map((x) => [lc(x.stealthAddress), x.partition === null ? 'rd' as const : 'bond' as const]))
+      : undefined;
+    return h.history.map((r) => ({ ...r, kind: r.partition !== undefined ? (r.partition === null ? 'rd' as const : 'bond' as const) : join?.get(lc(r.stealthAddress)) ?? null }));
   }
   // BI's ledger names banks as the signer does ("bank-a" | "bank-b" | "bank-c"; live, S11) and may cast the tx hash differently: both are normalised here, once.
   const BANK_OF: Record<string, string> = { 'bank-a': 'A', 'bank-b': 'B', 'bank-c': 'C' };
-  const ledger = async (kind: 'rd' | 'bond', fresh = false) => (await cached(`ledger:${kind}`, () => call<{ rows: { bank: string; amount: string; sender: string | null; tx: string }[] }>('BI', 'GET', `/ledger?kind=${kind}`), fresh)).rows
+  const ledger = async (kind: 'rd' | 'bond', fresh = false) => (await cached(`ledger:${kind}`, () => call<{ rows: { bank: string; amount: string; sender: string | null; tx: string; blockNumber?: number | null }[] }>('BI', 'GET', `/ledger?kind=${kind}`), fresh)).rows
     .map((r) => ({ ...r, bank: BANK_OF[lc(r.bank)] ?? r.bank, tx: lc(r.tx) }));
 
   // Everything BI can classify a tx by: its ledger (a payment to a bank, resolved with that bank's view-key copy) and its own receipts (top-ups, the RD leg of an award).
-  // TODO-GAP (besu): ledger rows carry no block number; a block is fetched per tx from the receipt.
+  // A ledger row carries its `blockNumber` (besu #120; null if unknown, absent on an older signer): only a tx without one costs a receipt read.
   async function groups(): Promise<Map<string, Group & { block?: number }>> {
     // A ledger that cannot answer (or is still empty: BI's view-key copies come with S11) leaves BI's own receipts and the banks' own rows; it never fails a read.
     const soft = (kind: 'rd' | 'bond') => ledger(kind).catch((e) => { console.warn(`[stealth] BI ledger ${kind} unreadable:`, (e as Error).message); return []; });
     const [lr, lb, own] = await Promise.all([soft('rd'), soft('bond'), rowsOf('BI')]);
     const g = new Map<string, Group & { block?: number }>();
     const put = (tx: string, kind: 'rd' | 'bond', leg: Leg) => { const x = g.get(tx) ?? {}; x[kind] ??= leg; if (leg.block !== null) x.block = leg.block; g.set(tx, x); };
-    for (const r of lr) put(r.tx, 'rd', { amount: r.amount, sender: r.sender, bank: r.bank, block: null });
-    for (const r of lb) put(r.tx, 'bond', { amount: r.amount, sender: r.sender, bank: r.bank, block: null });
+    for (const r of lr) put(r.tx, 'rd', { amount: r.amount, sender: r.sender, bank: r.bank, block: r.blockNumber ?? null });
+    for (const r of lb) put(r.tx, 'bond', { amount: r.amount, sender: r.sender, bank: r.bank, block: r.blockNumber ?? null });
     for (const r of own) if (r.kind) put(r.txHash, r.kind, { amount: r.amount, sender: r.sender, bank: null, block: r.blockNumber });
     return g;
   }
@@ -138,6 +155,33 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
   const ledgerLeg = async (kind: 'rd' | 'bond', tx: string, bank: string, fresh = false) => (await ledger(kind, fresh)).find((r) => r.tx === lc(tx) && r.bank === bank);
   const PENDING = 'Ledger BI belum memuat transaksi ini (salinan view key bank belum terpasang)';
   const MISMATCH = 'Data di ledger BI tidak cocok dengan transaksi yang dibangun pengirim';
+  // The PUBLIC Announcement log through a Besu door, no key: the amount of every token leg per tx, for the outsider rows of a bank's history and the amount of an outsider's lens.
+  // One cache per adapter for every party (the log is public and the same for all): it only grows, is read from the start of the window (STEALTH_HISTORY_BLOCKS, like the host
+  // adapter), then only the new range; reads are serialized (a concurrent read once appended the same slice twice, besu #125) and in-flight reads shared.
+  const pub = { upTo: -1, groups: new Map<string, PubGroup>() };
+  let pubTail: Promise<unknown> = Promise.resolve();
+  async function pubSync(): Promise<Map<string, PubGroup> | null> {
+    const c = await contractsOf();
+    if (!c || !chain.announcements) return null; // an older signer (no contracts) or a chain port without the log: no public view
+    const head = await chain.head();
+    if (pub.upTo < 0) pub.upTo = Math.max(0, head - STEALTH_HISTORY_BLOCKS + 1) - 1;
+    if (head > pub.upTo) {
+      for (const a of await chain.announcements(pub.upTo + 1, head, c)) {
+        const kind = lc(a.caller) === lc(c.rd) ? 'rd' : lc(a.caller) === lc(c.bond) ? 'bond' : null;
+        const md = kind === 'rd' ? parseTokenMetadata(a.metadata) : kind === 'bond' ? parseBondMetadata(a.metadata) : null; // anyone can post any metadata: null = not ours
+        if (!kind || !md) continue;
+        const key = lc(a.txHash), g = pub.groups.get(key) ?? { block: a.blockNumber };
+        g[kind] ??= md.amount;
+        pub.groups.set(key, g);
+      }
+      pub.upTo = head;
+    }
+    return pub.groups;
+  }
+  const pubRead = () => cached('pub', () => { const r = pubTail.then(pubSync); pubTail = r.catch(() => {}); return r; });
+  // The public view is an extra: whatever goes wrong with it never fails the read that asked.
+  const pubOrNull = () => pubRead().catch((e) => { console.warn('[stealth] public log unreadable:', (e as Error).message); return null; });
+
   // The BI lens when BI cannot read the tx: a placeholder, as app.ts does for a BI lens that fails with reportPending.
   const biPlaceholder = (req: FlowRequest, why: string): LensView => ({
     party: 'BI', role: roleOf(req, 'BI'), verdict: 'partial', amount: null, rdAmount: null, counterparty: null, onChain: [], method: `Lensa BI belum tersedia: ${why}`,
@@ -270,18 +314,22 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
         onChain: rows, method: 'Ledger BI (`/ledger`): salinan view key bank, tanpa kunci belanja',
       };
     }
-    // Outsider: its own signer must list nothing about this tx. The amount is public on chain; TODO-GAP (besu): no signer route reads the public log, so it comes from the run (BI's ledger confirmed it).
+    // Outsider: its own signer must list nothing about this tx. The amount is public: it is read from the public log (and the dvp RD leg from its second announcement);
+    // only when the log cannot be read does it come from the run (BI's ledger confirmed it).
     const hits = (await rowsOf(party)).filter((r) => r.txHash === result.txHash).length;
+    const g = (await pubOrNull())?.get(lc(result.txHash));
+    const logged = g?.[ctx.kind];
     return {
-      ...base, verdict: outsiderVerdict(hits, null), rdAmount: dvp ? price.toString() : null, counterparty: null, onChain: rows,
-      method: `Riwayat signer pihak luar (\`/history\`, ${hits} hasil) tidak memuat transaksi ini`,
+      ...base, amount: logged !== undefined ? logged.toString() : base.amount, verdict: outsiderVerdict(hits, null),
+      rdAmount: dvp ? (g?.rd !== undefined ? g.rd.toString() : price.toString()) : null, counterparty: null, onChain: rows,
+      method: `Riwayat signer pihak luar (\`/history\`, ${hits} hasil) tidak memuat transaksi ini${logged !== undefined ? '; nominal dibaca dari log publik' : ''}`,
     };
   }
 
   // The party's own read of the txs it can see (ARCHITECTURE.md §2.3), from its signer only:
   //   bank: what it received (its /history), plus what it sent (the public sent record: a bank's own sends are not in its /history); flow, amount and the RD leg of a
-  //         dvp come from BI's classification (a tx with both legs is a dvp or an award). TODO-GAP: other parties' txs (the 'partial' outsider rows of the host adapter) are
-  //         not listed: no signer route reads the public log.
+  //         dvp come from BI's classification (a tx with both legs is a dvp or an award). Other parties' txs are listed as 'partial' outsider rows from the PUBLIC log (token
+  //         and amount are public, the parties are not).
   //   BI:   its ledger (viewkey, or clear when BI itself issued) and its own receipts (top-ups, the RD leg of an award; clear).
   async function history(party: PartyId, limit: number): Promise<HistoryItem[]> {
     if (!Number.isInteger(limit) || limit < 1) throw new Error('limit harus bilangan bulat >= 1');
@@ -291,7 +339,7 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
     const blocks = new Map<string, number>();
     let cands: string[];
     if (party === 'BI') {
-      // ponytail: relies on the ledger being in announcement order (oldest first): only the last `want` txs of each ledger are given a block (one receipt read each), BI's own receipts have theirs.
+      // ponytail: a ledger row with a blockNumber needs no read; one without (an older signer) relies on the ledger being in announcement order (oldest first): only the last `want` txs of each ledger are given a block (one receipt read each).
       const tail = (kind: 'rd' | 'bond') => [...g].filter(([, x]) => x[kind]?.bank).map(([tx]) => tx).slice(-want);
       cands = [...new Set([...tail('rd'), ...tail('bond'), ...[...g].filter(([, x]) => x.block !== undefined).map(([tx]) => tx)])];
       for (const tx of cands) { const b = g.get(tx)!.block; if (b !== undefined) blocks.set(tx, b); }
@@ -300,10 +348,24 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
       for (const [tx, s] of Object.entries(record.sent)) if (s.from === party) blocks.set(tx, s.block);
       cands = [...blocks.keys()];
     }
+    // other parties' txs of the public log (a bank only: BI's own read already covers everything it can classify)
+    const pubG = party === 'BI' ? null : await pubOrNull();
+    const outsiders = new Set<string>();
+    if (pubG) {
+      const known = new Set(cands.map(lc));
+      for (const [tx, g] of pubG) if (!known.has(tx)) { blocks.set(tx, g.block); cands.push(tx); outsiders.add(tx); }
+    }
     await Promise.all(cands.filter((tx) => !blocks.has(tx)).map(async (tx) => { blocks.set(tx, await chain.blockOf(tx)); }));
     const newest = cands.map((tx, i) => ({ tx, i })).sort((x, y) => blocks.get(y.tx)! - blocks.get(x.tx)! || y.i - x.i).slice(0, want).map((x) => x.tx);
 
     return Promise.all(newest.map(async (tx): Promise<HistoryItem> => {
+      if (outsiders.has(tx)) {
+        const o = pubG!.get(tx)!, kind = o.bond !== undefined ? 'bond' : 'rd';
+        return {
+          id: tx, at: await chain.blockTime(o.block), block: o.block, flow: null, asset: kind === 'bond' ? 'DFABI' : 'RD', role: 'outsider', verdict: outsiderVerdict(0, null),
+          amount: (o.bond ?? o.rd)!.toString(), rdAmount: o.bond !== undefined && o.rd !== undefined ? o.rd.toString() : null, counterparty: null,
+        };
+      }
       const grp = g.get(tx) ?? {};
       const own = mine.filter((r) => r.txHash === tx);
       // BI's ledger has no row (yet, S11): a dvp this bank SENT is still known from the sent record, and its own row is then the RD leg paid to it
@@ -334,6 +396,37 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
       };
     }));
   }
+
+  // Refund of unsettled DvP escrows (besu POST /dvp/cancel, any signer): an escrow whose settle failed keeps both legs until it is cancelled, valid from its expiry on, with the
+  // stored refund certificate valid until expiry + 600 s. Chain time = the block time of the head. Too old: the bond needs a fresh certificate, so it is kept in the record with
+  // one warning per process and never retried. A failing cancel is retried at the next ticks up to MAX_CANCEL_TRIES. Never throws, never runs twice at once.
+  const tries = new Map<string, number>();
+  const warned = new Set<string>();
+  async function sweepOnce(): Promise<void> {
+    if (!record.escrowed.length) return;
+    const now = Math.floor(Date.parse(await chain.blockTime(await chain.head())) / 1000);
+    for (const e of [...record.escrowed]) {
+      const expiry = Number(e.expiry);
+      if (!Number.isFinite(expiry) || now < expiry) continue;
+      if (now > expiry + REFUND_WINDOW_S) {
+        if (!warned.has(e.escrow)) { warned.add(e.escrow); console.warn(`[stealth] escrow ${e.escrow} is past expiry + ${REFUND_WINDOW_S} s: its refund sertifikat/certificate has expired, the bond needs a fresh one from besu; kept in the record, not retried`); }
+        continue;
+      }
+      const n = (tries.get(e.escrow) ?? 0) + 1;
+      if (n > MAX_CANCEL_TRIES) continue;
+      tries.set(e.escrow, n);
+      try {
+        await chain.waitReceipt('BI', (await call<{ txHash: string }>('BI', 'POST', '/dvp/cancel', { escrow: e.escrow })).txHash);
+        record.escrowed = record.escrowed.filter((x) => x.escrow !== e.escrow);
+        try { deps.save(); } catch (w) { console.error('[stealth] escrow record not saved:', w); }
+      } catch (err) {
+        console.error(`[stealth] refund of escrow ${e.escrow} failed (try ${n}/${MAX_CANCEL_TRIES}):`, (err as Error).message);
+        if (n === MAX_CANCEL_TRIES) console.warn(`[stealth] escrow ${e.escrow}: giving up after ${MAX_CANCEL_TRIES} tries, refund by hand`);
+      }
+    }
+  }
+  let sweeping: Promise<void> | undefined;
+  const sweepEscrows = () => (sweeping ??= sweepOnce().catch((e) => { console.error('[stealth] escrow sweep failed:', (e as Error).message); }).finally(() => { sweeping = undefined; }));
 
   async function signersUp(parties: PartyId[]): Promise<{ ready: boolean; detail: string }> {
     const down: string[] = [];
@@ -371,9 +464,10 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
     run: async (r, a, on) => { try { return await run(r, a, on); } finally { cache.clear(); } },
     lens, history,
     network: () => besuNetwork({ paladin: false }),
-    // no Paladin: a stealth transfer is a plain ERC-20 call, so the public receipt is all a node holds. TODO-GAP (besu): token and factory addresses are not served; RD / DFABI names are learned from /holdings.
-    trace: (tx, party) => besuTrace(tx, party, { paladin: false, rpc, name: (a) => nameFrom(Object.fromEntries(names))(a) }),
+    // no Paladin: a stealth transfer is a plain ERC-20 call, so the public receipt is all a node holds. Contract names come from /meta-address `contracts` (older signer: from /holdings).
+    trace: async (tx, party) => { await learnNames(); return besuTrace(tx, party, { paladin: false, rpc, name: (a) => nameFrom(Object.fromEntries(names))(a) }); },
     receipt: async (tx) => ({ ...(await besuReceipt(tx, undefined, rpc)), node: null }),
+    sweepEscrows,
     loadCirculates: false,
     loadCapacity: async () => 0,
     prepareLoad: async () => { throw new Error(UNSUPPORTED); },
@@ -424,6 +518,11 @@ function besuChain(): SignerChain {
       return at;
     },
     head: () => door('BI').getBlockNumber(),
+    // the public log is the same through every door: one reader (BI's) serves the one shared cache. Only the announcer address is read; the vendored helper wants the full set.
+    async announcements(from, to, c) {
+      const d = { announcer: c.announcer, registry: c.announcer, validator: c.announcer, bond: c.bond, rd: c.rd, dvpFactory: c.dvpFactory, instrumentRegistry: c.announcer, fromBlock: from };
+      return (await chainAnnouncements(door('BI'), d, from, null, to)).map(({ txHash, blockNumber, caller, stealthAddress, metadata }) => ({ txHash, blockNumber, caller, stealthAddress, metadata }));
+    },
   };
 }
 
@@ -439,5 +538,14 @@ export function loadRecord(dir = STATE_DIR): { record: SentRecord; save: () => v
 export async function loadSigner(): Promise<ModelAdapter | null> {
   const urls = stealthEndpoints();
   if (!urls) return null;
-  return createSignerStealthAdapter({ urls, ...loadRecord(), chain: besuChain(), rpcUrl: besuDoor('BI') });
+  const adapter = createSignerStealthAdapter({ urls, ...loadRecord(), chain: besuChain(), rpcUrl: besuDoor('BI') });
+  startSweep(adapter);
+  return adapter;
+}
+
+// The refund sweep, every minute, on an unref'd timer (it never keeps the process alive).
+export function startSweep(a: { sweepEscrows(): Promise<void> }, ms = 60_000): ReturnType<typeof setInterval> {
+  const t = setInterval(() => { void a.sweepEscrows(); }, ms);
+  t.unref();
+  return t;
 }

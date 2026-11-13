@@ -3,24 +3,37 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { FlowRequest, PartyId } from '../src/domain.ts';
-import { createSignerStealthAdapter, loadRecord, type SentRecord } from '../src/adapters/stealth-signer.ts';
+import { createSignerStealthAdapter, loadRecord, startSweep, type PublicAnn, type SentRecord, type SignerChain } from '../src/adapters/stealth-signer.ts';
+import { buildBondMetadata } from '../vendor/besu/stealth-address/ts/bond.ts';
+import { buildTokenMetadata } from '../vendor/besu/stealth-address/ts/token.ts';
+
+// the trace reads the network: only the names option matters here
+const traceSeen = vi.hoisted(() => ({ name: undefined as undefined | ((a: string) => string) }));
+vi.mock('../src/adapters/besu-trace.ts', async (orig) => ({
+  ...(await orig<typeof import('../src/adapters/besu-trace.ts')>()),
+  besuTrace: async (_tx: string, _p: string, o: { name?: (a: string) => string }) => { traceSeen.name = o.name; return { source: 'x', steps: [], note: null }; },
+}));
 
 // S17: the keyless Lensa stealth adapter against FAKE signers (one in-process http server per party, the shapes of besu signer/SPEC.md + the final contract).
 // Everything here is obviously fake: addresses are labels, no key of any kind exists in this file.
 const PARTIES: PartyId[] = ['BI', 'A', 'B', 'C'];
 const IDENT: Record<PartyId, string> = { BI: '0x' + 'b1'.repeat(20), A: '0x' + 'a1'.repeat(20), B: '0x' + 'b2'.repeat(20), C: '0x' + 'c1'.repeat(20) };
-const RD = '0xrd-token', BOND = '0xbond-token', TRANCHE = '0xtranche-a';
+const RD = '0x' + '11'.repeat(20), BOND = '0x' + '22'.repeat(20), TRANCHE = '0x' + 'aa'.repeat(32);
+const ANNOUNCER = '0x' + '33'.repeat(20), FACTORY = '0x' + '44'.repeat(20);
+const CONTRACTS = { rd: RD, bond: BOND, announcer: ANNOUNCER, dvpFactory: FACTORY };
 const partyOfIdent = (a: string | null): PartyId | undefined => PARTIES.find((p) => IDENT[p] === a);
 
 interface H { stealthAddress: string; token: string; amount: bigint; partition: string | null }
-interface Row { txHash: string; blockNumber: number; stealthAddress: string; token: string; amount: string; sender: string | null }
-interface LRow { bank: string; amount: string; sender: string | null; tx: string }
+interface Row { txHash: string; blockNumber: number; stealthAddress: string; token: string; amount: string; sender: string | null; partition: string | null }
+interface LRow { bank: string; amount: string; sender: string | null; tx: string; blockNumber: number | null }
 
 class World {
   block = 100; n = 0; addr = 0;
   calls: string[] = []; failSettle = false; ledgerEmpty = false;
+  legacy = false; cancelFail = false; // legacy = an older signer: no partition, no blockNumber, no contracts
+  pubAnns: PublicAnn[] = []; annCalls: [number, number][] = [];
   hold: Record<PartyId, H[]> = { BI: [], A: [], B: [], C: [] };
   hist: Record<PartyId, Row[]> = { BI: [], A: [], B: [], C: [] };
   ledger: { rd: LRow[]; bond: LRow[] } = { rd: [], bond: [] };
@@ -31,8 +44,13 @@ class World {
   pay(to: PartyId, kind: 'rd' | 'bond', amount: bigint, sender: PartyId, hash: string) {
     const stealthAddress = `0xst${++this.addr}`, token = kind === 'rd' ? RD : BOND;
     this.hold[to].push({ stealthAddress, token, amount, partition: kind === 'bond' ? TRANCHE : null });
-    this.hist[to].push({ txHash: hash, blockNumber: this.txBlock.get(hash)!, stealthAddress, token, amount: amount.toString(), sender: IDENT[sender] });
-    if (to !== 'BI') this.ledger[kind].push({ bank: 'bank-' + to.toLowerCase(), amount: amount.toString(), sender: IDENT[sender], tx: hash });
+    this.hist[to].push({ txHash: hash, blockNumber: this.txBlock.get(hash)!, stealthAddress, token, amount: amount.toString(), sender: IDENT[sender], partition: kind === 'bond' ? TRANCHE : null });
+    if (to !== 'BI') this.ledger[kind].push({ bank: 'bank-' + to.toLowerCase(), amount: amount.toString(), sender: IDENT[sender], tx: hash, blockNumber: this.txBlock.get(hash)! });
+    // the public Announcement log: anyone can read it, the metadata carries token and amount
+    this.pubAnns.push({
+      txHash: hash, blockNumber: this.txBlock.get(hash)!, caller: kind === 'rd' ? RD : BOND, stealthAddress,
+      metadata: kind === 'rd' ? buildTokenMetadata('0x01', RD, amount) : buildBondMetadata('0x01', BOND, amount, TRANCHE),
+    });
   }
   seed(p: PartyId, kind: 'rd' | 'bond', amount: bigint) { this.pay(p, kind, amount, 'BI', this.tx()); }
   take(p: PartyId, kind: 'rd' | 'bond', amount: bigint, source?: string): H {
@@ -56,10 +74,10 @@ function signer(w: World, p: PartyId): Server {
     if (req.method !== 'GET' || url.pathname !== '/health') w.calls.push(`${p} ${r}`);
     try {
       if (r === 'GET /health') return send(200, { ok: true });
-      if (r === 'GET /meta-address') return send(200, { party: p, metaAddress: `meta-${p}`, identityAddress: IDENT[p] });
+      if (r === 'GET /meta-address') return send(200, { party: p, metaAddress: `meta-${p}`, identityAddress: IDENT[p], ...(w.legacy ? {} : { contracts: CONTRACTS }) });
       if (r === 'GET /holdings') return send(200, { party: p, holdings: w.hold[p].map((h) => ({ ...h, amount: h.amount.toString() })) });
-      if (r === 'GET /history') return send(200, { party: p, history: w.hist[p] });
-      if (r === 'GET /ledger') { const kind = url.searchParams.get('kind') as 'rd' | 'bond'; return send(200, { kind, rows: w.ledgerEmpty ? [] : w.ledger[kind] }); }
+      if (r === 'GET /history') return send(200, { party: p, history: w.legacy ? w.hist[p].map(({ partition: _x, ...row }) => row) : w.hist[p] });
+      if (r === 'GET /ledger') { const kind = url.searchParams.get('kind') as 'rd' | 'bond'; return send(200, { kind, rows: w.ledgerEmpty ? [] : w.ledger[kind].map(({ blockNumber, ...row }) => (w.legacy ? row : { ...row, blockNumber })) }); }
       const b = await body(req);
       const meta = (m: string) => m.replace('meta-', '') as PartyId;
       if (r === 'POST /intent') {
@@ -83,6 +101,10 @@ function signer(w: World, p: PartyId): Server {
         const at = `0xescrow${++w.n}`;
         w.escrows.set(at, { seller: b.seller, buyer: b.buyer, bond: BigInt(b.bondAmount), rd: BigInt(b.rdAmount), bondIn: false, rdIn: false });
         return send(200, { escrow: at, expiry: String(Math.floor(Date.now() / 1000) + 600), txHash: w.tx(), terms: {} });
+      }
+      if (r === 'POST /dvp/cancel') {
+        if (w.cancelFail) return send(502, { error: 'rpc_error', message: 'x' });
+        return send(200, { escrow: b.escrow, txHash: w.tx() });
       }
       if (r === 'POST /dvp/settle') {
         const e = w.escrows.get(b.escrow)!;
@@ -200,7 +222,7 @@ describe('keyless adapter, scenario against fake signers', () => {
   });
 
   it('an outsider whose own read DOES list the tx is a privacy break, never papered over', async () => {
-    world.hist.C.push({ txHash: dvp.txHash, blockNumber: dvp.block, stealthAddress: '0xleak', token: BOND, amount: '2', sender: null });
+    world.hist.C.push({ txHash: dvp.txHash, blockNumber: dvp.block, stealthAddress: '0xleak', token: BOND, amount: '2', sender: null, partition: TRANCHE });
     await expect(adapter.lens(dvpRq, dvp, 'C')).rejects.toThrow(/Pihak luar/);
     world.hist.C.pop();
   });
@@ -291,6 +313,196 @@ describe('keyless adapter, scenario against fake signers', () => {
     const b0 = await a.balanceOf('B', 'RD');
     await a.run(req('rd-transfer', 'A', 'B', '10'), 10n, noop);
     expect(await a.balanceOf('B', 'RD')).toBe(b0 + 10n);
+  });
+  // ---- A: the new additive signer fields ------------------------------------------------------------------------------------------------------------------
+  const countingChain = (over: Partial<SignerChain> = {}) => {
+    const calls = { blockOf: 0 };
+    const chain: SignerChain = {
+      waitReceipt: async (_p, h) => ({ block: world.txBlock.get(h)! }),
+      blockOf: async (h) => { calls.blockOf++; return world.txBlock.get(h)!; },
+      blockTime: async (b) => new Date((1_700_000_000 + b * 2) * 1000).toISOString(),
+      head: async () => world.block,
+      ...over,
+    };
+    return { calls, chain };
+  };
+  const fresh = (chain: SignerChain, rec: SentRecord = record, save: () => void = noop) => createSignerStealthAdapter({ urls, record: rec, save, cacheMs: 0, chain });
+
+  it('A: /history rows are classified by their `partition`, no /holdings join; the same list as with the join', async () => {
+    const { chain } = countingChain();
+    const a = fresh(chain);
+    const before = world.calls.length;
+    const viaPartition = await a.history('B', 10);
+    await a.history('BI', 20);
+    expect(world.calls.slice(before).filter((c) => c.endsWith('GET /holdings'))).toEqual([]);
+    world.legacy = true; // an older signer: no partition on the rows, the asset is joined from /holdings
+    const b = fresh(chain);
+    const viaJoin = await b.history('B', 10);
+    expect(world.calls.slice(before).some((c) => c.endsWith('GET /holdings'))).toBe(true);
+    world.legacy = false;
+    expect(viaPartition).toEqual(viaJoin);
+    expect(new Set(viaPartition.map((i) => i.asset))).toEqual(new Set(['RD', 'DFABI']));
+  });
+
+  it('A: BI /ledger rows carry `blockNumber`: no receipt read per ledger tx (the receipt stays the fallback for an older signer)', async () => {
+    const { chain, calls } = countingChain();
+    const rows = await fresh(chain).history('BI', 20);
+    expect(rows.length).toBeGreaterThan(5);
+    expect(calls.blockOf).toBe(0);
+    world.legacy = true;
+    const old = countingChain();
+    const rowsOld = await fresh(old.chain).history('BI', 20);
+    world.legacy = false;
+    expect(old.calls.blockOf).toBeGreaterThan(0);
+    expect(rowsOld.map((i) => [i.id, i.block])).toEqual(rows.map((i) => [i.id, i.block]));
+  });
+
+  it('A: /meta-address `contracts` name RD, DFABI, DvPFactory and Announcer in the trace; an older signer still works', async () => {
+    const a = fresh(countingChain().chain);
+    await a.trace('0xabc', 'BI');
+    expect([RD, BOND, FACTORY, ANNOUNCER].map((x) => traceSeen.name!(x))).toEqual(['RD', 'DFABI', 'DvPFactory', 'Announcer']);
+    world.legacy = true;
+    traceSeen.name = undefined;
+    await fresh(countingChain().chain).trace('0xabc', 'BI');
+    world.legacy = false;
+    expect(traceSeen.name!(FACTORY)).toMatch(/^0x/); // unknown: shortened address, no throw
+  });
+
+  // ---- B: refund of unsettled DvP escrows -----------------------------------------------------------------------------------------------------------------
+  describe('B: escrow refund sweep', () => {
+    const NOW = 1_800_000_000;
+    const esc = (escrow: string, expiry: number) => ({ escrow, seller: '0xs', bondAmount: '1', expiry: String(expiry) });
+    const sweeper = (rec: SentRecord, now = NOW) => {
+      let saved = 0;
+      const chain: SignerChain = { ...countingChain().chain, head: async () => 5, blockTime: async () => new Date(now * 1000).toISOString() };
+      return { a: fresh(chain, rec, () => { saved++; }), saved: () => saved };
+    };
+    const cancels = (from: number) => world.calls.slice(from).filter((c) => c.endsWith('POST /dvp/cancel'));
+    afterEach(() => { world.cancelFail = false; vi.restoreAllMocks(); });
+
+    it('not expired yet: no call, record kept', async () => {
+      const rec: SentRecord = { sent: {}, escrowed: [esc('0xe1', NOW + 100)] };
+      const before = world.calls.length;
+      await sweeper(rec).a.sweepEscrows();
+      expect(cancels(before)).toEqual([]);
+      expect(rec.escrowed).toHaveLength(1);
+    });
+    it('expired and inside expiry+600 s: one cancel through the BI signer, receipt awaited, record cleared and saved', async () => {
+      const rec: SentRecord = { sent: {}, escrowed: [esc('0xe2', NOW - 100), esc('0xe3', NOW + 50)] };
+      const before = world.calls.length;
+      const s = sweeper(rec);
+      await s.a.sweepEscrows();
+      expect(cancels(before)).toEqual(['BI POST /dvp/cancel']);
+      expect(rec.escrowed.map((e) => e.escrow)).toEqual(['0xe3']);
+      expect(s.saved()).toBe(1);
+    });
+    it('too old (past expiry+600 s): kept in the record, one clear warning, never a cancel call, not warned again on the next tick', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const rec: SentRecord = { sent: {}, escrowed: [esc('0xe4', NOW - 601)] };
+      const before = world.calls.length;
+      const s = sweeper(rec);
+      await s.a.sweepEscrows(); await s.a.sweepEscrows();
+      expect(cancels(before)).toEqual([]);
+      expect(rec.escrowed).toHaveLength(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]![0])).toMatch(/0xe4.*(sertifikat|certificate)/i);
+    });
+    it('a failing cancel is logged, kept and retried at the next ticks, up to a small cap (3), then left alone', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {}); vi.spyOn(console, 'warn').mockImplementation(() => {});
+      world.cancelFail = true;
+      const rec: SentRecord = { sent: {}, escrowed: [esc('0xe5', NOW - 10)] };
+      const before = world.calls.length;
+      const s = sweeper(rec);
+      for (let i = 0; i < 5; i++) await s.a.sweepEscrows();
+      expect(cancels(before)).toHaveLength(3);
+      expect(rec.escrowed).toHaveLength(1);
+    });
+    it('never runs concurrently with itself and never throws into the caller', async () => {
+      const rec: SentRecord = { sent: {}, escrowed: [esc('0xe6', NOW - 10)] };
+      const before = world.calls.length;
+      const s = sweeper(rec);
+      await Promise.all([s.a.sweepEscrows(), s.a.sweepEscrows(), s.a.sweepEscrows()]);
+      expect(cancels(before)).toHaveLength(1);
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const boom: SignerChain = { ...countingChain().chain, head: async () => { throw new Error('rpc down'); } };
+      await expect(fresh(boom, { sent: {}, escrowed: [esc('0xe7', NOW)] }).sweepEscrows()).resolves.toBeUndefined();
+    });
+    it('startSweep ticks every interval on an unref\'d timer', () => {
+      vi.useFakeTimers();
+      const sweepEscrows = vi.fn(async () => {});
+      const t = startSweep({ sweepEscrows }, 60_000);
+      vi.advanceTimersByTime(125_000);
+      expect(sweepEscrows).toHaveBeenCalledTimes(2);
+      expect(t.hasRef()).toBe(false);
+      clearInterval(t); vi.useRealTimers();
+    });
+  });
+
+  // ---- C: outsider rows and amounts from the PUBLIC log -----------------------------------------------------------------------------------------------------
+  describe('C: public Announcement log (no key)', () => {
+    const pubChain = (over: Partial<SignerChain> = {}) => {
+      const base = countingChain(over);
+      base.chain.announcements = over.announcements ?? (async (from, to) => { world.annCalls.push([from, to]); return world.pubAnns.filter((a) => a.blockNumber >= from && a.blockNumber <= to); });
+      return base.chain;
+    };
+    const dvpTx = () => dvp.txHash;
+
+    it('a bank\'s history also lists the txs of others as outsider/partial rows (flow null, no counterparty), amounts and asset from the log, newest first, own rows once', async () => {
+      const a = fresh(pubChain());
+      const rows = await a.history('C', 100);
+      const ids = rows.map((r) => r.id);
+      expect(new Set(ids).size).toBe(ids.length);
+      const mine = new Set(world.hist.C.map((r) => r.txHash));
+      for (const r of rows) expect([r.id, mine.has(r.id) ? r.role !== 'outsider' : r.role === 'outsider']).toEqual([r.id, true]);
+      const d = rows.find((r) => r.id === dvpTx())!;
+      expect(d).toMatchObject({ flow: null, role: 'outsider', verdict: 'partial', counterparty: null, asset: 'DFABI', amount: '2', rdAmount: '2000000' });
+      expect(rows.filter((r) => r.role === 'outsider').length).toBeGreaterThan(3);
+      const blocks = rows.map((r) => r.block!);
+      expect([...blocks].sort((x, y) => y - x)).toEqual(blocks);
+      expect(d.at).toBe(new Date((1_700_000_000 + d.block! * 2) * 1000).toISOString());
+    });
+    it('the limit still applies, and BI\'s history is not duplicated and has no outsider rows', async () => {
+      const a = fresh(pubChain());
+      expect((await a.history('C', 3)).length).toBe(3);
+      const bi = await a.history('BI', 100);
+      const ids = bi.map((r) => r.id);
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(bi.some((r) => r.role === 'outsider')).toBe(false);
+    });
+    it('the log is read once for all parties and only the new range afterwards (cache only grows); concurrent reads share one call', async () => {
+      world.annCalls = [];
+      const a = fresh(pubChain());
+      await Promise.all([a.history('A', 5), a.history('B', 5), a.history('C', 5), a.lens(dvpRq, dvp, 'C')]);
+      expect(world.annCalls).toHaveLength(1);
+      const head1 = world.annCalls[0]![1];
+      world.seed('A', 'rd', 3n);
+      await a.history('C', 5);
+      expect(world.annCalls).toHaveLength(2);
+      expect(world.annCalls[1]![0]).toBe(head1 + 1);
+      await a.history('C', 5);
+      expect(world.annCalls).toHaveLength(2); // nothing new on chain: no read
+    });
+    it('lens of an outsider takes amount (and the dvp RD leg) from the public log; if the log cannot be read it falls back to the run', async () => {
+      const a = fresh(pubChain());
+      const rq = req('rd-transfer', 'A', 'B', '5');
+      const r = await a.run(rq, 5n, noop);
+      expect((await a.lens(rq, r, 'C')).amount).toBe('5');
+      const i = world.pubAnns.findIndex((x) => x.txHash === r.txHash);
+      world.pubAnns[i] = { ...world.pubAnns[i]!, metadata: buildTokenMetadata('0x01', RD, 9n) }; // proves WHERE the amount is read from
+      expect((await fresh(pubChain()).lens(rq, r, 'C')).amount).toBe('9');
+      const dl = await fresh(pubChain()).lens(dvpRq, dvp, 'C');
+      expect([dl.amount, dl.rdAmount, dl.verdict]).toEqual(['2', '2000000', 'partial']);
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const broken = fresh(pubChain({ announcements: async () => { throw new Error('logs down'); } }));
+      expect((await broken.lens(rq, r, 'C')).amount).toBe('5');
+    });
+    it('an older signer without `contracts`: no public read, no outsider rows, nothing throws', async () => {
+      world.legacy = true; world.annCalls = [];
+      const rows = await fresh(pubChain()).history('C', 20);
+      world.legacy = false;
+      expect(world.annCalls).toEqual([]);
+      expect(rows.some((r) => r.role === 'outsider')).toBe(false);
+    });
   });
   it('health: every signer answers and Besu has a head; readyFor looks only at the parties of the request (+ BI)', async () => {
     expect(await adapter.health()).toEqual({ ready: true, detail: 'ok' });
