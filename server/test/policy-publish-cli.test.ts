@@ -186,11 +186,11 @@ describe('publishes from the store\'s latest versions only, never from seeds', (
   function realStore(withV2: boolean) {
     const root = mkdtempSync(join(tmpdir(), 'pubcli-store-'));
     const seeds = join(root, 'seeds'); mkdirSync(seeds);
-    writeFileSync(join(seeds, 'bi.json'), JSON.stringify({ zeto: seedBi.zeto, noto: seedBi.zeto, fabricx: seedBi.zeto, iroha3: seedBi.zeto }));
-    for (const o of ['bank-a', 'bank-b', 'bank-c']) writeFileSync(join(seeds, `${o}.json`), JSON.stringify({ zeto: docs.bank, noto: docs.bank, fabricx: docs.bank, iroha3: docs.bank }));
+    writeFileSync(join(seeds, 'bi.json'), JSON.stringify({ zeto: seedBi.zeto, noto: seedBi.zeto, fabricx: seedBi.zeto, iroha3: seedBi.zeto, stealth: seedBi.zeto }));
+    for (const o of ['bank-a', 'bank-b', 'bank-c']) writeFileSync(join(seeds, `${o}.json`), JSON.stringify({ zeto: docs.bank, noto: docs.bank, fabricx: docs.bank, iroha3: docs.bank, stealth: docs.bank }));
     const st = new RealStore(join(root, 'policy'), seeds);
     const t = new Date().toISOString();
-    const ver = (owner: 'bi' | 'bank-a' | 'bank-b' | 'bank-c', platform: 'zeto' | 'noto' | 'fabricx' | 'iroha3', n: number, doc: unknown) =>
+    const ver = (owner: 'bi' | 'bank-a' | 'bank-b' | 'bank-c', platform: 'zeto' | 'noto' | 'fabricx' | 'iroha3' | 'stealth', n: number, doc: unknown) =>
       st.saveVersion({ owner, platform, n, doc, maker: 'm', checker: 'c', reason: 'r', note: '', submittedAt: t, approvedAt: t } as never);
     for (const o of ['bi', 'bank-a', 'bank-b', 'bank-c'] as const) for (const p of PLATFORMS) {
       ver(o, p, 1, o === 'bi' ? seedBi.zeto : docs.bank);
@@ -268,7 +268,7 @@ describe('candidate parity with the vendored tree (nothing dropped)', () => {
 // ---- candidate mode (lead 2026-11-12): `opa build` output is NOT reproducible (random build tmp dir path in every rego entry + gzip time), so a rebuild can never equal the
 // sha256 besu verified. Publish the EXACT verified bytes: --candidate=<dir> skips the build, --expect-sha256-file=<file> must list exactly the 8 tars with their sha256.
 describe('--candidate: verify, then publish the exact verified bytes', () => {
-  const REV = 'bi-zeto.1-noto.1-fabricx.1-iroha3.1', BREV = 'bank-zeto.1-noto.1-fabricx.1-iroha3.1';
+  const REV = 'bi-zeto.1-noto.1-fabricx.1-iroha3.1-stealth.1', BREV = 'bank-zeto.1-noto.1-fabricx.1-iroha3.1-stealth.1';
   const DOC = (p: string, who: string) => ({ platform: p, who });
   const GROUPS = G;
   function tarEntry(name: string, body: Buffer): Buffer {
@@ -279,7 +279,7 @@ describe('--candidate: verify, then publish the exact verified bytes', () => {
   }
   // a SOURCE bundle tar as the sink accepts it: relative names, .manifest with the revision, <kind>/config/data.json; the salt makes every tar differ in bytes
   function tarOf(rev: string, salt: string, kind: 'bi' | 'bank' = rev.startsWith('bi-') ? 'bi' : 'bank'): Buffer {
-    const plats = ['zeto', 'noto', 'fabricx', 'iroha3'];
+    const plats = ['zeto', 'noto', 'fabricx', 'iroha3', 'stealth'];
     const policy = Object.fromEntries(plats.map((p) => [p, DOC(p, kind)]));
     const data = kind === 'bi'
       ? { nodes: { node1: { party: 'BI' }, node2: { party: 'A', report_group: GROUPS.A }, node3: { party: 'B', report_group: GROUPS.B }, node4: { party: 'C', report_group: GROUPS.C } }, policy }
@@ -415,7 +415,7 @@ describe('--candidate: verify, then publish the exact verified bytes', () => {
   });
   it('the four bi tars must carry one revision (the signed bi from BI is relayed to all)', async () => {
     const c = mk();
-    const b = tarOf('bi-zeto.9-noto.1-fabricx.1-iroha3.1', 'odd'); writeFileSync(join(c.dir, 'node4/bi.tar.gz'), b);
+    const b = tarOf('bi-zeto.9-noto.1-fabricx.1-iroha3.1-stealth.1', 'odd'); writeFileSync(join(c.dir, 'node4/bi.tar.gz'), b);
     c.write({ ...c.shas, 'node4/bi.tar.gz': sha(b) });
     const r = await run(args(c, '--apply'), {});
     expect(r.rc).toBe(5); expect(r.io.calls).toEqual([]);
@@ -432,7 +432,7 @@ describe('--candidate: verify, then publish the exact verified bytes', () => {
     expect(r.rc).toBe(0);
     expect(r.io.calls).toEqual([]);
     const out = r.lines.join('\n');
-    for (const p of ['zeto', 'noto', 'fabricx', 'iroha3']) {
+    for (const p of ['zeto', 'noto', 'fabricx', 'iroha3', 'stealth']) {
       expect(out).toContain(`node1 bi policy.${p} sha256 ${sha(JSON.stringify(DOC(p, 'bi')))}`);
       expect(out).toContain(`node3 bank policy.${p} sha256 ${sha(JSON.stringify(DOC(p, 'bank')))}`);
     }
@@ -497,7 +497,7 @@ describe('--candidate: verify, then publish the exact verified bytes', () => {
   });
   it('call 2 with a BI signed bi of another revision: FAILED, nothing uploaded', async () => {
     const c = mk();
-    const io = fakeIo({ seedBi: tarOf('bi-zeto.8-noto.1-fabricx.1-iroha3.1', 'x') });
+    const io = fakeIo({ seedBi: tarOf('bi-zeto.8-noto.1-fabricx.1-iroha3.1-stealth.1', 'x') });
     const r = await run(args(c, '--apply', '--parties=A,B,C'), {}, { io });
     expect(r.rc).toBe(1);
     expect(io.calls.filter((x) => x.method === 'POST')).toEqual([]);

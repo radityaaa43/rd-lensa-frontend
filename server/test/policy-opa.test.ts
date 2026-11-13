@@ -75,7 +75,7 @@ test.skipIf(need)('assemble keeps git participants and puts one document per pla
   bi.noto.max_mint_per_tx.DFABI = 7;
   bi.zeto.frozen = ['bankB@node3'];
   bi.noto.holidays = [{ date: '2026-12-25', name: 'Natal' }];
-  const bank: ByPlatform<BankPolicy> = { zeto: { counterparties: ['bi@node1'], daily_limit: { RD: 9 } }, noto: { counterparties: ['bi@node1', 'bankB@node3'] }, fabricx: { counterparties: ['bi@node1'] }, iroha3: { counterparties: ['bi@node1'] } };
+  const bank: ByPlatform<BankPolicy> = { zeto: { counterparties: ['bi@node1'], daily_limit: { RD: 9 } }, noto: { counterparties: ['bi@node1', 'bankB@node3'] }, fabricx: { counterparties: ['bi@node1'] }, iroha3: { counterparties: ['bi@node1'] }, stealth: { counterparties: ['bi@node1'] } };
   const out = tmp();
   opa.assemble(2, bi, bank, out);
   const data = JSON.parse(readFileSync(join(out, 'bi/bi/config/data.json'), 'utf8'));
@@ -83,7 +83,7 @@ test.skipIf(need)('assemble keeps git participants and puts one document per pla
   expect(data.nodes).toEqual(git.nodes);
   expect(data.zeto.contracts).toEqual(git.zeto.contracts);
   expect(data.policy).toEqual(bi);
-  expect(data.platforms).toEqual(['zeto', 'noto', 'fabricx', 'iroha3']); // the registry, for the validators' missing-document check
+  expect(data.platforms).toEqual(['zeto', 'noto', 'fabricx', 'iroha3', 'stealth']); // the registry, for the validators' missing-document check
   expect(data.policy.zeto.frozen).toEqual(['bankB@node3']);
   expect(data.policy.noto.frozen).toEqual(bi.noto.frozen);
   // the limits no longer sit at the top of the config
@@ -111,8 +111,8 @@ test.skipIf(need)('assemble writes the Noto balance controls only when BI sets t
 test.skipIf(need)('build writes a bundle tarball', async () => {
   const out = tmp();
   opa.assemble(1, seed<BiPolicy>('bi'), seed<BankPolicy>('bank-bi'), out);
-  await opa.build(join(out, 'bi'), 'bi-zeto.1-noto.1-fabricx.1-iroha3.1', join(out, 'bi.tar.gz'));
-  await opa.build(join(out, 'bank'), 'bank-bi-zeto.1-noto.1-fabricx.1-iroha3.1', join(out, 'bank.tar.gz'));
+  await opa.build(join(out, 'bi'), 'bi-zeto.1-noto.1-fabricx.1-iroha3.1-stealth.1', join(out, 'bi.tar.gz'));
+  await opa.build(join(out, 'bank'), 'bank-bi-zeto.1-noto.1-fabricx.1-iroha3.1-stealth.1', join(out, 'bank.tar.gz'));
   expect(existsSync(join(out, 'bi.tar.gz'))).toBe(true);
   expect(existsSync(join(out, 'bank.tar.gz'))).toBe(true);
 });
@@ -126,12 +126,12 @@ test.skipIf(need)('build signs with the key of the named owner; unsigned without
   opa.assemble(2, seed<BiPolicy>('bi'), seed<BankPolicy>('bank-a'), out);
   const signed = new Opa(process.env.OPA_BIN!, OPA_ROOT, keys);
   const list = (f: string) => execFileSync('tar', ['tzf', f]).toString();
-  await signed.build(join(out, 'bank'), 'bank-a-zeto.1-noto.1-fabricx.1-iroha3.1', join(out, 'bank.tar.gz'), 'bank-a');
+  await signed.build(join(out, 'bank'), 'bank-a-zeto.1-noto.1-fabricx.1-iroha3.1-stealth.1', join(out, 'bank.tar.gz'), 'bank-a');
   expect(list(join(out, 'bank.tar.gz'))).toContain('.signatures.json');
   // the JWT header names the key id the gateway pins
   const sig = JSON.parse(execFileSync('tar', ['xzOf', join(out, 'bank.tar.gz'), '/.signatures.json']).toString()).signatures[0] as string;
   expect(JSON.parse(Buffer.from(sig.split('.')[0]!, 'base64url').toString())).toMatchObject({ alg: 'RS256', kid: 'bank-a' });
-  await opa.build(join(out, 'bi'), 'bi-zeto.1-noto.1-fabricx.1-iroha3.1', join(out, 'bi.tar.gz'), 'bi');
+  await opa.build(join(out, 'bi'), 'bi-zeto.1-noto.1-fabricx.1-iroha3.1-stealth.1', join(out, 'bi.tar.gz'), 'bi');
   expect(list(join(out, 'bi.tar.gz'))).not.toContain('.signatures.json');
   await expect(signed.build(join(out, 'bank'), 'x', join(out, 'x.tar.gz'), 'bank-zzz')).rejects.toThrow(/opa build gagal/);
 });

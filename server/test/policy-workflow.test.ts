@@ -20,8 +20,8 @@ function setup(opts: { errors?: string[]; tests?: { passed: number; total: numbe
   const root = mkdtempSync(join(tmpdir(), 'lensa-wf-'));
   const seeds = join(root, 'seeds');
   mkdirSync(seeds);
-  writeFileSync(join(seeds, 'bi.json'), JSON.stringify({ zeto: biSeed, noto: biSeed, fabricx: biSeed, iroha3: biSeed }));
-  for (const b of ['bank-a', 'bank-b', 'bank-c']) writeFileSync(join(seeds, `${b}.json`), JSON.stringify({ zeto: bankSeed, noto: bankSeed, fabricx: bankSeed, iroha3: bankSeed }));
+  writeFileSync(join(seeds, 'bi.json'), JSON.stringify({ zeto: biSeed, noto: biSeed, fabricx: biSeed, iroha3: biSeed, stealth: biSeed }));
+  for (const b of ['bank-a', 'bank-b', 'bank-c']) writeFileSync(join(seeds, `${b}.json`), JSON.stringify({ zeto: bankSeed, noto: bankSeed, fabricx: bankSeed, iroha3: bankSeed, stealth: bankSeed }));
   const dir = join(root, 'policy');
   const store = new PolicyStore(dir, seeds);
   const opa = {
@@ -47,7 +47,7 @@ test('submit stores pending with checks, trimmed fields, audit', async () => {
   expect(p).toMatchObject({ owner: 'bank-a', platform: 'zeto', base: 1, maker: 'Rina', reason: 'tambah B', state: 'waiting',
     checks: { errors: [], tests: { passed: 7, total: 7 }, inactiveBanks: [] } });
   expect(store.pending('bank-a', 'zeto')).toEqual(p);
-  expect(opa.check).toHaveBeenCalledWith('bank-a', { zeto: biSeed, noto: biSeed, fabricx: biSeed, iroha3: biSeed }, { zeto: bankDoc, noto: bankSeed, fabricx: bankSeed, iroha3: bankSeed });
+  expect(opa.check).toHaveBeenCalledWith('bank-a', { zeto: biSeed, noto: biSeed, fabricx: biSeed, iroha3: biSeed, stealth: biSeed }, { zeto: bankDoc, noto: bankSeed, fabricx: bankSeed, iroha3: bankSeed, stealth: bankSeed });
   expect(readFileSync(join(dir, 'bank-a', 'zeto', 'audit.jsonl'), 'utf8')).toContain('"event":"submitted"');
 });
 
@@ -251,9 +251,9 @@ test('the validator gets both platforms: the draft in its own, the current docum
   const biNoto: BiPolicy = { ...biSeed, max_balance: { RD: 500 } };
   store.saveVersion({ owner: 'bi', platform: 'noto', n: 2, doc: biNoto, maker: 's', checker: 's', reason: 'r', note: '', submittedAt: 'x', approvedAt: 'x' });
   await wf.submit('bank-a', 'zeto', { by: 'Rina', reason: 'x', doc: bankDoc });
-  expect(opa.check).toHaveBeenLastCalledWith('bank-a', { zeto: biSeed, noto: biNoto, fabricx: biSeed, iroha3: biSeed }, { zeto: bankDoc, noto: bankSeed, fabricx: bankSeed, iroha3: bankSeed });
+  expect(opa.check).toHaveBeenLastCalledWith('bank-a', { zeto: biSeed, noto: biNoto, fabricx: biSeed, iroha3: biSeed, stealth: biSeed }, { zeto: bankDoc, noto: bankSeed, fabricx: bankSeed, iroha3: bankSeed, stealth: bankSeed });
   await wf.submit('bi', 'zeto', { by: 'Rina', reason: 'x', doc: { ...biSeed, frozen: ['bankA@node2'] } });
-  expect(opa.check).toHaveBeenLastCalledWith('bi', { zeto: { ...biSeed, frozen: ['bankA@node2'] }, noto: biNoto, fabricx: biSeed, iroha3: biSeed }, expect.anything());
+  expect(opa.check).toHaveBeenLastCalledWith('bi', { zeto: { ...biSeed, frozen: ['bankA@node2'] }, noto: biNoto, fabricx: biSeed, iroha3: biSeed, stealth: biSeed }, expect.anything());
 });
 
 test('a BI draft only lists banks that are looser in the same platform', async () => {

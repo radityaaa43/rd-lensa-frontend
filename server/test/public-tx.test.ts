@@ -19,7 +19,7 @@ const probe = async () => ({ besu: true, paladin: [true, true, true, true] });
 const day = [1, 2, 3, 4, 5, 6, 7];
 const biSeed: BiPolicy = { max_per_tx: { RD: 1000, DFABI: 100 }, max_mint_per_tx: { RD: 10_000, DFABI: 10_000 }, hours: { RD: { days: day, open: '00:00', close: '24:00' }, DFABI: { days: day, open: '00:00', close: '24:00' } }, holidays: [], frozen: [] };
 const bankSeed: BankPolicy = { counterparties: ['bi@node1'] };
-const gw: GatewayStatus[] = [{ node: 1, deployed: true, bi: { zeto: 1, noto: 1, fabricx: 1, iroha3: 1 }, bank: { zeto: 1, noto: 1, fabricx: 1, iroha3: 1 }, ready: true }];
+const gw: GatewayStatus[] = [{ node: 1, deployed: true, bi: { zeto: 1, noto: 1, fabricx: 1, iroha3: 1, stealth: 1 }, bank: { zeto: 1, noto: 1, fabricx: 1, iroha3: 1, stealth: 1 }, ready: true }];
 const INTERNAL = /\b(?:\d{1,3}\.){3}\d{1,3}\b|[a-z][a-z0-9+.-]*:\/\/|\.svc\b|cluster\.local|\brd-(?:zeto|stealth|iroha3|fabricx|lensa)|member-\d+-node|\b(?:bank|fx|st)-gw-\d|ECONN|ETIMEDOUT|ENOTFOUND|kubectl|JSON-RPC|status code \d/;
 
 let app: FastifyInstance | undefined;
