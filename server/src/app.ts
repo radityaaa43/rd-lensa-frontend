@@ -5,14 +5,14 @@ import fastifyStatic from '@fastify/static';
 import { HISTORY_MAX, NotAvailableError, WarmingUpError, type Capability, type LensView, type ModelAdapter } from './adapter.ts';
 import { withDeadline } from './deadline.ts';
 import {
-  FLOWS, MODEL_NAMES, PARTIES, PRICE_PER_UNIT, isDvpFlow, roleOf, validateRequest,
+  FLOWS, MODEL_NAMES, PARTIES, PRICE_PER_UNIT, roleOf, validateRequest,
   type FlowId, type FlowRequest, type ModelId, type PartyId,
 } from './domain.ts';
 import { probeNodes, type Probe } from './health.ts';
 import { HEALTH_MS, STAGE_S, StressRun, USERS, effectiveUsers, validateStress, type StressConfig } from './stress.ts';
 import { toCsv } from './stats.ts';
 import { REGISTRY, isPlatform } from './policy/platforms.ts';
-import { DVP_PUBLIC_REASON, HIDDEN, HIDDEN_TX, SECURITY_HEADERS, TX_WRITES, corrId, generic, scrubPublic } from './public.ts';
+import { HIDDEN, HIDDEN_TX, SECURITY_HEADERS, TX_WRITES, corrId, generic, scrubPublic } from './public.ts';
 import { registerPolicyRoutes, registerPolicyUnavailable, type PolicyDeps } from './policy/routes.ts';
 
 type Adapters = Partial<Record<ModelId, ModelAdapter>>;
@@ -163,10 +163,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     };
   }
 
-  // GO-W: DvP and award are off in the public write mode until the BI report path is proven (R28); the adapters' own capabilities otherwise
-  const capsOf = (a: ModelAdapter): Record<FlowId, Capability> => opts.publicTx
-    ? Object.fromEntries(Object.entries(a.capabilities()).map(([f, c]) => [f, isDvpFlow(f as FlowId) ? { enabled: false, reason: DVP_PUBLIC_REASON } : c])) as Record<FlowId, Capability>
-    : a.capabilities();
+  const capsOf = (a: ModelAdapter): Record<FlowId, Capability> => a.capabilities();
   const modelUnavailable = (m: ModelId) => ({ reason: `${MODEL_NAMES[m]} belum tersedia` });
 
   app.get('/api/meta', async () => {

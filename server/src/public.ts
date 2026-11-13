@@ -17,7 +17,6 @@ export const HIDDEN = /^\/api\/(?:policy|stress|preflight-capacity)(?:\/|$)/;
 // with LENSA_PUBLIC_TX the Kebijakan reads open; stress and the capacity probe stay closed. The only writes that pass: a transaction, and approve / republish (the freeze answers 403).
 export const HIDDEN_TX = /^\/api\/(?:stress|preflight-capacity)(?:\/|$)/;
 export const TX_WRITES = /^\/api\/(?:tx|policy\/(?:bi|bank-a|bank-b|bank-c)\/(?:approve|republish))$/;
-export const DVP_PUBLIC_REASON = 'DvP dinonaktifkan di mode publik sampai laporan BI pulih (R28)';
 
 // What must never reach a public client: IPs, URLs, cluster hosts, namespaces, node / gateway names.
 const PATTERNS: RegExp[] = [

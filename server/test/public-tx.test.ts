@@ -14,7 +14,7 @@ import type { Opa } from '../src/policy/opa.ts';
 import { fakeAdapter } from './fake-adapter.ts';
 
 // GO-W (public WRITE, Zeto + Noto, anonymous; R24 waiver extension): LENSA_PUBLIC_TX=1 -> buildApp({ public: true, publicTx: true }).
-// Writes open ONLY for POST /api/tx (dvp/award off until R28) and POST approve/republish (answered 403 "dibekukan" by the freeze); every other write stays 405.
+// Writes open ONLY for POST /api/tx (every flow, dvp and award included since R28 was lifted) and POST approve/republish (answered 403 "dibekukan" by the freeze); every other write stays 405.
 const probe = async () => ({ besu: true, paladin: [true, true, true, true] });
 const day = [1, 2, 3, 4, 5, 6, 7];
 const biSeed: BiPolicy = { max_per_tx: { RD: 1000, DFABI: 100 }, max_mint_per_tx: { RD: 10_000, DFABI: 10_000 }, hours: { RD: { days: day, open: '00:00', close: '24:00' }, DFABI: { days: day, open: '00:00', close: '24:00' } }, holidays: [], frozen: [] };
@@ -51,17 +51,17 @@ describe('W on: transactions', () => {
       await a.close(); app = undefined;
     }
   });
-  it('dvp and award are OFF (409 with the R28 reason), also in /api/meta capabilities', async () => {
-    const a = make();
+  it('dvp and award are served (202) like every other flow (R28 lifted), also enabled in /api/meta capabilities', async () => {
     for (const model of ['zeto', 'noto']) for (const flow of ['dvp', 'award']) {
+      const a = make();
       const r = await tx(a, model, flow, flow === 'award' ? 'BI' : 'A', 'B');
-      expect([model, flow, r.statusCode]).toEqual([model, flow, 409]);
-      expect(r.json().reason).toMatch(/R28/);
+      expect([model, flow, r.statusCode]).toEqual([model, flow, 202]);
+      await a.close(); app = undefined;
     }
+    const a = make();
     const meta = (await a.inject('/api/meta')).json();
     expect(meta.publicTx).toBe(true);
-    expect(meta.models.zeto.capabilities.dvp.enabled).toBe(false);
-    expect(meta.models.zeto.capabilities['rd-transfer'].enabled).toBe(true);
+    for (const flow of ['dvp', 'award', 'rd-transfer']) expect(meta.models.zeto.capabilities[flow].enabled).toBe(true);
   });
   it('Fabric-X in pod mode without LENSA_FLOWS (all flows disabled) and Iroha 3 / Stealth (not loaded) never start a tx', async () => {
     const a = make({ zeto: fakeAdapter('zeto'), fabricx: loadPod(async () => ({ amount: '1' })) });
