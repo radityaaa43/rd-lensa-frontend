@@ -19,7 +19,7 @@ const biSeed: BiPolicy = {
 const bankSeed: BankPolicy = { counterparties: ['bi@node1'] };
 const bankDoc: BankPolicy = { counterparties: ['bi@node1', 'bankB@node3'] };
 const NOT_ALLOWED = { reason: 'Pihak ini tidak dapat mengubah kebijakan tersebut' };
-const gw: GatewayStatus[] = [{ node: 1, deployed: true, bi: { zeto: 1, noto: 1, fabricx: 1, iroha3: 1 }, bank: { zeto: 1, noto: 1, fabricx: 1, iroha3: 1 }, ready: true }];
+const gw: GatewayStatus[] = [{ node: 1, deployed: true, bi: { zeto: 1, noto: 1, fabricx: 1, iroha3: 1, stealth: 1 }, bank: { zeto: 1, noto: 1, fabricx: 1, iroha3: 1, stealth: 1 }, ready: true }];
 
 let app: FastifyInstance | undefined;
 afterEach(async () => { await app?.close(); app = undefined; });
@@ -28,8 +28,8 @@ function setup(opts: { errors?: string[]; publish?: (o: Owner, m: Platform, n: n
   const root = mkdtempSync(join(tmpdir(), 'lensa-routes-'));
   const seeds = join(root, 'seeds');
   mkdirSync(seeds);
-  writeFileSync(join(seeds, 'bi.json'), JSON.stringify({ zeto: biSeed, noto: biSeed, fabricx: biSeed, iroha3: biSeed }));
-  for (const b of ['bank-a', 'bank-b', 'bank-c']) writeFileSync(join(seeds, `${b}.json`), JSON.stringify({ zeto: bankSeed, noto: bankSeed, fabricx: bankSeed, iroha3: bankSeed }));
+  writeFileSync(join(seeds, 'bi.json'), JSON.stringify({ zeto: biSeed, noto: biSeed, fabricx: biSeed, iroha3: biSeed, stealth: biSeed }));
+  for (const b of ['bank-a', 'bank-b', 'bank-c']) writeFileSync(join(seeds, `${b}.json`), JSON.stringify({ zeto: bankSeed, noto: bankSeed, fabricx: bankSeed, iroha3: bankSeed, stealth: bankSeed }));
   const store = new PolicyStore(join(root, 'policy'), seeds);
   const opa = { check: vi.fn(async () => opts.errors ?? []), test: vi.fn(async () => ({ passed: 7, total: 7 })) };
   const publish = vi.fn(opts.publish ?? (async () => {}));
@@ -164,13 +164,13 @@ test('blank name is 400 from the workflow, bad shapes are 400 from the schema', 
     ['/api/policy/bank-a/approve', { pihak: 'A', model: 'zeto', by: 'R', note: 'n'.repeat(501) }],
     ['/api/policy/bank-z/cancel', { pihak: 'A', model: 'zeto', by: 'R' }],
     ['/api/policy/bank-a/drafts', { pihak: 'A', by: 'R', reason: 'x', doc: bankDoc }], // a write names its platform
-    ['/api/policy/bank-a/drafts', { pihak: 'A', model: 'stealth', by: 'R', reason: 'x', doc: bankDoc }],
+    ['/api/policy/bank-a/drafts', { pihak: 'A', model: 'monero', by: 'R', reason: 'x', doc: bankDoc }],
     ['/api/policy/bank-a/cancel', { pihak: 'A', by: 'R' }],
   ] as const;
   for (const [url, payload] of bad) expect((await post(a, url, payload)).statusCode, url).toBe(400);
   expect((await get(a, '/api/policy')).statusCode).toBe(400);
   expect((await get(a, '/api/policy?pihak=X')).statusCode).toBe(400);
-  expect((await get(a, '/api/policy?pihak=A&model=stealth')).statusCode).toBe(400);
+  expect((await get(a, '/api/policy?pihak=A&model=monero')).statusCode).toBe(400);
   expect((await get(a, '/api/policy/bank-z/history?pihak=BI')).statusCode).toBe(400);
 });
 
@@ -210,9 +210,9 @@ test('model picks the platform document; reads default to Zeto', async () => {
   expect(banks.map((b) => [b.platform, b.current.n])).toEqual([['noto', 2], ['noto', 1], ['noto', 1]]);
 });
 
-test('the registered platforms without a gateway yet (fabricx, iroha3) have their own documents, drafts and approval', async () => {
+test('the registered platforms without a gateway yet (fabricx, iroha3, stealth) have their own documents, drafts and approval', async () => {
   const { app: a, publish } = setup();
-  for (const model of ['fabricx', 'iroha3'] as const) {
+  for (const model of ['fabricx', 'iroha3', 'stealth'] as const) {
     expect((await get(a, `/api/policy?pihak=BI&model=${model}`)).json().network.current).toMatchObject({ owner: 'bi', platform: model, n: 1 });
     const d = await post(a, '/api/policy/bank-a/drafts', { pihak: 'A', model, by: 'Rina', reason: 'tambah B', doc: bankDoc });
     expect(d.statusCode).toBe(200);

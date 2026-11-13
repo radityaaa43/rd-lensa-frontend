@@ -12,8 +12,8 @@ function fresh() {
   const root = mkdtempSync(join(tmpdir(), 'lensa-policy-'));
   const seeds = join(root, 'seeds');
   mkdirSync(seeds);
-  writeFileSync(join(seeds, 'bank-a.json'), JSON.stringify({ zeto: seedA, noto: seedANoto, fabricx: seedA, iroha3: seedANoto }));
-  writeFileSync(join(seeds, 'bi.json'), JSON.stringify({ zeto: { marker: 'seed-zeto' }, noto: { marker: 'seed-noto' }, fabricx: { marker: 'seed-fabricx' }, iroha3: { marker: 'seed-iroha3' } }));
+  writeFileSync(join(seeds, 'bank-a.json'), JSON.stringify({ zeto: seedA, noto: seedANoto, fabricx: seedA, iroha3: seedANoto, stealth: seedA }));
+  writeFileSync(join(seeds, 'bi.json'), JSON.stringify({ zeto: { marker: 'seed-zeto' }, noto: { marker: 'seed-noto' }, fabricx: { marker: 'seed-fabricx' }, iroha3: { marker: 'seed-iroha3' }, stealth: { marker: 'seed-stealth' } }));
   return { store: new PolicyStore(join(root, 'policy'), seeds), dir: join(root, 'policy'), seeds };
 }
 const v = (n: number): Version => ({
@@ -120,12 +120,13 @@ test('migrate: the old history becomes the Zeto history with its numbers, Noto s
   expect(store.pending('bi', 'noto')).toBeNull();
   expect(readFileSync(join(dir, 'bi', 'noto', 'audit.jsonl'), 'utf8')).toContain('"by":"migrasi"');
   // a platform registered after the split gets v1 from its seed, made by "migrasi"
-  for (const p of ['fabricx', 'iroha3'] as const) {
+  for (const p of ['fabricx', 'iroha3', 'stealth'] as const) {
     expect(store.history('bi', p)).toHaveLength(1);
     expect(store.current('bi', p)).toMatchObject({ platform: p, n: 1, doc: { marker: `seed-${p}` }, maker: 'migrasi', checker: 'migrasi', reason: registeredReason(p) });
   }
   expect(registeredReason('fabricx')).toBe('Platform Fabric-X didaftarkan');
   expect(registeredReason('iroha3')).toBe('Platform Iroha 3 didaftarkan');
+  expect(registeredReason('stealth')).toBe('Platform Stealth didaftarkan');
   // nothing of the old layout is changed or removed
   const after = snapshot(old);
   for (const [k, text] of Object.entries(before)) expect(after[k], k).toBe(text);
@@ -174,8 +175,8 @@ test('migrate registers the platforms an existing owner lacks, once, and leaves 
   const { store, dir } = fresh();
   store.current('bank-a', 'zeto');
   store.migrate();
-  expect(['noto', 'fabricx', 'iroha3'].map((p) => store.history('bank-a', p as 'noto').map((x) => [x.n, x.maker, x.reason]))).toEqual([
-    [[1, 'migrasi', registeredReason('noto')]], [[1, 'migrasi', registeredReason('fabricx')]], [[1, 'migrasi', registeredReason('iroha3')]],
+  expect(['noto', 'fabricx', 'iroha3', 'stealth'].map((p) => store.history('bank-a', p as 'noto').map((x) => [x.n, x.maker, x.reason]))).toEqual([
+    [[1, 'migrasi', registeredReason('noto')]], [[1, 'migrasi', registeredReason('fabricx')]], [[1, 'migrasi', registeredReason('iroha3')]], [[1, 'migrasi', registeredReason('stealth')]],
   ]);
   expect(store.current('bank-a', 'zeto')).toMatchObject({ maker: 'seed', reason: 'Versi awal' });
   const after = snapshot(dir);

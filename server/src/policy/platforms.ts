@@ -6,7 +6,7 @@ import { fabricxUsage, transport } from '../adapters/fabricx.ts';
 // The one place that lists the platforms with a policy document. Everything else (store, bundles, revisions, routes,
 // readiness, the web screen through /api/meta) is derived from this array and REGISTRY, so a new platform is one entry here
 // plus its rego packages (besu/opa/README.md, "Adding a platform").
-export const PLATFORMS = ['zeto', 'noto', 'fabricx', 'iroha3'] as const;
+export const PLATFORMS = ['zeto', 'noto', 'fabricx', 'iroha3', 'stealth'] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
 export type Usage = Record<Token, { used: number; limit: number | null }>;
@@ -33,6 +33,8 @@ export const REGISTRY: Record<Platform, PlatformInfo> = {
     ...(transport() ? { usage: (party: Exclude<PartyId, 'BI'>, limits: Partial<Record<Token, number>> | undefined) => fabricxUsage(party, limits) } : {}),
   },
   iroha3: { label: 'Iroha 3', gateways: [], enforced: false },
+  // st-gw-1..4 (rd-besu stealth Kebijakan, 2026-11-13): the same bi/bank bundles as bank-gw-N, so no sink of their own; no usage: daily limits are not enforced on stealth
+  stealth: { label: 'Stealth', gateways: [], enforced: true },
 };
 
 export const isPlatform = (v: unknown): v is Platform => (PLATFORMS as readonly unknown[]).includes(v);

@@ -132,7 +132,7 @@ test('usage route passes the rail, zeto by default, and refuses an unknown one',
   await app.inject('/api/policy/usage?pihak=A');
   await app.inject('/api/policy/usage?pihak=A&model=noto');
   expect(fn.mock.calls).toEqual([['A', 'zeto'], ['A', 'noto']]);
-  expect((await app.inject('/api/policy/usage?pihak=A&model=stealth')).statusCode).toBe(400); // not a platform with a policy
+  expect((await app.inject('/api/policy/usage?pihak=A&model=monero')).statusCode).toBe(400); // not a platform with a policy
   expect(fn).toHaveBeenCalledTimes(2);
   await app.close();
 });
@@ -140,7 +140,7 @@ test('usage route passes the rail, zeto by default, and refuses an unknown one',
 test('a platform without a usage source in the registry answers 501 with an Indonesian reason, and never calls the source', async () => {
   const fn = vi.fn(async () => ({ RD: { used: 0, limit: null }, DFABI: { used: 0, limit: null } }));
   app = setup(fn);
-  for (const model of ['fabricx', 'iroha3']) {
+  for (const model of ['fabricx', 'iroha3', 'stealth']) {
     const res = await app.inject(`/api/policy/usage?pihak=A&model=${model}`);
     expect(res.statusCode).toBe(501);
     expect(res.json()).toEqual({ reason: 'Pemakaian harian belum tersedia untuk platform ini' });

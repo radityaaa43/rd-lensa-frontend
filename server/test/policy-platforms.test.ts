@@ -15,12 +15,13 @@ import type { BiPolicy } from '../src/policy/types.ts';
 afterEach(() => vi.restoreAllMocks());
 
 test('registry: platforms in order, zeto and noto enforced on the four bank gateways, the others registered but not enforced', () => {
-  expect([...PLATFORMS]).toEqual(['zeto', 'noto', 'fabricx', 'iroha3']);
+  expect([...PLATFORMS]).toEqual(['zeto', 'noto', 'fabricx', 'iroha3', 'stealth']);
   expect(PLATFORMS.map((p) => [p, REGISTRY[p].label, REGISTRY[p].enforced, REGISTRY[p].gateways, !!REGISTRY[p].usage])).toEqual([
     ['zeto', 'Zeto', true, ['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4'], true],
     ['noto', 'Noto', true, ['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4'], true],
     ['fabricx', 'Fabric-X', true, ['fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4'], false], // usage only with LENSA_FABRICX_GW=1
     ['iroha3', 'Iroha 3', false, [], false],
+    ['stealth', 'Stealth', true, [], false], // the st-gw-N doors load the same bundle as bank-gw-N; no daily limits (no outflow source a gateway can query)
   ]);
   // the sinks the Publisher waits for: every platform's gateways, once each
   expect(sinkNames()).toEqual(['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4', 'fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4']);
@@ -35,39 +36,40 @@ test('/api/meta says per model whether it has a policy document and whether a ga
     noto: { registered: true, enforced: true },
     fabricx: { registered: true, enforced: true },
     iroha3: { registered: true, enforced: false },
-    stealth: { registered: false, enforced: false, reason: 'Kebijakan belum tersedia untuk Stealth' },
+    stealth: { registered: true, enforced: true },
   });
 });
 
 // ---- revisions
 
-const NEW = 'bank-a-zeto.3-noto.1-fabricx.2-iroha3.7';
+const NEW = 'bank-a-zeto.3-noto.1-fabricx.2-iroha3.7-stealth.4';
 
 test('revisionOf lists every platform in registry order', () => {
-  expect(revisionOf('bi', { zeto: 31, noto: 5, fabricx: 1, iroha3: 1 })).toBe('bi-zeto.31-noto.5-fabricx.1-iroha3.1');
-  expect(revisionOf('bank-bi', { zeto: 1, noto: 1, fabricx: 1, iroha3: 1 })).toBe('bank-bi-zeto.1-noto.1-fabricx.1-iroha3.1');
-  expect(revisionOf('bank-a', { zeto: 3, noto: 1, fabricx: 2, iroha3: 7 })).toBe(NEW);
+  expect(revisionOf('bi', { zeto: 31, noto: 5, fabricx: 1, iroha3: 1, stealth: 1 })).toBe('bi-zeto.31-noto.5-fabricx.1-iroha3.1-stealth.1');
+  expect(revisionOf('bank-bi', { zeto: 1, noto: 1, fabricx: 1, iroha3: 1, stealth: 1 })).toBe('bank-bi-zeto.1-noto.1-fabricx.1-iroha3.1-stealth.1');
+  expect(revisionOf('bank-a', { zeto: 3, noto: 1, fabricx: 2, iroha3: 7, stealth: 4 })).toBe(NEW);
 });
 
 test('versionOf reads the new format, whatever the bundle name, and null for a platform it does not name', () => {
-  expect(versionOf(NEW)).toEqual({ zeto: 3, noto: 1, fabricx: 2, iroha3: 7 });
-  expect(versionOf('bi-zeto.31-noto.5-fabricx.1-iroha3.1')).toEqual({ zeto: 31, noto: 5, fabricx: 1, iroha3: 1 });
-  expect(versionOf('bank-bi-zeto.1-noto.1-fabricx.1-iroha3.1')).toEqual({ zeto: 1, noto: 1, fabricx: 1, iroha3: 1 });
-  expect(versionOf('bi-zeto.4-noto.2')).toEqual({ zeto: 4, noto: 2, fabricx: null, iroha3: null }); // a revision from before iroha3 existed
-  const none = { zeto: null, noto: null, fabricx: null, iroha3: null };
+  expect(versionOf(NEW)).toEqual({ zeto: 3, noto: 1, fabricx: 2, iroha3: 7, stealth: 4 });
+  expect(versionOf('bi-zeto.31-noto.5-fabricx.1-iroha3.1-stealth.1')).toEqual({ zeto: 31, noto: 5, fabricx: 1, iroha3: 1, stealth: 1 });
+  expect(versionOf('bank-bi-zeto.1-noto.1-fabricx.1-iroha3.1-stealth.1')).toEqual({ zeto: 1, noto: 1, fabricx: 1, iroha3: 1, stealth: 1 });
+  expect(versionOf('bi-zeto.4-noto.2')).toEqual({ zeto: 4, noto: 2, fabricx: null, iroha3: null, stealth: null }); // a revision from before iroha3 existed
+  expect(versionOf('bi-zeto.41-noto.11-fabricx.13-iroha3.1')).toEqual({ zeto: 41, noto: 11, fabricx: 13, iroha3: 1, stealth: null }); // the live revision from before stealth was a platform
+  const none = { zeto: null, noto: null, fabricx: null, iroha3: null, stealth: null };
   expect(versionOf(null)).toEqual(none);
   expect(versionOf(undefined)).toEqual(none);
   expect(versionOf('bank-a-v3')).toEqual(none);
   expect(versionOf('')).toEqual(none);
 });
 
-test('versionOf still reads the old bi-z<n>-n<m> format (fabricx and iroha3 null), with one warning per process however often it is polled', async () => {
+test('versionOf still reads the old bi-z<n>-n<m> format (fabricx, iroha3 and stealth null), with one warning per process however often it is polled', async () => {
   vi.resetModules(); // a fresh module: its warning flag is not set yet
   const { versionOf: fresh } = await import('../src/policy/publish.ts');
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   fresh(NEW);
   expect(warn).not.toHaveBeenCalled(); // the new format never warns
-  const old = { fabricx: null, iroha3: null };
+  const old = { fabricx: null, iroha3: null, stealth: null };
   expect(fresh('bi-z31-n5')).toEqual({ zeto: 31, noto: 5, ...old });
   expect(fresh('bank-a-z7-n3')).toEqual({ zeto: 7, noto: 3, ...old });
   expect(fresh('bank-bi-z1-n1')).toEqual({ zeto: 1, noto: 1, ...old });
@@ -147,12 +149,12 @@ test.skipIf(need)('publishing a fabricx or iroha3 document changes only the revi
 
   const after = tmp();
   const built = await buildBundles(opa, store, 2, after);
-  expect(built.bi).toEqual({ zeto: 1, noto: 1, fabricx: 2, iroha3: 1 });
-  expect(built.bank).toEqual({ zeto: 1, noto: 1, fabricx: 1, iroha3: 2 });
+  expect(built.bi).toEqual({ zeto: 1, noto: 1, fabricx: 2, iroha3: 1, stealth: 1 });
+  expect(built.bank).toEqual({ zeto: 1, noto: 1, fabricx: 1, iroha3: 2, stealth: 1 });
   expect(verdicts(after)).toEqual(base);
   // what the gateway sees change is the revision string
-  expect(revisionIn(join(before, 'bi.tar.gz'))).toBe('bi-zeto.1-noto.1-fabricx.1-iroha3.1');
-  expect(revisionIn(join(after, 'bi.tar.gz'))).toBe('bi-zeto.1-noto.1-fabricx.2-iroha3.1');
-  expect(revisionIn(join(before, 'bank.tar.gz'))).toBe('bank-a-zeto.1-noto.1-fabricx.1-iroha3.1');
-  expect(revisionIn(join(after, 'bank.tar.gz'))).toBe('bank-a-zeto.1-noto.1-fabricx.1-iroha3.2');
+  expect(revisionIn(join(before, 'bi.tar.gz'))).toBe('bi-zeto.1-noto.1-fabricx.1-iroha3.1-stealth.1');
+  expect(revisionIn(join(after, 'bi.tar.gz'))).toBe('bi-zeto.1-noto.1-fabricx.2-iroha3.1-stealth.1');
+  expect(revisionIn(join(before, 'bank.tar.gz'))).toBe('bank-a-zeto.1-noto.1-fabricx.1-iroha3.1-stealth.1');
+  expect(revisionIn(join(after, 'bank.tar.gz'))).toBe('bank-a-zeto.1-noto.1-fabricx.1-iroha3.2-stealth.1');
 });

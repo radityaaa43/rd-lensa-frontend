@@ -21,9 +21,10 @@ const bankSeed: BankPolicy = { counterparties: ['bi@node1'] };
 const biSeeds: ByPlatform<BiPolicy> = {
   zeto: biSeed, noto: { ...biSeed, max_per_tx: { RD: 2000, DFABI: 200 } },
   fabricx: { ...biSeed, max_per_tx: { RD: 3000, DFABI: 300 } }, iroha3: { ...biSeed, max_per_tx: { RD: 4000, DFABI: 400 } },
+  stealth: { ...biSeed, max_per_tx: { RD: 5000, DFABI: 500 } },
 };
 const bankSeeds: ByPlatform<BankPolicy> = {
-  zeto: bankSeed, noto: { counterparties: ['bi@node1', 'bankC@node4'] }, fabricx: { counterparties: ['bi@node1', 'bankB@node3'] }, iroha3: { counterparties: [] },
+  zeto: bankSeed, noto: { counterparties: ['bi@node1', 'bankC@node4'] }, fabricx: { counterparties: ['bi@node1', 'bankB@node3'] }, iroha3: { counterparties: [] }, stealth: { counterparties: ['bi@node1', 'bankB@node3', 'bankC@node4'] },
 };
 
 // Fake opa: assemble writes the two documents, build packs "revision + document" into the tarball path.
@@ -40,8 +41,8 @@ const fakeOpa = {
   },
 } as unknown as Opa;
 
-// 'bank-a-zeto.3-noto.1-fabricx.1-iroha3.1'
-const R = (name: string, z = 1, n = 1, f = 1, i = 1) => `${name}-zeto.${z}-noto.${n}-fabricx.${f}-iroha3.${i}`;
+// 'bank-a-zeto.3-noto.1-fabricx.1-iroha3.1-stealth.1'
+const R = (name: string, z = 1, n = 1, f = 1, i = 1, st = 1) => `${name}-zeto.${z}-noto.${n}-fabricx.${f}-iroha3.${i}-stealth.${st}`;
 
 // The "gateway" of MemKube loads a ConfigMap's bundles on `sync(node)` and then reports their revisions, like the sink does.
 // `autoSync` = the gateway polls by itself right after an apply; `refuse` = it rejects the bundle (bad signature) and keeps the old one.
@@ -93,11 +94,11 @@ function setup(kube: MemKube) {
   const store = new PolicyStore(join(root, 'policy'), seeds);
   return { store, pub: new Publisher(kube, fakeOpa, store, { waitMs: 60, pollMs: 5 }) };
 }
-const rev = (z: number, n = 1, f = 1, i = 1) => ({ zeto: z, noto: n, fabricx: f, iroha3: i });
-const none = { zeto: null, noto: null, fabricx: null, iroha3: null };
+const rev = (z: number, n = 1, f = 1, i = 1, st = 1) => ({ zeto: z, noto: n, fabricx: f, iroha3: i, stealth: st });
+const none = { zeto: null, noto: null, fabricx: null, iroha3: null, stealth: null };
 const tar = (kube: MemKube, node: number, which: 'bi' | 'bank') =>
   JSON.parse(kube.cms.get(`bank-gw-${node}-bundles`)![`${which}.tar.gz`]!.toString()) as { revision: string; keyId?: string; doc: unknown };
-const saveV2 = (store: PolicyStore, owner: 'bi' | 'bank-a' | 'bank-b', platform: Platform, doc: BiPolicy | BankPolicy) =>
+const saveV2 = (store: PolicyStore, owner: 'bi' | 'bank-a' | 'bank-b' | 'bank-c', platform: Platform, doc: BiPolicy | BankPolicy) =>
   store.saveVersion({ owner, platform, n: 2, doc, maker: 'm', checker: 'c', reason: 'r', note: '', submittedAt: 'x', approvedAt: 'x' });
 
 test('bi change goes to every deployed gateway, signed with the owner keys, and no Deployment is touched', async () => {
@@ -211,7 +212,7 @@ test('status: fresh report gives the versions of every platform, stale report or
   warn.mockRestore();
   expect(s[0]).toEqual({ node: 1, deployed: true, bi: rev(3, 2, 5, 6), bank: rev(2, 4), ready: true });
   expect(s[1]).toEqual({ node: 2, deployed: true, bi: none, bank: none, ready: false });
-  expect(s[2]).toEqual({ node: 3, deployed: true, bi: none, bank: { ...rev(1), fabricx: null, iroha3: null }, ready: false });
+  expect(s[2]).toEqual({ node: 3, deployed: true, bi: none, bank: { ...rev(1), fabricx: null, iroha3: null, stealth: null }, ready: false });
   kube.bundleStatus = async () => { throw new Error('sink down'); };
   const err = vi.spyOn(console, 'error').mockImplementation(() => {});
   expect((await pub.status()).map((g) => g.ready)).toEqual([false, false, false, false]);
@@ -279,6 +280,21 @@ test('a fabricx document publishes without waiting for fabricx gateways that do 
   expect(Date.now() - t0).toBeLessThan(55); // waitMs is 60: nothing was waited out
   for (const node of [1, 2, 3, 4]) expect(tar(kube, node, 'bi').revision).toBe(R('bi', 1, 1, 2, 1));
   expect(kube.calls).toEqual([1, 2, 3, 4].map((n) => `apply bank-gw-${n}-bundles`));
+});
+
+test('a stealth document publishes through the bank-gw bundles (st-gw-N load the same ones): every bank gateway gets the new revision, nothing is waited out', async () => {
+  const kube = new MemKube(1, 2, 3, 4); // no st-gw Deployment of its own: stealth.gateways is []
+  const { store, pub } = setup(kube);
+  expect(REGISTRY.stealth.gateways).toEqual([]);
+  saveV2(store, 'bi', 'stealth', { ...biSeed, frozen: ['bankB@node3'] });
+  const t0 = Date.now();
+  await pub.publish('bi', 'stealth', 2);
+  expect(Date.now() - t0).toBeLessThan(55);
+  for (const node of [1, 2, 3, 4]) expect(tar(kube, node, 'bi')).toMatchObject({ revision: R('bi', 1, 1, 1, 1, 2), doc: { zeto: biSeeds.zeto, stealth: { frozen: ['bankB@node3'] } } });
+  saveV2(store, 'bank-c', 'stealth', { counterparties: ['bi@node1'] });
+  await pub.publish('bank-c', 'stealth', 2);
+  expect(tar(kube, 4, 'bank').revision).toBe(R('bank-c', 1, 1, 1, 1, 2)); // bank C's own gateway only
+  expect(kube.calls).toEqual([1, 2, 3, 4].map((n) => `apply bank-gw-${n}-bundles`).concat('apply bank-gw-4-bundles'));
 });
 
 test('a registered platform that lists gateways which are not deployed yet is skipped like any missing Deployment, whatever its document', async () => {
