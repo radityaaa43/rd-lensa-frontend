@@ -2,6 +2,7 @@ import https from 'node:https';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BANKS, PARTIES, type PartyId } from './domain.ts';
+import { readState } from './state.ts';
 
 // Lensa's door to the OPA gateways (besu/opa/README.md, "mTLS"). Opt-in: LENSA_GW_MTLS_DIR=<dir with ca.crt, lensa.crt,
 // lensa.key> (made by besu/opa/mtls/gen-certs.sh, outside the repo) turns it on. Then every gateway URL is https and every
@@ -163,6 +164,10 @@ export function assertGatewayEnv(): void {
   if (process.env.LENSA_BESU_RPC) add('LENSA_BESU_RPC', hostOf('LENSA_BESU_RPC', process.env.LENSA_BESU_RPC));
   // stealth bank doors, slot i = BANKS[i]; empty entries are dropped first, exactly like stealth.ts and partyOfUrl do
   bankDoors().forEach((d, i) => { const label = `LENSA_BESU_RPC_BANKS[${BANKS[i] ?? i}]`; add(label, hostOf(label, d)); });
+}
+// Stealth state with LENSA_BESU_RPC unset would fall back to state.rpcUrl / http://127.0.0.1:8545, which is not a bank-gw door: refuse to start (main.ts). The pod has no stealth state.
+export function assertStealthRpc(stateDir?: string): void {
+  if (!process.env.LENSA_BESU_RPC && readState('stealth', stateDir)) throw new Error('stealth state exists but LENSA_BESU_RPC is unset: set it to the bank-gw Besu door (deploy/forwards.conf, e.g. http://127.0.0.1:38545)');
 }
 export const paladinUrl = (p: PartyId) => gwEndpoint('paladin', p);
 
