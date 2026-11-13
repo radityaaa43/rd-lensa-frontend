@@ -8,6 +8,7 @@ import { DeadlineError, withDeadline } from '../deadline.ts';
 import type { Sample } from '../stats.ts';
 import { STATE_DIR, readState, writeState } from '../state.ts';
 import { gwAgent, gwTarget, gwUrl } from '../gateway.ts';
+import { inCluster } from '../incluster.ts';
 // Server code never imports ethers itself: everything chain-related comes from stealth-address, so one ethers copy is in play.
 import {
   Contract, FetchRequest, JsonRpcProvider, TRANCHE_A, Wallet, announcements, artifact, biRows, cert, chainNow, contracts, pay, read,
@@ -39,7 +40,7 @@ export interface StealthState {
   escrowed?: { escrow: string; seller: string; bondAmount: string; expiry: string }[];
 }
 
-const LABELS: [string, string, string, string] = ['Alamat stealth & enkripsi memo', 'Tanda tangan & kirim transaksi', 'Masuk block Besu', 'BI memindai dengan view key'];
+export const LABELS: [string, string, string, string] = ['Alamat stealth & enkripsi memo', 'Tanda tangan & kirim transaksi', 'Masuk block Besu', 'BI memindai dengan view key'];
 const FLOW_IDS: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp'];
 const PAIRS: [BankId, BankId][] = [['A', 'B'], ['B', 'C'], ['C', 'A']];
 const TX_MS = 120_000;
@@ -679,6 +680,8 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
 }
 
 export async function load(): Promise<ModelAdapter | null> {
+  // S17: in the pod the stealth keys live in each party's signer, never here: the keyless adapter talks to the st-gw doors, and no key file is read. Dynamic import: stealth-signer.ts imports this module.
+  if (inCluster()) return (await import('./stealth-signer.ts')).loadSigner();
   const s = readState<StealthState>('stealth');
   if (!s) return null;
   const adapter = createStealthAdapter(s);
