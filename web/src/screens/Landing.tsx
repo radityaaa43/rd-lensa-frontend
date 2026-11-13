@@ -3,7 +3,7 @@ import type { Health } from '../api.ts';
 import { linkTo } from '../app/useRoute.ts';
 import { PLATFORM_COPY, SEES_LABELS } from '../demo/copy.ts';
 
-const MARK: Record<PlatformId, string> = { besu: 'B', fabricx: 'F', iroha3: 'I' };
+const MARK: Record<PlatformId, string> = { besu: 'B', fabricx: 'F', 'fabricx-adapter': 'T', iroha3: 'I' };
 const EYE = 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z';
 const LOCK = 'M6 11h12v10H6zM8.5 11V7.5a3.5 3.5 0 0 1 7 0V11';
 

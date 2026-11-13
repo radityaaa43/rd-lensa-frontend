@@ -5,7 +5,7 @@ import { formatDecimal } from '../format.ts';
 import { STOP_TEXT } from './stressForm.ts';
 
 // DESIGN.md §7.8 (Ref A bars): ink and aqua alternate by model order; every bar and line is also labelled with its model name
-export const COLOR: Record<ModelId, string> = { zeto: 'var(--ink)', noto: 'var(--aqua-edge)', stealth: 'var(--ink)', fabricx: 'var(--aqua-edge)', iroha3: 'var(--ink)' };
+export const COLOR: Record<ModelId, string> = { zeto: 'var(--ink)', noto: 'var(--aqua-edge)', stealth: 'var(--ink)', fabricx: 'var(--aqua-edge)', 'fabricx-adapter': 'var(--ink)', iroha3: 'var(--ink)' };
 const LABEL: Record<ModelRunStatus, string> = {
   waiting: 'Menunggu giliran', running: 'Berjalan', done: 'Selesai', stopped: 'Dihentikan', skipped: 'Dilewati',
 };

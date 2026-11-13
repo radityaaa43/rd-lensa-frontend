@@ -15,7 +15,7 @@ export async function loadAdaptersWithFailures(
   const adapters: Adapters = {};
   const failures: LoadFailures = {};
   const importModule = opts.importModule ?? ((m: ModelId) => import(`./${m}.ts`) as Promise<Module>);
-  for (const m of opts.only ?? (['stealth', 'noto', 'zeto', 'fabricx', 'iroha3'] as const)) {
+  for (const m of opts.only ?? (['stealth', 'noto', 'zeto', 'fabricx', 'fabricx-adapter', 'iroha3'] as const)) {
     try {
       const a = await (await importModule(m)).load(opts.stateDir);
       if (a) adapters[m] = a;

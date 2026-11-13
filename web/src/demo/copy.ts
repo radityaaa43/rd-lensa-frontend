@@ -37,6 +37,10 @@ export const MODEL_COPY: Record<ModelId, { tag: string; story: string }> = {
     tag: 'Bukti ZK dan pseudonim Idemix. Endorsement 3 dari 4 institusi, tanpa auditor.',
     story: 'Ledger hanya menyimpan commitment Pedersen dan bukti ZK, jadi nominal, jenis token, dan pemilik tersembunyi. Transaksi butuh endorsement 3 dari 4 institusi (BI dan tiga bank), sehingga bank tetap bisa bertransaksi saat BI atau satu bank offline. Setelah final, bank pengirim melaporkan transaksi lengkap ke BI; BI mencocokkannya dengan commitment di ledger lalu menyimpannya. Bank penerima membaca dompetnya sendiri, bank lain hanya melihat entri ledger yang buram.',
   },
+  'fabricx-adapter': {
+    tag: 'Token v2 di Fabric-X. Tiap pihak membaca riwayat dompetnya sendiri; BI memegang node penerbit; pembacaan auditor BI belum tersambung ke Lensa.',
+    story: 'Aplikasi token v2 berjalan per pihak (BI, Bank A, B, C). Pengirim dan penerima membaca riwayat dari node token miliknya; bank di luar transaksi tidak melihat apa pun. BI menerbitkan Rupiah Digital, tetapi node penerbitnya hanya menampilkan transaksi yang melibatkan dompet BI, dan pembacaan auditor BI belum tersambung ke Lensa. Aset kedua di sini adalah SBN, bukan DFABI. Detail privasi ledger belum diverifikasi di Lensa.',
+  },
   iroha3: {
     tag: 'DvP privat lewat Atomic Private Settlement (APS): bukti STARK dan kapsul audit untuk BI. Transfer satu pihak masih terbuka.',
     story: 'DvP dan award memakai Atomic Private Settlement: satu bundle dua leg, RD di dataspace ds-rd dan DFABI di ds-dfabi. Tiap leg membelanjakan note privat dengan bukti STARK yang dibuat di sisi klien, jadi keempat validator hanya menyimpan commitment, bukti dan kapsul audit terenkripsi. BI membuka kapsul tiap leg dan menyetujuinya sebelum bundle final; komite 3 dari 4 validator lalu memfinalkan semua leg sekaligus, atau membatalkan semuanya. Bank lain hanya melihat bundle tersegel. Transfer RD/DFABI satu pihak tetap di lane 1 dan terbuka untuk keempat validator (Torii hanya membatasi akun yang boleh membaca). Saldo publik tidak bergerak oleh DvP privat: dananya ada di note pool baru tiap leg.',
@@ -47,6 +51,7 @@ export const MODEL_COPY: Record<ModelId, { tag: string; story: string }> = {
 export const PLATFORM_COPY: Record<PlatformId, { tagline: string; sees: [boolean, boolean, boolean]; note?: string }> = {
   besu: { tagline: 'Tiga model privasi: Zeto, Noto, Stealth', sees: [true, true, false] },
   fabricx: { tagline: 'Bukti ZK dan pseudonim Idemix, endorsement 3 dari 4', sees: [true, true, false] },
+  'fabricx-adapter': { tagline: 'Token v2: tiap pihak hanya membaca dompetnya sendiri', sees: [false, true, false] },
   iroha3: { tagline: 'DvP privat (APS), transfer terbuka', sees: [true, true, false], note: 'transfer terbuka' },
 };
 export const SEES_LABELS = ['BI', 'Pihak transaksi', 'Bank lain'] as const;
@@ -57,6 +62,7 @@ export const SEAL_WHY: Record<ModelId, string> = {
   noto: 'Bank di luar transaksi hanya melihat hash state. Isinya hanya dibagikan ke pihak transaksi dan notary BI.',
   stealth: 'Alamat penerima sekali pakai dan identitas pengirim terenkripsi. Tanpa view key, {pihak} tidak bisa memetakannya.',
   fabricx: 'Ledger hanya menyimpan commitment Pedersen dan bukti ZK. {pihak} tidak memegang kunci untuk membukanya.',
+  'fabricx-adapter': 'Node token {pihak} hanya menampilkan transaksi yang melibatkan dompetnya sendiri.',
   iroha3: 'Validator {pihak} hanya menyimpan bundle, commitment note dan bukti STARK. Kapsul audit berisi nominal dan pihak hanya bisa dibuka BI.',
 };
 
@@ -67,10 +73,10 @@ export const TYPICAL_SECONDS: Partial<Record<ModelId, number>> = { iroha3: 150, 
 
 // Dasbor stat card "Model privasi" (DESIGN.md §7.4)
 export const MODEL_STYLE: Record<ModelId, string> = {
-  zeto: 'Bukti ZK', noto: 'Notary BI', stealth: 'Alamat sekali pakai', fabricx: 'Bukti ZK + Idemix', iroha3: 'APS (DvP privat)',
+  zeto: 'Bukti ZK', noto: 'Notary BI', stealth: 'Alamat sekali pakai', fabricx: 'Bukti ZK + Idemix', 'fabricx-adapter': 'Dompet per pihak', iroha3: 'APS (DvP privat)',
 };
 
-export const nodeLabel =(model: ModelId, node: number) => (model === 'stealth' ? 'Akun Besu' : model === 'fabricx' ? `Node Fabric-X ${node}` : model === 'iroha3' ? `Validator Iroha ${node}` : `Paladin node ${node}`);
+export const nodeLabel =(model: ModelId, node: number) => (model === 'stealth' ? 'Akun Besu' : model === 'fabricx' || model === 'fabricx-adapter' ? `Node Fabric-X ${node}` : model === 'iroha3' ? `Validator Iroha ${node}` : `Paladin node ${node}`);
 export const roleHelp = (issuer: boolean, dvp: boolean) =>
   issuer ? 'Penerbitan hanya dijalankan BI.' : dvp ? 'Pilih bank penjual DFABI.' : 'Pilih bank pengirim.';
 

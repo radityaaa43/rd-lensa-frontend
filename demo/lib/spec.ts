@@ -4,12 +4,12 @@ import type { BankId, ModelId, PartyId } from '../../server/src/domain.ts';
 export const PLATFORMS: ModelId[] = ['zeto', 'noto', 'stealth', 'fabricx', 'iroha3']; // the CLI's --platform value is a model id
 export const PARTIES: PartyId[] = ['BI', 'A', 'B', 'C'];
 export const NODE_OF: Record<PartyId, number> = { BI: 1, A: 2, B: 3, C: 4 }; // Paladin node / FSC node / Iroha peer number
-export const PATH_OF: Record<ModelId, string> = { zeto: 'besu/zeto', noto: 'besu/noto', stealth: 'besu/stealth', fabricx: 'fabricx', iroha3: 'iroha3' };
-export const TILE_OF: Record<ModelId, 'besu' | 'fabricx' | 'iroha3'> = { zeto: 'besu', noto: 'besu', stealth: 'besu', fabricx: 'fabricx', iroha3: 'iroha3' };
+export const PATH_OF: Record<ModelId, string> = { zeto: 'besu/zeto', noto: 'besu/noto', stealth: 'besu/stealth', fabricx: 'fabricx', 'fabricx-adapter': 'fabricx-adapter', iroha3: 'iroha3' };
+export const TILE_OF: Record<ModelId, 'besu' | 'fabricx' | 'fabricx-adapter' | 'iroha3'> = { zeto: 'besu', noto: 'besu', stealth: 'besu', fabricx: 'fabricx', 'fabricx-adapter': 'fabricx-adapter', iroha3: 'iroha3' };
 
 // Live pair rotation (orchetrator; Fabric-X C holds only 2,010 RD, so Fabric-X runs A -> B): X sends in S4/S5 and receives the S3 issue, Y buys in S5/S6 (the award goes to the buyer bank of that row).
 export const PAIR: Record<ModelId, [BankId, BankId]> = {
-  zeto: ['A', 'B'], noto: ['B', 'C'], stealth: ['C', 'A'], fabricx: ['A', 'B'], iroha3: ['B', 'A'],
+  zeto: ['A', 'B'], noto: ['B', 'C'], stealth: ['C', 'A'], fabricx: ['A', 'B'], 'fabricx-adapter': ['A', 'B'], iroha3: ['B', 'A'],
 };
 
 export interface ScenarioMeta {

@@ -60,7 +60,7 @@ test('award: BI sells DFABI to a bank; buyer and outsider lenses, and a bank kee
 
 test('stress run: ramp config, live stage, stop, results per stage and a CSV with the right header', async ({ page }) => {
   await page.goto('/besu/zeto/tps');
-  for (const m of ['Noto', 'Stealth', 'Fabric-X', 'Iroha 3']) await page.locator('.mchk button', { hasText: m }).click(); // Zeto only
+  for (const m of ['Noto', 'Stealth', 'Fabric-X', 'Fabric-X (token v2)', 'Iroha 3']) await page.locator('.mchk button', { hasText: m, hasNotText: m === 'Fabric-X' ? 'token v2' : undefined }).click(); // Zeto only
   await page.getByRole('group', { name: 'User per bank (tahap terakhir)' }).getByRole('button', { name: '2', exact: true }).click();
   // UX P2-2: a real modal (backdrop, inert page), focus starts on Batal, Esc cancels without starting
   await page.getByRole('button', { name: 'Mulai stress test' }).click();
