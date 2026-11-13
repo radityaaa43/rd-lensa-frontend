@@ -32,7 +32,7 @@ class World {
     const stealthAddress = `0xst${++this.addr}`, token = kind === 'rd' ? RD : BOND;
     this.hold[to].push({ stealthAddress, token, amount, partition: kind === 'bond' ? TRANCHE : null });
     this.hist[to].push({ txHash: hash, blockNumber: this.txBlock.get(hash)!, stealthAddress, token, amount: amount.toString(), sender: IDENT[sender] });
-    if (to !== 'BI') this.ledger[kind].push({ bank: to, amount: amount.toString(), sender: IDENT[sender], tx: hash });
+    if (to !== 'BI') this.ledger[kind].push({ bank: 'bank-' + to.toLowerCase(), amount: amount.toString(), sender: IDENT[sender], tx: hash });
   }
   seed(p: PartyId, kind: 'rd' | 'bond', amount: bigint) { this.pay(p, kind, amount, 'BI', this.tx()); }
   take(p: PartyId, kind: 'rd' | 'bond', amount: bigint, source?: string): H {

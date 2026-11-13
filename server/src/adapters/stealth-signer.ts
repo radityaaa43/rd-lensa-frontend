@@ -101,7 +101,10 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
     const kindOf = new Map(hs.map((x) => [lc(x.stealthAddress), x.partition === null ? 'rd' as const : 'bond' as const]));
     return h.history.map((r) => ({ ...r, kind: kindOf.get(lc(r.stealthAddress)) ?? null }));
   }
-  const ledger = async (kind: 'rd' | 'bond') => (await call<{ rows: { bank: string; amount: string; sender: string | null; tx: string }[] }>('BI', 'GET', `/ledger?kind=${kind}`)).rows;
+  // BI's ledger names banks as the signer does ("bank-a" | "bank-b" | "bank-c"; live, S11) and may cast the tx hash differently: both are normalised here, once.
+  const BANK_OF: Record<string, string> = { 'bank-a': 'A', 'bank-b': 'B', 'bank-c': 'C' };
+  const ledger = async (kind: 'rd' | 'bond') => (await call<{ rows: { bank: string; amount: string; sender: string | null; tx: string }[] }>('BI', 'GET', `/ledger?kind=${kind}`)).rows
+    .map((r) => ({ ...r, bank: BANK_OF[lc(r.bank)] ?? r.bank, tx: lc(r.tx) }));
 
   // Everything BI can classify a tx by: its ledger (a payment to a bank, resolved with that bank's view-key copy) and its own receipts (top-ups, the RD leg of an award).
   // TODO-GAP (besu): ledger rows carry no block number; a block is fetched per tx from the receipt.
@@ -118,7 +121,7 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
   }
 
   // One read of BI's ledger, no waiting: the result of a tx never depends on BI's row. undefined = no such row (yet); a row with another amount is a conflict, reported by the caller.
-  const ledgerLeg = async (kind: 'rd' | 'bond', tx: string, bank: string) => (await ledger(kind)).find((r) => r.tx === tx && r.bank === bank);
+  const ledgerLeg = async (kind: 'rd' | 'bond', tx: string, bank: string) => (await ledger(kind)).find((r) => r.tx === lc(tx) && r.bank === bank);
   const PENDING = 'Ledger BI belum memuat transaksi ini (salinan view key bank belum terpasang)';
   const MISMATCH = 'Data di ledger BI tidak cocok dengan transaksi yang dibangun pengirim';
   // The BI lens when BI cannot read the tx: a placeholder, as app.ts does for a BI lens that fails with reportPending.
