@@ -118,10 +118,12 @@ for n, g in (("rd-fabricx-bi", "fx-gw-1"), ("rd-fabricx-bank-a", "fx-gw-2"), ("r
     r = fxgw.get(n)
     check(bool(r) and r["to"][0]["podSelector"] == {"matchLabels": {"app.kubernetes.io/name": g}} and r["ports"] == [{"protocol": "TCP", "port": 8443}], f"shipped gateways.conf: {n} gateway pod app.kubernetes.io/name={g} on 8443 only")
 def ns_of(r): return r["to"][0].get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name", "")
-# UNION EQUALITY (orchestrator ruling): the public pod reaches ONLY the Zeto/Noto gateways; the flow pod ONLY the Fabric-X gateways; Iroha 3 and Stealth doors are in NEITHER policy
-check({ns_of(r) for r in srules} == {"rd-zeto-bi", "rd-zeto-bank-a", "rd-zeto-bank-b"}, f"public policy destinations {sorted(ns_of(r) for r in srules)}")
+# UNION EQUALITY: the public pod reaches the Zeto/Noto gateways and (S17, user-approved 2026-11-13) the Stealth signer doors; the flow pod the Fabric-X, Iroha 3 and Stealth gateways; no Iroha 3 or Fabric-X door in the public policy
+check({ns_of(r) for r in srules} == {"rd-zeto-bi", "rd-zeto-bank-a", "rd-zeto-bank-b", "rd-stealth-bi", "rd-stealth-bank-a", "rd-stealth-bank-b"}, f"public policy destinations {sorted(ns_of(r) for r in srules)}")
 check({ns_of(r) for r in frules_ship} == {f"rd-{p}-{o}" for p in ("fabricx", "iroha3", "stealth") for o in ("bi", "bank-a", "bank-b")}, f"flow policy destinations {sorted(ns_of(r) for r in frules_ship)}")
-check(not any(ns_of(r).startswith(("rd-iroha3-", "rd-stealth-", "rd-fabricx-")) for r in srules), "the public pod reaches no Fabric-X, Iroha 3 or Stealth gateway")
+check(not any(ns_of(r).startswith(("rd-iroha3-", "rd-fabricx-")) for r in srules), "the public pod reaches no Fabric-X or Iroha 3 gateway")
+sst = {ns_of(r): r for r in srules if ns_of(r).startswith("rd-stealth-")}
+check(all(r["to"][0]["podSelector"] == {"matchLabels": {"app": "st-gw"}} and r["ports"] == [{"protocol": "TCP", "port": 8550}] for r in sst.values()) and len(sst) == 3, f"public pod: stealth gateways app=st-gw on 8550 only: {sst}")
 check(not any(ns_of(r).startswith("rd-zeto-") for r in frules_ship), "the flow pod has no Zeto gateway rule")
 irg, stg = {}, {}
 check(True, "iroha/stealth rows are validated by the parser but rendered nowhere"); pass
