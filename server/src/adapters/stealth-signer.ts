@@ -6,6 +6,7 @@ import { besuTrace, nameFrom } from './besu-trace.ts';
 import { FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type FlowId, type FlowRequest, type ModelId, type PartyId } from '../domain.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import { besuDoor, gwFetch, stealthEndpoints } from '../gateway.ts';
+import { join } from 'node:path';
 import { STATE_DIR, readState, writeState } from '../state.ts';
 import { JsonRpcProvider } from '../../vendor/besu/stealth-address/ts/chain.ts';
 import { LABELS, besuRequest, flowLabel, outsiderVerdict, planInventory } from './stealth.ts';
@@ -190,7 +191,8 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
         const rc = await step(2, () => chain.waitReceipt(req.from, out.txHash));
         txHash = out.txHash; block = rc.block; from = out.from;
       }
-      if (!flow.issuer) { record.sent[lc(txHash)] = { from: req.from, to: req.to, block, flow: req.flow }; deps.save(); }
+      // The tx has settled: a record that cannot be saved is logged, never the run's failure (live: EPERM on the state volume reported a landed tx as an error).
+      if (!flow.issuer) { record.sent[lc(txHash)] = { from: req.from, to: req.to, block, flow: req.flow }; try { deps.save(); } catch (w) { console.error('[stealth] sent record not saved:', w); } }
 
       // BI reads it back from its own ledger: the bank that got the leg, the amount, and (a dvp) the RD leg to the seller. An award's RD leg goes to BI itself: BI's own receipts show it.
       // The tx has settled: whatever BI's ledger says, the run does not fail on it. A missing or conflicting row is reported as reportPending, like a BI report that is still pending.
@@ -408,8 +410,10 @@ function besuChain(): SignerChain {
 
 const SENT_FILE = 'stealth-sent' as unknown as ModelId; // state/stealth-sent.json: hashes and party ids only, no key
 export function loadRecord(dir = STATE_DIR): { record: SentRecord; save: () => void } {
-  const record = readState<SentRecord>(SENT_FILE, dir) ?? { sent: {}, escrowed: [] };
-  return { record, save: () => writeState(SENT_FILE, record, dir) };
+  const record = readState<SentRecord>(SENT_FILE, join(dir, 'stealth-sent')) ?? { sent: {}, escrowed: [] };
+  // writeState chmods its directory: in the pod the volume root belongs to root (fsGroup), so the record lives in a directory this process creates itself.
+  const own = join(dir, 'stealth-sent');
+  return { record, save: () => writeState(SENT_FILE, record, own) };
 }
 
 // The pod's stealth adapter: null while the four signer doors are not configured (LENSA_GW_STEALTH_*), as the pod answers "belum tersedia" today.

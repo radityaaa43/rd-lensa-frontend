@@ -1,9 +1,11 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FlowRequest, PartyId } from '../src/domain.ts';
-import { createSignerStealthAdapter, type SentRecord } from '../src/adapters/stealth-signer.ts';
+import { createSignerStealthAdapter, loadRecord, type SentRecord } from '../src/adapters/stealth-signer.ts';
 
 // S17: the keyless Lensa stealth adapter against FAKE signers (one in-process http server per party, the shapes of besu signer/SPEC.md + the final contract).
 // Everything here is obviously fake: addresses are labels, no key of any kind exists in this file.
@@ -280,6 +282,23 @@ describe('keyless adapter, scenario against fake signers', () => {
     expect(h.detail).toMatch(/Bank Nusantara/);
     expect((await adapter.readyFor!(req('rd-transfer', 'A', 'C', '1'))).ready).toBe(true);
     expect((await adapter.readyFor!(req('rd-transfer', 'A', 'B', '1'))).ready).toBe(false);
+  });
+  it('a record that cannot be saved never fails a tx that already settled (live: EPERM on the state volume reported a landed tx as an error)', async () => {
+    const lone = createSignerStealthAdapter({
+      urls, record: { sent: {}, escrowed: [] }, save: () => { throw new Error("EPERM: operation not permitted, chmod '/app/frontend/server/state'"); },
+      chain: { waitReceipt: async (_p, h) => ({ block: world.txBlock.get(h)! }), blockOf: async (h) => world.txBlock.get(h)!, blockTime: async () => '2023-11-14T22:13:20.000Z', head: async () => world.block },
+    });
+    const r = await lone.run(req('rd-transfer', 'A', 'C', '7'), 7n, noop);
+    expect(r.txHash).toMatch(/^0x/);
+  });
+  it('the sent record is saved in a subdirectory of the state dir (the pod user cannot chmod the volume root, only a directory it created)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'lensa-sent-'));
+    const { record: rec, save } = loadRecord(dir);
+    rec.sent['0xabc'] = { from: 'A', to: 'B', block: 1, flow: 'rd-transfer' };
+    save();
+    expect(existsSync(join(dir, 'stealth-sent', 'stealth-sent.json'))).toBe(true);
+    expect(existsSync(join(dir, 'stealth-sent.json'))).toBe(false);
+    expect(loadRecord(dir).record.sent['0xabc']?.to).toBe('B');
   });
 });
 
