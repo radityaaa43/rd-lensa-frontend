@@ -43,6 +43,7 @@ export interface SignerDeps {
   save: () => void;
   rpcUrl?: string; // BI's Besu door, for receipt and trace
   fetch?: typeof gwFetch;
+  cacheMs?: number; // how long a signer read is reused (default 5 s); concurrent identical reads always share one call
 }
 
 interface Holding { stealthAddress: string; token: string; amount: bigint; partition: string | null }
@@ -54,6 +55,19 @@ type Ctx = { kind: 'rd' | 'bond'; amount: bigint; from: string | null }; // what
 export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
   const { urls, chain, record } = deps;
   const doFetch = deps.fetch ?? gwFetch;
+  // A signer scans the chain for every /holdings, /history and /ledger and answers /health from the same thread: duplicate reads (a page load asks the same signer
+  // for RD and DFABI at once, and for every page) got the BI signer killed by its liveness probe (live 2026-11-13). Identical reads are shared while one runs and for cacheMs after.
+  const cacheMs = deps.cacheMs ?? 5000;
+  const cache = new Map<string, { at: number; done: boolean; p: Promise<unknown> }>();
+  const cached = <T>(key: string, fn: () => Promise<T>, fresh = false): Promise<T> => {
+    const hit = cache.get(key);
+    if (!fresh && hit && (!hit.done || Date.now() - hit.at < cacheMs)) return hit.p as Promise<T>;
+    const e = { at: Date.now(), done: false, p: undefined as unknown as Promise<unknown> };
+    e.p = fn().finally(() => { e.done = true; e.at = Date.now(); });
+    cache.set(key, e);
+    e.p.catch(() => { if (cache.get(key) === e) cache.delete(key); }); // a failure is never cached
+    return e.p as Promise<T>;
+  };
   const names = new Map<string, string>(); // token address -> 'RD' | 'DFABI', learned from /holdings (the signers do not publish the contract addresses)
 
   async function call<T>(p: PartyId, method: 'GET' | 'POST', path: string, payload?: unknown): Promise<T> {
@@ -89,21 +103,21 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
     return null;
   }
 
-  async function holdings(p: PartyId): Promise<Holding[]> {
-    const r = await call<{ holdings: { stealthAddress: string; token: string; amount: string; partition: string | null }[] }>(p, 'GET', '/holdings');
+  async function holdings(p: PartyId, fresh = false): Promise<Holding[]> {
+    const r = await cached(`holdings:${p}`, () => call<{ holdings: { stealthAddress: string; token: string; amount: string; partition: string | null }[] }>(p, 'GET', '/holdings'), fresh);
     for (const h of r.holdings) names.set(lc(h.token), h.partition === null ? 'RD' : 'DFABI');
     return r.holdings.map((h) => ({ ...h, amount: BigInt(h.amount) }));
   }
   // The party's own received payments, each with its asset. TODO-GAP (besu): /history rows carry the token ADDRESS but not the asset or partition; the asset is joined from
   // /holdings by stealth address (holdings list every match, balance 0 included, so every history row has one). Ask besu to add `partition` to the history row.
-  async function rowsOf(p: PartyId): Promise<Row[]> {
-    const [h, hs] = await Promise.all([call<{ history: Omit<Row, 'kind'>[] }>(p, 'GET', '/history'), holdings(p)]);
+  async function rowsOf(p: PartyId, fresh = false): Promise<Row[]> {
+    const [h, hs] = await Promise.all([cached(`history:${p}`, () => call<{ history: Omit<Row, 'kind'>[] }>(p, 'GET', '/history'), fresh), holdings(p, fresh)]);
     const kindOf = new Map(hs.map((x) => [lc(x.stealthAddress), x.partition === null ? 'rd' as const : 'bond' as const]));
     return h.history.map((r) => ({ ...r, kind: kindOf.get(lc(r.stealthAddress)) ?? null }));
   }
   // BI's ledger names banks as the signer does ("bank-a" | "bank-b" | "bank-c"; live, S11) and may cast the tx hash differently: both are normalised here, once.
   const BANK_OF: Record<string, string> = { 'bank-a': 'A', 'bank-b': 'B', 'bank-c': 'C' };
-  const ledger = async (kind: 'rd' | 'bond') => (await call<{ rows: { bank: string; amount: string; sender: string | null; tx: string }[] }>('BI', 'GET', `/ledger?kind=${kind}`)).rows
+  const ledger = async (kind: 'rd' | 'bond', fresh = false) => (await cached(`ledger:${kind}`, () => call<{ rows: { bank: string; amount: string; sender: string | null; tx: string }[] }>('BI', 'GET', `/ledger?kind=${kind}`), fresh)).rows
     .map((r) => ({ ...r, bank: BANK_OF[lc(r.bank)] ?? r.bank, tx: lc(r.tx) }));
 
   // Everything BI can classify a tx by: its ledger (a payment to a bank, resolved with that bank's view-key copy) and its own receipts (top-ups, the RD leg of an award).
@@ -121,7 +135,7 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
   }
 
   // One read of BI's ledger, no waiting: the result of a tx never depends on BI's row. undefined = no such row (yet); a row with another amount is a conflict, reported by the caller.
-  const ledgerLeg = async (kind: 'rd' | 'bond', tx: string, bank: string) => (await ledger(kind)).find((r) => r.tx === lc(tx) && r.bank === bank);
+  const ledgerLeg = async (kind: 'rd' | 'bond', tx: string, bank: string, fresh = false) => (await ledger(kind, fresh)).find((r) => r.tx === lc(tx) && r.bank === bank);
   const PENDING = 'Ledger BI belum memuat transaksi ini (salinan view key bank belum terpasang)';
   const MISMATCH = 'Data di ledger BI tidak cocok dengan transaksi yang dibangun pengirim';
   // The BI lens when BI cannot read the tx: a placeholder, as app.ts does for a BI lens that fails with reportPending.
@@ -153,7 +167,7 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
         const { offer, bid } = await step(0, async () => {
           const [sm, bm] = await Promise.all([meta(seller), meta(buyer)]);
           if (award) { // BI sells from its own DFABI inventory: with no single holding that covers the award, one top-up issue to BI's own meta-address first
-            const free = (await holdings('BI')).filter((h) => h.partition !== null).map((h) => h.amount);
+            const free = (await holdings('BI', true)).filter((h) => h.partition !== null).map((h) => h.amount);
             const plan = planInventory(free, amount);
             if ('issue' in plan) {
               const top = await call<{ txHash: string }>('BI', 'POST', '/intent', { kind: 'bond-issue', from: 'BI', to: { metaAddress: sm.metaAddress }, amount: plan.issue.toString() });
@@ -202,9 +216,9 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
       const reportPending = await step(3, async (): Promise<string | undefined> => {
         try {
           const price = amount * PRICE_PER_UNIT;
-          const legs: [string | undefined, bigint][] = [[(await ledgerLeg(kind, txHash, req.to))?.amount, amount]];
-          if (flow.dvp && !award) legs.push([(await ledgerLeg('rd', txHash, req.from))?.amount, price]);
-          if (award) legs.push([(await rowsOf('BI')).find((r) => r.txHash === txHash && r.kind === 'rd')?.amount, price]); // an award's RD leg goes to BI itself
+          const legs: [string | undefined, bigint][] = [[(await ledgerLeg(kind, txHash, req.to, true))?.amount, amount]];
+          if (flow.dvp && !award) legs.push([(await ledgerLeg('rd', txHash, req.from, true))?.amount, price]);
+          if (award) legs.push([(await rowsOf('BI', true)).find((r) => r.txHash === txHash && r.kind === 'rd')?.amount, price]); // an award's RD leg goes to BI itself
           if (legs.some(([got]) => got === undefined)) return PENDING;
           return legs.some(([got, want]) => BigInt(got!) !== want) ? MISMATCH : undefined;
         } catch (e) { return `Ledger BI tidak terbaca: ${(e as Error).message}`; }
@@ -353,7 +367,9 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter {
     async balanceOf(party, asset) {
       return (await holdings(party)).filter((h) => (h.partition === null) === (asset === 'RD')).reduce((m, h) => m + h.amount, 0n);
     },
-    run, lens, history,
+    // a tx changes every balance and ledger it touches: nothing cached before it may be shown after it
+    run: async (r, a, on) => { try { return await run(r, a, on); } finally { cache.clear(); } },
+    lens, history,
     network: () => besuNetwork({ paladin: false }),
     // no Paladin: a stealth transfer is a plain ERC-20 call, so the public receipt is all a node holds. TODO-GAP (besu): token and factory addresses are not served; RD / DFABI names are learned from /holdings.
     trace: (tx, party) => besuTrace(tx, party, { paladin: false, rpc, name: (a) => nameFrom(Object.fromEntries(names))(a) }),

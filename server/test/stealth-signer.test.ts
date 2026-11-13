@@ -114,7 +114,7 @@ async function start(): Promise<void> {
     urls[p] = `http://127.0.0.1:${(servers[p]!.address() as AddressInfo).port}`;
   }
   adapter = createSignerStealthAdapter({
-    urls, record, save: () => { saves++; },
+    urls, record, save: () => { saves++; }, cacheMs: 0,
     chain: {
       waitReceipt: async (_p, h) => ({ block: world.txBlock.get(h)! }),
       blockOf: async (h) => world.txBlock.get(h)!,
@@ -274,6 +274,24 @@ describe('keyless adapter, scenario against fake signers', () => {
     await expect(adapter.transferForLoad({ bank: 'A', i: 0 }, { bank: 'B', i: 0 }, 1n)).rejects.toThrow(/host/);
   });
 
+  const cachedAdapter = () => createSignerStealthAdapter({
+    urls, record: { sent: {}, escrowed: [] }, save: noop, cacheMs: 60_000,
+    chain: { waitReceipt: async (_p, h) => ({ block: world.txBlock.get(h)! }), blockOf: async (h) => world.txBlock.get(h)!, blockTime: async () => '2023-11-14T22:13:20.000Z', head: async () => world.block },
+  });
+  it('one page load = one read per signer route: concurrent and repeated reads share one call (live: duplicate scans got the BI signer killed by its liveness probe)', async () => {
+    const a = cachedAdapter();
+    const before = world.calls.length;
+    await Promise.all([a.balanceOf('A', 'RD'), a.balanceOf('A', 'DFABI'), a.balanceOf('A', 'RD')]);
+    await a.balanceOf('A', 'DFABI');
+    expect(world.calls.slice(before).filter((c) => c === 'A GET /holdings')).toHaveLength(1);
+  });
+  it('a run drops the cache: the next balance read is fresh, not the cached one', async () => {
+    const a = cachedAdapter();
+    world.seed('A', 'rd', 100n);
+    const b0 = await a.balanceOf('B', 'RD');
+    await a.run(req('rd-transfer', 'A', 'B', '10'), 10n, noop);
+    expect(await a.balanceOf('B', 'RD')).toBe(b0 + 10n);
+  });
   it('health: every signer answers and Besu has a head; readyFor looks only at the parties of the request (+ BI)', async () => {
     expect(await adapter.health()).toEqual({ ready: true, detail: 'ok' });
     await new Promise((r) => servers.B!.close(r));
