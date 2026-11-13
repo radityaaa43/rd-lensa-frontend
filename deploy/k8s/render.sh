@@ -31,7 +31,7 @@ port_list() { # validates "8548,8545" and prints one "- {protocol: TCP, port: N}
   for p in "${ps[@]}"; do (( p >= 1 && p <= 65535 )) || die "port $p out of range in $gateways"; echo "        - {protocol: TCP, port: $p}"; done
 }
 
-# One NetworkPolicy per pod class (orchestrator ruling, GO-W c7): the PUBLIC pod (role=server, plus the probe pod role=probe-public) reaches only the Zeto/Noto gateways;
+# One NetworkPolicy per pod class (orchestrator ruling, GO-W c7; S17 2026-11-13, user-approved: the public pod also reaches the Stealth signer doors): the PUBLIC pod (role=server, plus the probe pod role=probe-public) reaches the Zeto/Noto and Stealth gateways;
 # the FLOW pod (role=flow, probe-flow) reaches the Fabric-X, Iroha 3 and Stealth gateways. A gateways.conf row belongs to the platform in its namespace name
 # (rd-<platform>-<party>) or, for an `ipblock` row, in its 4th field. The union of both policies is the old single policy minus the cross-class rows: nothing is added.
 gateway_policy() { # $1 policy name, $2 role list (YAML flow list), $3 platform regex
@@ -81,7 +81,7 @@ $(port_list "$c")
 
 base() {
   cat "$here/templates/base.yaml"
-  echo '---'; gateway_policy egress-gateways-public 'server, probe-public' 'zeto'
+  echo '---'; gateway_policy egress-gateways-public 'server, probe-public' 'zeto|stealth'
   echo '---'; gateway_policy egress-gateways-flow 'flow, probe-flow' 'fabricx|iroha3|stealth'
   if [[ "$entry" == a ]]; then echo '---'; cat "$here/templates/access.yaml"; else echo '---'; cat "$here/templates/entry-b.yaml"; fi
 }
