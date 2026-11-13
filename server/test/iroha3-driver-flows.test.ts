@@ -39,6 +39,9 @@ function fakeDriver() {
     dvpNative: async (party, terms) => { calls.push({ fn: 'dvpNative', party, terms }); return ok; },
     mint: async (terms) => { calls.push({ fn: 'mint', party: 'BI', terms }); return ok; },
     health: async () => 'ok',
+    apsIntent: async () => { throw new Error('aps is off'); },
+    apsSubmit: async () => { throw new Error('aps is off'); },
+    apsWallet: async () => { throw new Error('aps is off'); },
   };
   return { driver, calls };
 }

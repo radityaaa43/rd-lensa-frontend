@@ -49,7 +49,7 @@ describe('driverClient APS', () => {
   it('apsIntent validates before any request: intent 64 lowercase hex, asset rd|dfabi, positive amount, not to self', async () => {
     const { client, seen } = await fleet(() => ({ status: 200, json: {} }));
     await expect(client.apsIntent('B', { intent: 'XYZ', asset: 'rd', to: 'A', amount: 1n })).rejects.toThrow(/intent/);
-    await expect(client.apsIntent('B', { intent: INTENT, asset: 'eth' as never, to: 'A', amount: 1n })).rejects.toThrow(/aset/);
+    await expect(client.apsIntent('B', { intent: INTENT, asset: 'eth' as never, to: 'A', amount: 1n })).rejects.toThrow(/aset/i);
     await expect(client.apsIntent('B', { intent: INTENT, asset: 'rd', to: 'A', amount: 0n })).rejects.toThrow(/Jumlah/);
     await expect(client.apsIntent('B', { intent: INTENT, asset: 'rd', to: 'B', amount: 1n })).rejects.toThrow(/pihak sendiri/);
     expect(seen).toEqual([]);

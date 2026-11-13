@@ -34,6 +34,7 @@ export interface Iroha3State {
   // NEW chain (iroha3 S16): every write goes to the calling party's own driver; nothing is signed here. Public data only.
   drivers?: Record<PartyId, string>; // driver base URL per party (window A: loopback forwards 127.0.0.1:38091..38094)
   keys?: Record<PartyId, string>; // each party's account public key, ed0120<64 hex> (iroha3/network/public/accounts.json)
+  driverAps?: boolean; // per-org k8s (iroha3-rd-dfabi#82): the drivers expose /aps/*; EVERY flow settles through APS. Default off
 }
 
 // Genesis hash (network id literal) of the OLD chain, as in the host's state/iroha3/genesis.expected_hash (public). The CLI with host keys is selectable
@@ -172,6 +173,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     return BigInt(row.quantity);
   }
   async function balanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
+    if (driver?.aps) return BigInt((await driver.apsWallet(party)).balances[asset === 'RD' ? 'rd' : 'dfabi']); // the party's own wallet, not the public ledger
     if (driver) return keylessBalance(party, asset);
     if (shared) return BigInt((await walletFor(party)).balances[asset === 'RD' ? 'rd' : 'dfabi']);
     return publicBalanceOf(party, asset);
@@ -254,6 +256,31 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
       return 0;
     }
   }
+  // APS through the drivers (plan iroha3-rd-dfabi#82 section 2, "Peta flow Lensa"): a fresh 32-byte intent per PAYING leg goes to that payer's own driver FIRST, then
+  // exactly one submit by the party in the table (issuance: BI; transfer, dvp, award: the flow's `from`, which is BI in an award). BI's driver coordinates.
+  async function runViaApsDrivers(req: FlowRequest, amount: bigint, emit: (i: number, ms: number) => void, steps: StepEvent[]): Promise<FlowResult> {
+    const f = FLOWS[req.flow];
+    const t0 = Date.now();
+    const intent = () => randomBytes(32).toString('hex');
+    let done: Awaited<ReturnType<DriverClient['apsSubmit']>>;
+    if (!f.dvp) {
+      const asset = f.asset === 'RD' ? 'rd' : 'dfabi';
+      const id = intent();
+      await driver!.apsIntent(req.from, { intent: id, asset, to: req.to, amount });
+      done = await driver!.apsSubmit(req.from, { kind: 'pay', intent: id, asset, from: req.from, to: req.to, amount });
+    } else {
+      const price = amount * PRICE_PER_UNIT;
+      const [intentRd, intentDfabi] = [intent(), intent()];
+      await driver!.apsIntent(req.to, { intent: intentRd, asset: 'rd', to: req.from, amount: price }); // the buyer pays RD
+      await driver!.apsIntent(req.from, { intent: intentDfabi, asset: 'dfabi', to: req.to, amount }); // the seller delivers DFABI
+      done = await driver!.apsSubmit(req.from, { kind: 'dvp', intentRd, intentDfabi, buyer: req.to, seller: req.from, rd: price, dfabi: amount });
+    }
+    emit(0, Date.now() - t0);
+    emit(1, 0);
+    emit(2, 0); // the coordinator answers once the bundle is finalized
+    emit(3, 0);
+    return { txHash: done.txHash, block: done.height, steps, context: {} satisfies Ctx };
+  }
   async function runViaDrivers(req: FlowRequest, amount: bigint, emit: (i: number, ms: number) => void, steps: StepEvent[]): Promise<FlowResult> {
     const f = FLOWS[req.flow];
     if (!f.dvp && !f.issuer) throw new Error(NEW_CHAIN_NO_TRANSFER);
@@ -299,6 +326,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     const steps: StepEvent[] = [];
     const emit = (index: number, ms: number) => { const st = { index, label: adapter.stepLabels[index]!, ms }; steps.push(st); onStep(st); };
     const dvp = FLOWS[req.flow].dvp;
+    if (driver?.aps) return runViaApsDrivers(req, amount, emit, steps);
     if (driver) return runViaDrivers(req, amount, emit, steps);
     if (shared) {
       let last = Date.now();
@@ -729,7 +757,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     id: 'iroha3',
     ...(aps ? { txDeadlineMs: APS_DEADLINE_MS } : {}),
     stepLabels: ['Tanda tangan & kirim ke Torii', 'Diterima pipeline', 'Commit di blok (3 dari 4 validator)', 'Tersalin ke 4 validator'],
-    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, driver && !FLOWS[f].dvp && !FLOWS[f].issuer ? { enabled: false, reason: NEW_CHAIN_NO_TRANSFER } : { enabled: true }])) as Record<FlowId, Capability>,
+    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, driver && !driver.aps && !FLOWS[f].dvp && !FLOWS[f].issuer ? { enabled: false, reason: NEW_CHAIN_NO_TRANSFER } : { enabled: true }])) as Record<FlowId, Capability>,
     async health() {
       const down: string[] = [];
       let blocks = 0;
@@ -798,7 +826,7 @@ export async function load(stateDir?: string): Promise<ModelAdapter | null> {
     const noSigned = async (): Promise<never> => { throw new Error('Pembacaan bertanda tangan tidak tersedia di rantai baru (jendela A: hanya baca tanpa kunci)'); };
     // New chain: a party with LENSA_GW_IROHA_<P> is reached ONLY through its mTLS gateway (Torii reads and driver routes); the others keep the state URLs.
     const g = withIrohaGateways(s as Iroha3State & { drivers: Record<PartyId, string> });
-    return createIroha3Adapter(g, irohaCli(s.dir), { init: noSigned }, undefined, driverClient({ drivers: g.drivers, keys: s.keys }));
+    return createIroha3Adapter(g, irohaCli(s.dir), { init: noSigned }, undefined, driverClient({ drivers: g.drivers, keys: s.keys, aps: s.driverAps === true }));
   }
   const adapter = createIroha3Adapter(s, irohaCli(s.dir), {
     init: async () => {
