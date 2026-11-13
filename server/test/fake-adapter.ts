@@ -6,7 +6,7 @@ const FLOW_IDS: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-tra
 // Deterministic adapter for tests: no chain access, fixed results.
 export function fakeAdapter(
   id: ModelId,
-  opts: { ready?: boolean; readyFor?: (req: FlowRequest) => { ready: boolean; detail: string }; capacity?: number; circulates?: boolean; maxUsers?: number; tps?: number; failEvery?: number; serial?: boolean; onSubmit?: () => void; disabled?: Partial<Record<FlowId, string>>; transparent?: boolean; biVerdict?: 'reported' | 'notarised' | 'viewkey' } = {}, // transparent: every party reads everything (Iroha 3); biVerdict: what BI's read of a bank-to-bank tx is called (default 'clear')
+  opts: { ready?: boolean; readyFor?: (req: FlowRequest) => { ready: boolean; detail: string }; capacity?: number; circulates?: boolean; maxUsers?: number; tps?: number; failEvery?: number; serial?: boolean; onSubmit?: () => void; disabled?: Partial<Record<FlowId, string>>; transparent?: boolean; biVerdict?: 'reported' | 'notarised' | 'viewkey' | 'sealed' } = {}, // transparent: every party reads everything (Iroha 3); biVerdict: what BI's read of a bank-to-bank tx is called (default 'clear')
 ): ModelAdapter {
   let calls = 0;
   let lockTail: Promise<unknown> = Promise.resolve(); // opts.serial: one transfer at a time, like a per-sender lock

@@ -37,6 +37,7 @@ test('/api/meta says per model whether it has a policy document and whether a ga
     fabricx: { registered: true, enforced: true },
     iroha3: { registered: true, enforced: false },
     stealth: { registered: true, enforced: true },
+    'fabricx-adapter': { registered: false, enforced: false, reason: 'Kebijakan belum tersedia untuk Fabric-X (token v2)' },
   });
 });
 

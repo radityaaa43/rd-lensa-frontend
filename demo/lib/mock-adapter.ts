@@ -8,7 +8,7 @@ import { fakeAdapter } from '../../server/test/fake-adapter.ts';
 export interface Policy { bi: Verdict; outsider: 'sealed' | 'partial' | 'clear' } // what BI / an uninvolved bank reads of a bank-to-bank tx
 export const POLICY: Record<ModelId, Policy> = {
   zeto: { bi: 'reported', outsider: 'sealed' }, noto: { bi: 'notarised', outsider: 'sealed' }, stealth: { bi: 'viewkey', outsider: 'partial' },
-  fabricx: { bi: 'reported', outsider: 'sealed' }, iroha3: { bi: 'clear', outsider: 'clear' },
+  fabricx: { bi: 'reported', outsider: 'sealed' }, 'fabricx-adapter': { bi: 'sealed', outsider: 'sealed' }, iroha3: { bi: 'clear', outsider: 'clear' },
 };
 const FLOW_IDS = Object.keys(FLOWS) as FlowId[];
 const LABELS: [string, string, string, string] = ['Siapkan', 'Kirim', 'Konfirmasi', 'Selesai'];

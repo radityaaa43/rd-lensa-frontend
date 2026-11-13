@@ -59,7 +59,7 @@ test('meta lists 4 models with step labels', async () => {
   const res = await make(all()).inject('/api/meta');
   expect(res.statusCode).toBe(200);
   const body = res.json();
-  expect(Object.keys(body.models).sort()).toEqual(['fabricx', 'iroha3', 'noto', 'stealth', 'zeto']);
+  expect(Object.keys(body.models).sort()).toEqual(['fabricx', 'fabricx-adapter', 'iroha3', 'noto', 'stealth', 'zeto']);
   expect(body.models.zeto).toMatchObject({ name: 'Zeto', available: true, stepLabels: ['Siapkan', 'Kirim', 'Konfirmasi', 'Selesai'] });
   expect(body.models.zeto.capabilities['dvp']).toEqual({ enabled: true });
   expect(body.parties.A.name).toBe('Bank Mandala');
