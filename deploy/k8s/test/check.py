@@ -156,10 +156,11 @@ cm = name(app, "ConfigMap", "lensa-env")["data"]
 check(cm.get("HOST") == "0.0.0.0" and cm.get("PORT") == "8790" and cm.get("LENSA_GW_MTLS_DIR") == "/certs", f"configmap fixed keys {sorted(cm)}")
 check(cm.get("LENSA_IN_CLUSTER") == "1" and cm.get("LENSA_SINK_TOKENS_DIR") == "/sink-tokens" and cm.get("OPA_BIN") == "/usr/local/bin/opa", "configmap: OPA_BIN is the fixed image path (the env file cannot override it); pod mode signal LENSA_IN_CLUSTER=1 and the sink token directory /sink-tokens (server/src/incluster.ts, policy/sink.ts)")
 check(cm.get("LENSA_GW_PALADIN_BI") == "https://10.0.0.1:31548" and cm.get("LENSA_BESU_RPC") == "https://10.0.0.1:38545", "configmap takes the env file values")
+check(cm.get("LENSA_GW_STEALTH_BI") == "https://10.0.0.1:8550", "configmap takes the S17 stealth signer door (LENSA_GW_STEALTH_<P>, the st-gw-N doors) from the env file")
 for k in cm:
     if k == "LENSA_SINK_TOKENS_DIR": continue  # a directory name; the tokens are mounted from Secrets
     check(not re.search(r"KEY|SECRET|TOKEN|PASSWORD|KUBECONFIG", k), f"configmap key looks secret: {k}")
-for bad in ["LENSA_GW_PALADIN_BI=https://user:pw@10.0.0.1:1", "KUBECONFIG=/x", "OPA_KEYS_DIR=/x", "LENSA_IN_CLUSTER=0", "LENSA_SINK_TOKENS_DIR=/x", "OPA_BIN=/tmp/opa", "DEPLOYER_KEY=x", 'LENSA_BESU_RPC=http://a"b']:
+for bad in ["LENSA_GW_PALADIN_BI=https://user:pw@10.0.0.1:1", "LENSA_GW_STEALTH_A=https://user:pw@10.0.0.1:1", "LENSA_GW_STEALTH_X=https://10.0.0.1:1", "KUBECONFIG=/x", "OPA_KEYS_DIR=/x", "LENSA_IN_CLUSTER=0", "LENSA_SINK_TOKENS_DIR=/x", "OPA_BIN=/tmp/opa", "DEPLOYER_KEY=x", 'LENSA_BESU_RPC=http://a"b']:
     p = os.path.join(fx, "_bad.env"); open(p, "w").write(bad + "\n")
     check(run(["app"], {"LENSA_ENV_FILE": p, "LENSA_IMAGE": IMAGE}).returncode != 0, f"env file line accepted but must be refused: {bad!r}")
 os.remove(os.path.join(fx, "_bad.env"))

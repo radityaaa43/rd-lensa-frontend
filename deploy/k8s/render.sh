@@ -129,7 +129,7 @@ env_file_lines() {
   local k v
   while IFS='=' read -r k v; do
     [[ -z "${k:-}" || "$k" == \#* ]] && continue
-    [[ "$k" =~ ^(LENSA_GW_(PALADIN|FABRICX)_(BI|A|B|C)|LENSA_BESU_RPC|LENSA_BESU_RPC_BANKS|LENSA_FABRICX_GW)$ ]] || die "env key '$k' is not allowed in the ConfigMap"
+    [[ "$k" =~ ^(LENSA_GW_(PALADIN|FABRICX|STEALTH)_(BI|A|B|C)|LENSA_BESU_RPC|LENSA_BESU_RPC_BANKS|LENSA_FABRICX_GW)$ ]] || die "env key '$k' is not allowed in the ConfigMap"
     [[ -n "$v" && "$v" != *[\"\\@\ ]* ]] || die "env value of $k is empty or holds a quote, backslash, space or '@' (no credentials in URLs)"
     printf '  %s: "%s"\n' "$k" "$v"
   done < "$LENSA_ENV_FILE"

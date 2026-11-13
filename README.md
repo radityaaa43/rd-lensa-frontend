@@ -80,7 +80,7 @@ kalau mati. Semuanya hanya di `127.0.0.1`.
   alih setelah port itu bebas. Jangan `systemctl enable` `lensa-pf@*`: template tidak punya `[Install]`; sebuah forward
   naik saat boot hanya jika terdaftar di `Wants=`/`After=` pada `lensa.service`.
 - Konfigurasi di `~/.config/lensa/lensa.env` (mode 600, tidak masuk git; contoh: `deploy/lensa.env.example`).
-- Per-party gateways without port-forward and without a kubeconfig: `LENSA_GW_PALADIN_<BI|A|B|C>` and `LENSA_GW_FABRICX_<BI|A|B|C>` (URL `https://<ip>:<port>`), one client certificate set per party in `LENSA_GW_MTLS_DIR/<BI|A|B|C>/{ca.crt,lensa.crt,lensa.key}`. The server refuses to start when a value is not an http(s) URL or two endpoints share a host:port. After zeto S19 the flat files (`ca.crt`, `lensa.crt`, `lensa.key`) in `LENSA_GW_MTLS_DIR` are removed; only the four party subfolders stay.
+- Per-party gateways without port-forward and without a kubeconfig: `LENSA_GW_PALADIN_<BI|A|B|C>`, `LENSA_GW_FABRICX_<BI|A|B|C>` and (pod, S17 keyless stealth) `LENSA_GW_STEALTH_<BI|A|B|C>` (URL `https://<ip>:<port>`; stealth: all four or none), one client certificate set per party in `LENSA_GW_MTLS_DIR/<BI|A|B|C>/{ca.crt,lensa.crt,lensa.key}`. The server refuses to start when a value is not an http(s) URL or two endpoints share a host:port. After zeto S19 the flat files (`ca.crt`, `lensa.crt`, `lensa.key`) in `LENSA_GW_MTLS_DIR` are removed; only the four party subfolders stay.
 
 ```bash
 deploy/install.sh                       # sekali: pasang unit, buat lensa.env bila belum ada, enable; tidak menjalankan apa pun

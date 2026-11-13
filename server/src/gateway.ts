@@ -100,6 +100,7 @@ export function gwTarget(u: string): GwTarget | undefined {
   }
   for (const p of Object.keys(PARTIES) as PartyId[]) {
     if (host(process.env[`LENSA_GW_IROHA_${p}`]) === key) return { party: p, servername: irohaServername(p) };
+    if (host(process.env[stealthVar(p)]) === key) return { party: p, servername: `st-gw-${PARTIES[p].node}` };
   }
   if (host(process.env.LENSA_BESU_RPC) === key) return bank('BI');
   const doors = bankDoors();
@@ -136,6 +137,23 @@ function gwConfigured(kind: GwKind, p: PartyId): URL | undefined {
   if (!u || (u.protocol !== 'http:' && u.protocol !== 'https:')) throw new Error(`${name} is not an http(s) URL`);
   return u;
 }
+// S17: each party's stealth signer sits behind its own st-gw-N door (Envoy + OPA, mTLS, TLS servername st-gw-N, reached with the same per-party Lensa cert as bank-gw-N):
+// LENSA_GW_STEALTH_<BI|A|B|C>=https://<host>:8550. All four or none: unset = the stealth adapter keeps its local signing path (host); a partial set is an error.
+const stealthVar = (p: PartyId) => `LENSA_GW_STEALTH_${p}`;
+export function stealthEndpoints(): Record<PartyId, string> | undefined {
+  const parties = Object.keys(PARTIES) as PartyId[];
+  const set = parties.filter((p) => process.env[stealthVar(p)]);
+  if (!set.length) return undefined;
+  const unset = parties.filter((p) => !set.includes(p));
+  if (unset.length) throw new Error(`${unset.map(stealthVar).join(', ')} unset: the stealth signers need all four doors or none`);
+  return Object.fromEntries(parties.map((p) => {
+    const v = process.env[stealthVar(p)]!;
+    let u: URL | undefined;
+    try { u = new URL(v); } catch { /* reported below */ }
+    if (!u || (u.protocol !== 'http:' && u.protocol !== 'https:')) throw new Error(`${stealthVar(p)} is not an http(s) URL`);
+    return [p, gwUrl(v.replace(/\/+$/, ''), p)];
+  })) as Record<PartyId, string>;
+}
 export function gwEndpoint(kind: GwKind, p: PartyId): string {
   const u = gwConfigured(kind, p);
   return u ? gwUrl(process.env[gwVar(kind, p)]!.replace(/\/+$/, ''), p) : gwUrl(`http://127.0.0.1:${gwDefault(kind, p)}`, p);
@@ -160,6 +178,8 @@ export function assertGatewayEnv(): void {
     const g = irohaGateway(p);
     if (g) add(`LENSA_GW_IROHA_${p}`, new URL(g).host);
   }
+  const stealth = stealthEndpoints(); // all four or none, each an http(s) URL
+  if (stealth) for (const p of Object.keys(PARTIES) as PartyId[]) add(stealthVar(p), new URL(stealth[p]).host);
   const hostOf = (label: string, v: string) => { try { return new URL(v).host; } catch { throw new Error(`${label} is not a URL`); } };
   if (process.env.LENSA_BESU_RPC) add('LENSA_BESU_RPC', hostOf('LENSA_BESU_RPC', process.env.LENSA_BESU_RPC));
   // stealth bank doors, slot i = BANKS[i]; empty entries are dropped first, exactly like stealth.ts and partyOfUrl do
