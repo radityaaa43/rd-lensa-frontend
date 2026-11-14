@@ -461,6 +461,13 @@ describe('keyless adapter, scenario against fake signers', () => {
       expect([...blocks].sort((x, y) => y - x)).toEqual(blocks);
       expect(d.at).toBe(new Date((1_700_000_000 + d.block! * 2) * 1000).toISOString());
     });
+    it('a bank\'s own send that is missing from its sent record is its own row (sender from BI\'s ledger), not an outsider; another bank\'s send still is', async () => {
+      const h = world.tx(); world.pay('C', 'rd', 7n, 'A', h); // A paid C; record.sent never saw it
+      const a = fresh(pubChain());
+      const ra = (await a.history('A', 100)).find((r) => r.id === h)!;
+      expect([ra.role, ra.verdict, ra.counterparty?.from, ra.amount]).toEqual(['sender', 'clear', 'A', '7']);
+      expect((await a.history('B', 100)).find((r) => r.id === h)!.role).toBe('outsider');
+    });
     it('the limit still applies, and BI\'s history is not duplicated and has no outsider rows', async () => {
       const a = fresh(pubChain());
       expect((await a.history('C', 3)).length).toBe(3);
