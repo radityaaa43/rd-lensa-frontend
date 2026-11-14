@@ -353,7 +353,13 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { s
     const outsiders = new Set<string>();
     if (pubG) {
       const known = new Set(cands.map(lc));
-      for (const [tx, g] of pubG) if (!known.has(tx)) { blocks.set(tx, g.block); cands.push(tx); outsiders.add(tx); }
+      for (const [tx, pg] of pubG) if (!known.has(tx)) {
+        blocks.set(tx, pg.block); cands.push(tx);
+        // BI's ledger authenticates the sender: this bank's own send missing from its sent record (an older run) is its own row, not an outsider's
+        const l = g.get(tx);
+        const own = !!l && (await Promise.all([l.rd, l.bond].map((x) => (x ? partyOf(x.sender) : null)))).includes(party);
+        if (!own) outsiders.add(tx);
+      }
     }
     await Promise.all(cands.filter((tx) => !blocks.has(tx)).map(async (tx) => { blocks.set(tx, await chain.blockOf(tx)); }));
     const newest = cands.map((tx, i) => ({ tx, i })).sort((x, y) => blocks.get(y.tx)! - blocks.get(x.tx)! || y.i - x.i).slice(0, want).map((x) => x.tx);
