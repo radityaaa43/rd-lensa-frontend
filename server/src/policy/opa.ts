@@ -87,7 +87,7 @@ export class Opa {
 
   async test(): Promise<{ passed: number; total: number }> {
     const r = this.opaRoot;
-    const out = await run(this.bin, ['test', '--format', 'json', join(r, 'bundles/bi'), join(r, 'bundles/bank'), join(r, 'test')], true);
+    const out = await run(this.bin, ['test', '--format', 'json', '--timeout', '60s', join(r, 'bundles/bi'), join(r, 'bundles/bank'), join(r, 'test')], true);
     const results = JSON.parse(out) as { fail?: boolean; error?: unknown; skip?: boolean }[];
     return { passed: results.filter((t) => !t.fail && !t.error && !t.skip).length, total: results.length };
   }
