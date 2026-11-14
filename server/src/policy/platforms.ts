@@ -2,6 +2,9 @@ import type { PartyId } from '../domain.ts';
 import type { Token } from './types.ts';
 import { usage } from './usage.ts';
 import { fabricxUsage, transport } from '../adapters/fabricx.ts';
+import { stealthUsage } from '../adapters/stealth-signer.ts';
+import { inCluster } from '../incluster.ts';
+import { stealthEndpoints } from '../gateway.ts';
 
 // The one place that lists the platforms with a policy document. Everything else (store, bundles, revisions, routes,
 // readiness, the web screen through /api/meta) is derived from this array and REGISTRY, so a new platform is one entry here
@@ -33,8 +36,11 @@ export const REGISTRY: Record<Platform, PlatformInfo> = {
     ...(transport() ? { usage: (party: Exclude<PartyId, 'BI'>, limits: Partial<Record<Token, number>> | undefined) => fabricxUsage(party, limits) } : {}),
   },
   iroha3: { label: 'Iroha 3', gateways: [], enforced: false },
-  // st-gw-1..4 (rd-besu stealth Kebijakan, 2026-11-13): the same bi/bank bundles as bank-gw-N, so no sink of their own; no usage: daily limits are not enforced on stealth
-  stealth: { label: 'Stealth', gateways: [], enforced: true },
+  // st-gw-1..4 (rd-besu stealth Kebijakan, 2026-11-13): the same bi/bank bundles as bank-gw-N, so no sink of their own; usage from the party's own signer (/outflow), so only in the pod with the four doors (LENSA_GW_STEALTH_*)
+  stealth: {
+    label: 'Stealth', gateways: [], enforced: true,
+    ...(inCluster() && stealthEndpoints() ? { usage: (party: Exclude<PartyId, 'BI'>, limits: Partial<Record<Token, number>> | undefined) => stealthUsage(party, limits) } : {}),
+  },
 };
 
 export const isPlatform = (v: unknown): v is Platform => (PLATFORMS as readonly unknown[]).includes(v);

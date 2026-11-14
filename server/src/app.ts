@@ -3,7 +3,7 @@ import type { ServerResponse } from 'node:http';
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { HISTORY_MAX, NotAvailableError, WarmingUpError, type Capability, type LensView, type ModelAdapter } from './adapter.ts';
-import { withDeadline } from './deadline.ts';
+import { DeadlineError, withDeadline } from './deadline.ts';
 import {
   FLOWS, MODEL_NAMES, PARTIES, PRICE_PER_UNIT, roleOf, validateRequest,
   type FlowId, type FlowRequest, type ModelId, type PartyId,
@@ -307,7 +307,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       emit('result', out);
     } catch (e) {
       if (isGatewayDeny(e)) app.log.error({ err: e }, `tx ${req.model} ${req.flow} denied by gateway`); // the original stays in the log
-      emit('error', { reason: isGatewayDeny(e) ? `Ditolak kebijakan di gateway ${PARTIES[req.from].name}` : msg(e) }); // Paladin calls go through the initiator's gateway
+      emit('error', { reason: isGatewayDeny(e) ? `Ditolak kebijakan di gateway ${PARTIES[req.from].name}` : e instanceof DeadlineError ? `${msg(e)}. Status transaksi belum diketahui (run tidak dibatalkan, bisa tetap berlaku di rantai): periksa saldo sebelum mengulang.` : msg(e) }); // Paladin calls go through the initiator's gateway
     } finally {
       closed = true;
       run.done = true;

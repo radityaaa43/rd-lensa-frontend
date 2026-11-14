@@ -6,6 +6,7 @@ import { besuTrace, nameFrom } from './besu-trace.ts';
 import { FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type FlowId, type FlowRequest, type ModelId, type PartyId } from '../domain.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import { besuDoor, gwFetch, stealthEndpoints } from '../gateway.ts';
+import type { Usage } from '../policy/platforms.ts';
 import { join } from 'node:path';
 import { STATE_DIR, readState, writeState } from '../state.ts';
 import { JsonRpcProvider, announcements as chainAnnouncements } from '../../vendor/besu/stealth-address/ts/chain.ts';
@@ -61,7 +62,7 @@ interface Leg { amount: string; sender: string | null; bank: string | null; bloc
 type Group = { rd?: Leg; bond?: Leg };
 type Ctx = { kind: 'rd' | 'bond'; amount: bigint; from: string | null }; // what the run result carries to lens()
 
-export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { sweepEscrows(): Promise<void> } {
+export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { sweepEscrows(): Promise<void>; usage(party: Exclude<PartyId, 'BI'>, limits?: Partial<Record<'RD' | 'DFABI', number>>, now?: Date): Promise<Usage> } {
   const { urls, chain, record } = deps;
   const doFetch = deps.fetch ?? gwFetch;
   // A signer scans the chain for every /holdings, /history and /ledger and answers /health from the same thread: duplicate reads (a page load asks the same signer
@@ -132,6 +133,12 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { s
       : undefined;
     return h.history.map((r) => ({ ...r, kind: r.partition !== undefined ? (r.partition === null ? 'rd' as const : 'bond' as const) : join?.get(lc(r.stealthAddress)) ?? null }));
   }
+  // Today's outflow for the Kebijakan screen: the signer's /outflow since 00:00 WIB (as policy/usage.ts, here in unix seconds). Values <= 10^15 are exact in a double.
+  const usage = async (p: Exclude<PartyId, 'BI'>, limits: Partial<Record<'RD' | 'DFABI', number>> = {}, now = new Date()): Promise<Usage> => {
+    const since = (Math.floor((now.getTime() + 7 * 3_600_000) / 86_400_000) * 86_400_000 - 7 * 3_600_000) / 1000;
+    const r = await cached(`outflow:${p}:${since}`, () => call<{ RD: string; DFABI: string }>(p, 'GET', `/outflow?since=${since}`));
+    return { RD: { used: Number(BigInt(r.RD)), limit: limits.RD ?? null }, DFABI: { used: Number(BigInt(r.DFABI)), limit: limits.DFABI ?? null } };
+  };
   // BI's ledger names banks as the signer does ("bank-a" | "bank-b" | "bank-c"; live, S11) and may cast the tx hash differently: both are normalised here, once.
   const BANK_OF: Record<string, string> = { 'bank-a': 'A', 'bank-b': 'B', 'bank-c': 'C' };
   const ledger = async (kind: 'rd' | 'bond', fresh = false) => (await cached(`ledger:${kind}`, () => call<{ rows: { bank: string; amount: string; sender: string | null; tx: string; blockNumber?: number | null }[] }>('BI', 'GET', `/ledger?kind=${kind}`), fresh)).rows
@@ -474,6 +481,7 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { s
     trace: async (tx, party) => { await learnNames(); return besuTrace(tx, party, { paladin: false, rpc, name: (a) => nameFrom(Object.fromEntries(names))(a) }); },
     receipt: async (tx) => ({ ...(await besuReceipt(tx, undefined, rpc)), node: null }),
     sweepEscrows,
+    usage,
     loadCirculates: false,
     loadCapacity: async () => 0,
     prepareLoad: async () => { throw new Error(UNSUPPORTED); },
@@ -540,11 +548,19 @@ export function loadRecord(dir = STATE_DIR): { record: SentRecord; save: () => v
   return { record, save: () => writeState(SENT_FILE, record, own) };
 }
 
+// The loaded pod adapter, for the policy registry's usage hook (REGISTRY lists it only in the pod with the four doors set).
+let live: ReturnType<typeof createSignerStealthAdapter> | undefined;
+export const stealthUsage = (...a: Parameters<ReturnType<typeof createSignerStealthAdapter>['usage']>) => {
+  if (!live) return Promise.reject(new Error('Signer stealth belum dimuat'));
+  return live.usage(...a);
+};
+
 // The pod's stealth adapter: null while the four signer doors are not configured (LENSA_GW_STEALTH_*), as the pod answers "belum tersedia" today.
 export async function loadSigner(): Promise<ModelAdapter | null> {
   const urls = stealthEndpoints();
   if (!urls) return null;
   const adapter = createSignerStealthAdapter({ urls, ...loadRecord(), chain: besuChain(), rpcUrl: besuDoor('BI') });
+  live = adapter;
   startSweep(adapter);
   return adapter;
 }

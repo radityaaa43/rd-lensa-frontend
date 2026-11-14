@@ -134,6 +134,43 @@ describe('iroha3 aps driver mode: the plan\'s flow table', () => {
   });
 });
 
+const ALL_FLOWS = [['rd-issue', 'BI', 'A', '4'], ['dfabi-issue', 'BI', 'A', '4'], ['rd-transfer', 'A', 'B', '3'], ['dfabi-transfer', 'A', 'B', '3'], ['dvp', 'A', 'B', '2'], ['award', 'BI', 'A', '2']] as const;
+
+describe('iroha3 aps driver mode: keyless pod, no iroha CLI (ENOENT)', () => {
+  const enoent: Cli = async () => { throw new Error('iroha CLI gagal (kode ENOENT)'); };
+  const a = () => createIroha3Adapter(state, enoent, noRead, undefined, fakeDriver().driver);
+  const pipeline = (kind: string, block_height: number | null) => (async () => new Response(JSON.stringify({ status: { kind, block_height } }), { status: 200 })) as typeof globalThis.fetch;
+
+  for (const [flow, from, to, amount] of ALL_FLOWS) {
+    it(`${flow}: run then lens of all four parties complete with the CLI missing; txHash and block kept`, async () => {
+      const ad = a(); const r = req(flow, from, to, amount);
+      const result = await ad.run(r, BigInt(amount), () => {});
+      const lenses = await Promise.all((['BI', 'A', 'B', 'C'] as const).map((p) => ad.lens(r, result, p)));
+      expect(result).toMatchObject({ txHash: TX, block: 77 });
+      for (const l of lenses) expect(l.onChain).toEqual(expect.arrayContaining([{ label: 'Tx hash', value: TX }, { label: 'Blok', value: '77' }]));
+      for (const l of lenses.filter((x) => x.party === from || x.party === to)) {
+        expect(l).toMatchObject({ verdict: 'clear', amount, counterparty: { from, to } });
+        expect(l.rdAmount).toBe(flow === 'dvp' || flow === 'award' ? (BigInt(amount) * PRICE_PER_UNIT).toString() : null);
+      }
+      for (const l of lenses.filter((x) => x.party !== from && x.party !== to)) expect(l).toMatchObject({ amount: null, counterparty: null });
+    });
+  }
+
+  it('receipt and trace read the keyless pipeline status of the party\'s own Torii, never the CLI', async () => {
+    const ad = createIroha3Adapter(state, enoent, { ...noRead, fetch: pipeline('Applied', 77) }, undefined, fakeDriver().driver);
+    const rc = await ad.receipt(TX, 'A');
+    expect(JSON.stringify(rc)).toContain('Applied, blok 77');
+    const tr = await ad.trace(TX, 'A');
+    expect(tr.steps[0]).toMatchObject({ tx: TX, block: 77 });
+  });
+
+  it('the transaction deadline is 600 s (Envoy /aps/ route) for driver APS; other modes keep the server default', () => {
+    expect(a().txDeadlineMs).toBe(600_000);
+    const plain = fakeDriver().driver; plain.aps = false;
+    expect(createIroha3Adapter(state, enoent, noRead, undefined, plain).txDeadlineMs).toBeUndefined();
+  });
+});
+
 describe('iroha3 load(): the aps flag', () => {
   const dirs: string[] = [];
   afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); vi.restoreAllMocks(); });
