@@ -66,7 +66,7 @@ test.skipIf(need)('test reports no failures', async () => {
   const r = await opa.test();
   expect(r.total).toBeGreaterThan(0);
   expect(r.passed).toBe(r.total);
-});
+}, 30_000); // 480 rego tests: ~3 s alone, over the 5 s default when the whole suite runs in parallel
 
 test.skipIf(need)('assemble keeps git participants and puts one document per platform under policy', () => {
   const git = JSON.parse(readFileSync(join(OPA_ROOT, 'bundles/bi/bi/config/data.json'), 'utf8'));

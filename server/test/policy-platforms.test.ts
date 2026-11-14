@@ -89,8 +89,8 @@ const tmps: string[] = [];
 const tmp = () => { const d = mkdtempSync(join(tmpdir(), 'lensa-plat-')); tmps.push(d); return d; };
 afterAll(() => tmps.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
-const RD = '0xdef2e64a415fd95e5b2c9fa1d7bdbc1792c410a1';
-const DFABI = '0x2ecc2fe5ff44b850b99607599abc3f6a23e223dc';
+const RD = '0x0b91f511a3c9ca8144a5422734a2db42bb86e8f6'; // the Zeto contracts in vendor/besu/opa/bundles/bi/bi/config/data.json
+const DFABI = '0x374725a4c44c58d01f4f05739b257be6c71b6b9d';
 const N_RD = '0xf4571ab32cbd61a7cfbf1d1647a39ec8744a7681';
 const door = (node: string, tx: object, method = 'ptx_sendTransaction') => ({
   attributes: { contextExtensions: { target: 'paladin', node } }, parsed_body: { jsonrpc: '2.0', id: 1, method, params: [tx] },
