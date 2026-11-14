@@ -21,7 +21,7 @@ test('registry: platforms in order, zeto and noto enforced on the four bank gate
     ['noto', 'Noto', true, ['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4'], true],
     ['fabricx', 'Fabric-X', true, ['fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4'], false], // usage only with LENSA_FABRICX_GW=1
     ['iroha3', 'Iroha 3', false, [], false],
-    ['stealth', 'Stealth', true, [], false], // the st-gw-N doors load the same bundle as bank-gw-N; no daily limits (no outflow source a gateway can query)
+    ['stealth', 'Stealth', true, [], false], // the st-gw-N doors load the same bundle as bank-gw-N; usage (signer /outflow) only in the pod with the four doors
   ]);
   // the sinks the Publisher waits for: every platform's gateways, once each
   expect(sinkNames()).toEqual(['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4', 'fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4']);
