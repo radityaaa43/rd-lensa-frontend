@@ -254,6 +254,17 @@ test('unknown run id is 404', async () => {
   expect(res.json().reason).toBeTruthy();
 });
 
+test('a run past its deadline says the outcome is unknown (the run is not cancelled), and the adapter\'s txDeadlineMs sets the deadline', async () => {
+  const z = fakeAdapter('zeto');
+  z.txDeadlineMs = 50;
+  z.run = () => new Promise(() => {});
+  const a = make({ zeto: z });
+  const base = await listen(a);
+  const { runId } = (await post(a, '/api/tx', req)).json();
+  const [e] = await readSse(base, `/api/tx/${runId}/events`);
+  expect(e!.data.reason).toMatch(/^Transaksi tidak selesai dalam 0\.05 detik\..*Status transaksi belum diketahui.*saldo/);
+});
+
 test('tx failure is delivered as an error event and frees the lock', async () => {
   const z = fakeAdapter('zeto');
   z.run = async () => { throw new Error('rpc putus'); };

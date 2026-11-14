@@ -49,6 +49,9 @@ export const CONFIG: Record<PartyId, string> = { BI: 'bi', A: 'bank-a', B: 'bank
 const SUBMIT = ['--machine', '--fee-payer', 'authority'];
 const CALL_MS = 180_000;
 const DEADLINE = 120_000;
+// driverAps run (intents + one submit): the BI coordinator serialises bundles (~90-200 s each plus queue) and the Envoy /aps/ route allows 600 s. The run is NOT cancelled at
+// the deadline and is never retried (a retry is a new intent and pays twice): the user is told the outcome is unknown.
+const APS_DRIVER_DEADLINE_MS = 600_000;
 const READ_WAIT_MS = 20_000;
 const APS_ACTIVATION_HEIGHT = 11; // [nexus.atomic_private_settlement] activation_height in iroha3/network/nexus.toml
 const HOME_DATASPACE = 1; // id of ds-rd in iroha3/network/nexus.toml, the home of RD and DFABI (generate.sh HOME_DS)
@@ -246,11 +249,15 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
 
   // NEW chain (analyst Q7, Q16): writes through the parties' own drivers, reads keyless. The CLI is not used at all. Reads that needed an operator key (balance
   // pre-check, tx detail, lens) are not available in window A: the chain's own refusal reaches the user (502 reason), the R1 lens rows are NOT-RUN.
+  async function keylessStatus(party: PartyId, hash: string): Promise<Status> {
+    if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error(`Hash transaksi tidak valid: ${hash.slice(0, 80)}`);
+    const r = await (read?.fetch ?? irohaFetch)(new URL(`v1/pipeline/transactions/status?hash=${hash}`, s.torii[party]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+    if (!r.ok) throw new Error(`Torii ${PARTIES[party].name} menjawab HTTP ${r.status}`);
+    return (await r.json()) as Status;
+  }
   async function appliedBlock(signer: PartyId, hash: string): Promise<number> {
     try {
-      const r = await (read?.fetch ?? irohaFetch)(new URL(`v1/pipeline/transactions/status?hash=${hash}`, s.torii[signer]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return ((await r.json()) as Status).status.block_height ?? 0;
+      return (await keylessStatus(signer, hash)).status.block_height ?? 0;
     } catch (e) { // the driver's own `Applied` answer is the settlement; the height is only display
       console.error('[iroha3] tinggi blok tidak terbaca (status tanpa kunci):', errMsg(e));
       return 0;
@@ -485,6 +492,16 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     if (bundle) return privateLens(req, bundle, party);
     const role = roleOf(req, party);
     const dvp = FLOWS[req.flow].dvp;
+    if (driver) { // keyless pod: no CLI and no operator key, so no node read at all; the rows that need one are NOT-RUN
+      const onChain = [{ label: 'Tx hash', value: result.txHash }, { label: 'Blok', value: String(result.block) }];
+      const nothing = { amount: null, rdAmount: null, counterparty: null, onChain };
+      if (party === req.from || party === req.to) {
+        return { party, role, verdict: 'clear', amount: req.amount, rdAmount: dvp ? (BigInt(req.amount) * PRICE_PER_UNIT).toString() : null, counterparty: { from: req.from, to: req.to }, onChain,
+          method: 'Pihak transaksi: nominal dan lawan transaksi dari permintaan Lensa; hash dan blok dari jawaban driver. Isi transaksi tidak dibaca ulang dari node (tanpa kunci operator, NOT-RUN).' };
+      }
+      if (driver.aps && party !== 'BI') return { party, role, verdict: 'sealed', ...nothing, method: `Node validator ${PARTIES[party].name} hanya menyimpan bundle, commitment note dan bukti STARK. Nominal dan pihak tidak ada di ledger.` };
+      return { party, role, verdict: 'partial', ...nothing, method: 'Pembacaan oleh pihak ini belum dijalankan (NOT-RUN): tanpa CLI dan kunci operator, Lensa tidak dapat membaca catatan audit atau node.' };
+    }
     const tx = await readOn(party, result.txHash);
     const { authority, instructions } = tx.entrypoint.External.payload;
     // The stored instruction must be byte-identical to the request rendered again; then its asset, amount and parties are the request's.
@@ -673,6 +690,14 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   // The tx as the party's own validator stores it (transparent lane: every validator holds the same record). No wait: a listed tx is applied.
   async function receipt(tx: string, party: PartyId): Promise<Receipt> {
     if (!/^[0-9a-f]{64}$/.test(tx)) throw new Error(`Hash transaksi tidak valid: ${tx.slice(0, 80)}`); // it goes to the CLI as an argument
+    if (driver) { // keyless: the pipeline status of the party's own Torii is all that is readable without an operator key
+      const st = await keylessStatus(party, tx);
+      return { source: `Torii ${PARTIES[party].name} (status tanpa kunci)`, chain: [{ title: 'Transaksi di ledger', rows: [
+        { label: 'Status', value: `${st.status.kind}${st.status.block_height !== null ? `, blok ${st.status.block_height}` : ''}` },
+        { label: 'Hash', value: tx },
+        { label: 'Detail transaksi', value: 'NOT-RUN (tanpa kunci operator)' },
+      ] }], node: null };
+    }
     return inLane(party, async () => {
       const [got, st] = await Promise.all([
         json<TxGet>(op(party), ['--machine', 'ledger', 'transaction', 'get', '--hash', tx]),
@@ -701,6 +726,15 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   // holds the tx on this lane (block 178's header predates the tx by a day). So Iroha shows one time point, never an invented duration.
   async function trace(tx: string, party: PartyId): Promise<Trace> {
     if (!/^[0-9a-f]{64}$/.test(tx)) throw new Error(`Hash transaksi tidak valid: ${tx.slice(0, 80)}`);
+    if (driver) {
+      const st = await keylessStatus(party, tx);
+      return {
+        source: `Torii ${PARTIES[party].name} (status tanpa kunci)`,
+        note: 'Tanpa kunci operator hanya status pipeline yang terbaca; isi transaksi dan waktu tanda tangan NOT-RUN.',
+        steps: [{ title: 'Transaksi', tx, block: st.status.block_height, at: null, spans: [], events: [], req: null,
+          resp: { summary: [{ label: 'Status', value: st.status.kind }], json: st }, node: null }],
+      };
+    }
     const [got, st] = await inLane(party, () => Promise.all([
       json<TxGet>(op(party), ['--machine', 'ledger', 'transaction', 'get', '--hash', tx]),
       json<Status>(op(party), ['--machine', 'ledger', 'transaction', 'status', '--hash', tx]),
@@ -755,7 +789,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
 
   const adapter: ModelAdapter & { fund: typeof mint } = {
     id: 'iroha3',
-    ...(aps ? { txDeadlineMs: APS_DEADLINE_MS } : {}),
+    ...(driver?.aps ? { txDeadlineMs: APS_DRIVER_DEADLINE_MS } : aps ? { txDeadlineMs: APS_DEADLINE_MS } : {}),
     stepLabels: ['Tanda tangan & kirim ke Torii', 'Diterima pipeline', 'Commit di blok (3 dari 4 validator)', 'Tersalin ke 4 validator'],
     capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, driver && !driver.aps && !FLOWS[f].dvp && !FLOWS[f].issuer ? { enabled: false, reason: NEW_CHAIN_NO_TRANSFER } : { enabled: true }])) as Record<FlowId, Capability>,
     async health() {
