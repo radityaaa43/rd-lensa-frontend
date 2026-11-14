@@ -59,10 +59,12 @@ def find_ns(n): return [r for r in rules if r.get("to", [{}])[0].get("namespaceS
 zbi = find_ns("rd-zeto-bi")
 check(len(zbi) == 1 and zbi[0]["to"][0]["podSelector"] == {"matchLabels": {"app": "bank-gw"}} and [p["port"] for p in zbi[0]["ports"]] == [8548, 8545] and all(p["protocol"] == "TCP" for p in zbi[0]["ports"]), f"gateway rule rd-zeto-bi: {zbi}")
 check(len(find_ns("rd-fabricx-bank-b")) == 0, "the PUBLIC pod has no rule to a Fabric-X gateway")
-check([r["to"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"] for r in frules if "namespaceSelector" in r["to"][0]] == ["rd-fabricx-bank-b"], f"the FLOW pod has exactly the Fabric-X gateway rule of the fixture: {frules}")
+check([r["to"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"] for r in frules if "namespaceSelector" in r["to"][0]] == ["rd-fabricx-bank-b", "rd-iroha3-bi"], f"the FLOW pod has exactly the Fabric-X and Iroha 3 gateway rules of the fixture: {frules}")
+irb = find_ns("rd-iroha3-bi")
+check(len(irb) == 1 and irb[0]["to"][0]["podSelector"] == {"matchLabels": {"rd-iroha3/role": "gateway"}} and irb[0]["ports"] == [{"protocol": "TCP", "port": 8443}], f"the PUBLIC pod reaches the Iroha 3 gateway rd-iroha3-bi on 8443 only: {irb}")
 ipb = [r for r in rules if "ipBlock" in r.get("to", [{}])[0]]
-check(len(ipb) == 1 and ipb[0]["to"][0]["ipBlock"] == {"cidr": "203.0.113.7/32"} and [p["port"] for p in ipb[0]["ports"]] == [8548], f"bank C ipBlock rule: {ipb}")
-check(len(rules) == 3, f"egress-gateways-public: 3 rules (2 zeto namespaces + the zeto ipBlock), got {len(rules)}")
+check(sorted((r["to"][0]["ipBlock"]["cidr"], r["ports"][0]["port"]) for r in ipb) == [("203.0.113.7/32", 8548), ("203.0.113.8/32", 8443)], f"bank C ipBlock rules (zeto 8548, iroha3 8443): {ipb}")
+check(len(rules) == 5, f"egress-gateways-public: 5 rules (2 zeto namespaces + the zeto ipBlock + 1 iroha3 namespace + the iroha3 ipBlock), got {len(rules)}")
 check(not any(r.get("to") is None for r in rules), "every egress rule names a destination (no allow-all)")
 # bad gateways.conf is refused
 for bad in ["rd-zeto-bi app=x", "rd-zeto-bi app=x notaport", "ipblock 0.0.0.0/0 443 zeto", "ipblock 10.0.0.1 443 zeto", "kube-system app=x 53", "ipblock 10.0.0.1/32 443", "ipblock 10.0.0.1/32 443 other"]:
@@ -118,10 +120,12 @@ for n, g in (("rd-fabricx-bi", "fx-gw-1"), ("rd-fabricx-bank-a", "fx-gw-2"), ("r
     r = fxgw.get(n)
     check(bool(r) and r["to"][0]["podSelector"] == {"matchLabels": {"app.kubernetes.io/name": g}} and r["ports"] == [{"protocol": "TCP", "port": 8443}], f"shipped gateways.conf: {n} gateway pod app.kubernetes.io/name={g} on 8443 only")
 def ns_of(r): return r["to"][0].get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name", "")
-# UNION EQUALITY: the public pod reaches the Zeto/Noto gateways and (S17, user-approved 2026-11-13) the Stealth signer doors; the flow pod the Fabric-X, Iroha 3 and Stealth gateways; no Iroha 3 or Fabric-X door in the public policy
-check({ns_of(r) for r in srules} == {"rd-zeto-bi", "rd-zeto-bank-a", "rd-zeto-bank-b", "rd-stealth-bi", "rd-stealth-bank-a", "rd-stealth-bank-b"}, f"public policy destinations {sorted(ns_of(r) for r in srules)}")
+# UNION EQUALITY: the public pod reaches the Zeto/Noto gateways, the Iroha 3 gateways (keyless driverAps, mTLS) and (S17, user-approved 2026-11-13) the Stealth signer doors; the flow pod the Fabric-X, Iroha 3 and Stealth gateways; no Iroha 3 or Fabric-X door in the public policy
+check({ns_of(r) for r in srules} == {f"rd-{p}-{o}" for p in ("zeto", "iroha3", "stealth") for o in ("bi", "bank-a", "bank-b")}, f"public policy destinations {sorted(ns_of(r) for r in srules)}")
 check({ns_of(r) for r in frules_ship} == {f"rd-{p}-{o}" for p in ("fabricx", "iroha3", "stealth") for o in ("bi", "bank-a", "bank-b")}, f"flow policy destinations {sorted(ns_of(r) for r in frules_ship)}")
-check(not any(ns_of(r).startswith(("rd-iroha3-", "rd-fabricx-")) for r in srules), "the public pod reaches no Fabric-X or Iroha 3 gateway")
+check(not any(ns_of(r).startswith("rd-fabricx-") for r in srules), "the public pod reaches no Fabric-X gateway")
+sir = {ns_of(r): r for r in srules if ns_of(r).startswith("rd-iroha3-")}
+check(len(sir) == 3 and all(r["to"][0]["podSelector"] == {"matchLabels": {"rd-iroha3/role": "gateway"}} and r["ports"] == [{"protocol": "TCP", "port": 8443}] for r in sir.values()), f"public pod: iroha3 gateways rd-iroha3/role=gateway on 8443 only (mTLS, no account key in the pod): {sir}")
 sst = {ns_of(r): r for r in srules if ns_of(r).startswith("rd-stealth-")}
 check(all(r["to"][0]["podSelector"] == {"matchLabels": {"app": "st-gw"}} and r["ports"] == [{"protocol": "TCP", "port": 8550}] for r in sst.values()) and len(sst) == 3, f"public pod: stealth gateways app=st-gw on 8550 only: {sst}")
 check(not any(ns_of(r).startswith("rd-zeto-") for r in frules_ship), "the flow pod has no Zeto gateway rule")
@@ -156,11 +160,13 @@ cm = name(app, "ConfigMap", "lensa-env")["data"]
 check(cm.get("HOST") == "0.0.0.0" and cm.get("PORT") == "8790" and cm.get("LENSA_GW_MTLS_DIR") == "/certs", f"configmap fixed keys {sorted(cm)}")
 check(cm.get("LENSA_IN_CLUSTER") == "1" and cm.get("LENSA_SINK_TOKENS_DIR") == "/sink-tokens" and cm.get("OPA_BIN") == "/usr/local/bin/opa", "configmap: OPA_BIN is the fixed image path (the env file cannot override it); pod mode signal LENSA_IN_CLUSTER=1 and the sink token directory /sink-tokens (server/src/incluster.ts, policy/sink.ts)")
 check(cm.get("LENSA_GW_PALADIN_BI") == "https://10.0.0.1:31548" and cm.get("LENSA_BESU_RPC") == "https://10.0.0.1:38545", "configmap takes the env file values")
+check(cm.get("LENSA_GW_MTLS_DIR_IROHA") == "/certs-iroha", "configmap: the Iroha 3 client cert directory /certs-iroha (independent of LENSA_GW_MTLS_DIR)")
+check(cm.get("LENSA_GW_IROHA_BI") == "https://gateway.rd-iroha3-bi.svc.cluster.local:8443" and cm.get("LENSA_GW_IROHA_C") == "https://203.0.113.8:8443", "configmap takes the Iroha 3 gateway URLs (LENSA_GW_IROHA_<P>) from the env file")
 check(cm.get("LENSA_GW_STEALTH_BI") == "https://10.0.0.1:8550", "configmap takes the S17 stealth signer door (LENSA_GW_STEALTH_<P>, the st-gw-N doors) from the env file")
 for k in cm:
     if k == "LENSA_SINK_TOKENS_DIR": continue  # a directory name; the tokens are mounted from Secrets
     check(not re.search(r"KEY|SECRET|TOKEN|PASSWORD|KUBECONFIG", k), f"configmap key looks secret: {k}")
-for bad in ["LENSA_GW_PALADIN_BI=https://user:pw@10.0.0.1:1", "LENSA_GW_STEALTH_A=https://user:pw@10.0.0.1:1", "LENSA_GW_STEALTH_X=https://10.0.0.1:1", "KUBECONFIG=/x", "OPA_KEYS_DIR=/x", "LENSA_IN_CLUSTER=0", "LENSA_SINK_TOKENS_DIR=/x", "OPA_BIN=/tmp/opa", "DEPLOYER_KEY=x", 'LENSA_BESU_RPC=http://a"b']:
+for bad in ["LENSA_GW_PALADIN_BI=https://user:pw@10.0.0.1:1", "LENSA_GW_STEALTH_A=https://user:pw@10.0.0.1:1", "LENSA_GW_STEALTH_X=https://10.0.0.1:1", "LENSA_GW_IROHA_A=https://user:pw@10.0.0.1:1", "LENSA_GW_IROHA_X=https://10.0.0.1:1", "LENSA_GW_MTLS_DIR_IROHA=/x", "KUBECONFIG=/x", "OPA_KEYS_DIR=/x", "LENSA_IN_CLUSTER=0", "LENSA_SINK_TOKENS_DIR=/x", "OPA_BIN=/tmp/opa", "DEPLOYER_KEY=x", 'LENSA_BESU_RPC=http://a"b']:
     p = os.path.join(fx, "_bad.env"); open(p, "w").write(bad + "\n")
     check(run(["app"], {"LENSA_ENV_FILE": p, "LENSA_IMAGE": IMAGE}).returncode != 0, f"env file line accepted but must be refused: {bad!r}")
 os.remove(os.path.join(fx, "_bad.env"))
@@ -183,11 +189,12 @@ check(c.get("livenessProbe", {}).get("httpGet") == {"path": "/api/livez", "port"
 r = c.get("resources", {})
 check(r.get("requests") == {"cpu": "100m", "memory": "256Mi"} and r.get("limits") == {"cpu": "1", "memory": "1Gi"}, f"resources {r}")
 mounts = {m["mountPath"]: m for m in c.get("volumeMounts", [])}
-check(set(mounts) == {"/tmp", "/app/frontend/server/state", "/certs", "/sink-tokens"}, f"mounts {sorted(mounts)}")
-check(mounts.get("/certs", {}).get("readOnly") is True and mounts.get("/sink-tokens", {}).get("readOnly") is True, "/certs and /sink-tokens read-only")
+check(set(mounts) == {"/tmp", "/app/frontend/server/state", "/certs", "/sink-tokens", "/certs-iroha", "/iroha3-state", "/app/frontend/server/state/iroha3.json"}, f"mounts {sorted(mounts)}")
+check(all(mounts.get(m, {}).get("readOnly") is True for m in ("/certs", "/sink-tokens", "/certs-iroha", "/iroha3-state", "/app/frontend/server/state/iroha3.json")), "/certs, /sink-tokens, /certs-iroha and the Iroha 3 state ConfigMap mounts are read-only")
+check(mounts.get("/app/frontend/server/state/iroha3.json", {}).get("subPath") == "iroha3.json" and mounts.get("/iroha3-state", {}).get("name") == mounts["/app/frontend/server/state/iroha3.json"].get("name"), "iroha3.json is a subPath file over the PVC state dir (the PVC seed never holds iroha3 files), from the same ConfigMap as /iroha3-state")
 vols = {v["name"]: v for v in pod.get("volumes", [])}
 check(any("persistentVolumeClaim" in v and v["persistentVolumeClaim"]["claimName"] == "lensa-state" for v in vols.values()), "state volume is PVC lensa-state")
-proj = [s for v in vols.values() if v.get("name") != "sink-tokens" for s in v.get("projected", {}).get("sources", [])]
+proj = [s for v in vols.values() if v.get("name") not in ("sink-tokens", "certs-iroha") for s in v.get("projected", {}).get("sources", [])]
 got = {s["secret"]["name"]: sorted((i["key"], i["path"]) for i in s["secret"]["items"]) for s in proj}
 want = {f"lensa-gw-mtls-{p.lower()}": sorted((k, f"{p}/{k}") for k in ("ca.crt", "lensa.crt", "lensa.key")) for p in ("BI", "A", "B", "C")}
 stv = [v for v in vols.values() if v.get("name") == "sink-tokens" or mounts.get("/sink-tokens", {}).get("name") == v.get("name")]
@@ -199,6 +206,13 @@ check(tgot == twant, f"sink token Secrets {tgot}: one per party (key token, file
 check(tok.get("defaultMode") == 0o440, f"sink token files mode {oct(tok.get('defaultMode', 0))}: 0440 (the pod group reads; server/src/policy/sink.ts pod mode accepts exactly this)")
 check(all(s["secret"].get("optional") is not True for s in tsrc), "sink token Secrets are not optional: a half-configured pod must not start")
 check(got == want, f"projected cert Secrets {got}")
+iro = vols.get("certs-iroha", {}).get("projected", {}).get("sources", [])
+igot = {s["secret"]["name"]: sorted((i["key"], i["path"]) for i in s["secret"]["items"]) for s in iro}
+iwant = {f"lensa-gw-mtls-iroha-{p.lower()}": sorted((k, f"{p}/{k}") for k in ("server-ca.pem", "lensa.crt", "lensa.key")) for p in ("BI", "A", "B", "C")}
+check(igot == iwant and mounts.get("/certs-iroha", {}).get("name") == "certs-iroha", f"Iroha 3 client cert Secrets {igot}: one per party (server-ca.pem, lensa.crt, lensa.key), not shared with /certs")
+check(all(s["secret"].get("optional") is not True for s in iro), "Iroha 3 cert Secrets are not optional")
+isv = vols.get(mounts.get("/iroha3-state", {}).get("name"), {}).get("configMap", {})
+check(isv.get("name") == "lensa-iroha3-state" and isv.get("optional") is not True, f"Iroha 3 state ConfigMap lensa-iroha3-state (iroha3.json + genesis.expected_hash, public data), not optional: {isv}")
 check(all(s["secret"].get("optional") is not True for s in proj), "cert Secrets are not optional: a missing party Secret must stop the pod")
 check(not any("kubeconfig" in str(v).lower() or "hostPath" in v for v in vols.values()), "no kubeconfig volume, no hostPath")
 na = pod.get("affinity", {}).get("nodeAffinity", {}).get("requiredDuringSchedulingIgnoredDuringExecution", {}).get("nodeSelectorTerms", [{}])[0].get("matchExpressions", [])
@@ -431,6 +445,7 @@ check(set(paths(ing0, "lensa-public")) <= set(paths(ingw, "lensa-public")), "W: 
 wtx = name(ingw, "Ingress", "lensa-public-tx")
 check(paths(ingw, "lensa-public-tx") == ["/api/tx:Exact"], f"lensa-public-tx routes exactly POST /api/tx (Exact): {paths(ingw, 'lensa-public-tx')}")
 wa = wtx["metadata"]["annotations"]
+check(wa.get("nginx.ingress.kubernetes.io/proxy-read-timeout") == "300" and wa.get("nginx.ingress.kubernetes.io/proxy-send-timeout") == "300", f"lensa-public-tx timeouts {wa}: an APS settle takes 100-200 s")
 check(wa.get("nginx.ingress.kubernetes.io/limit-rps") == "1" and wa.get("nginx.ingress.kubernetes.io/limit-connections") == "2" and wa.get("nginx.ingress.kubernetes.io/limit-burst-multiplier") == "3" and wa.get("nginx.ingress.kubernetes.io/proxy-body-size") == "4k", f"lensa-public-tx limits {wa}")
 check("cert-manager.io/issuer" not in wa and "cert-manager.io/cluster-issuer" not in wa, "lensa-public-tx has NO cert-manager annotation (two Ingresses with one secret would make two Certificates)")
 check(wtx["spec"]["tls"] == name(ingw, "Ingress", "lensa-public")["spec"]["tls"] and wtx["spec"]["rules"][0]["host"] == "x.example.com", "lensa-public-tx: same host and TLS secret")

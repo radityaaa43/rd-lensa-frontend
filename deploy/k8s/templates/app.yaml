@@ -68,6 +68,10 @@ spec:
             - {name: tmp, mountPath: /tmp}
             - {name: state, mountPath: /app/frontend/server/state}
             - {name: certs, mountPath: /certs, readOnly: true}
+            - {name: certs-iroha, mountPath: /certs-iroha, readOnly: true}
+            - {name: iroha3-state, mountPath: /iroha3-state, readOnly: true}
+            # file over the PVC state dir: the pod seed never holds iroha3.json (render.sh seed refuses it), and adapters/iroha3.ts reads <state dir>/iroha3.json
+            - {name: iroha3-state, mountPath: /app/frontend/server/state/iroha3.json, subPath: iroha3.json, readOnly: true}
             - {name: sink-tokens, mountPath: /sink-tokens, readOnly: true}
       volumes:
         - name: tmp
@@ -91,6 +95,25 @@ spec:
               - secret:
                   name: lensa-gw-mtls-c
                   items: [{key: ca.crt, path: C/ca.crt}, {key: lensa.crt, path: C/lensa.crt}, {key: lensa.key, path: C/lensa.key}]
+        # Iroha 3 (keyless, driverAps): LENSA_GW_MTLS_DIR_IROHA/<BI|A|B|C>/{server-ca.pem,lensa.crt,lensa.key} (server/src/gateway.ts), independent of /certs. Not optional.
+        - name: certs-iroha
+          projected:
+            sources:
+              - secret:
+                  name: lensa-gw-mtls-iroha-bi
+                  items: [{key: server-ca.pem, path: BI/server-ca.pem}, {key: lensa.crt, path: BI/lensa.crt}, {key: lensa.key, path: BI/lensa.key}]
+              - secret:
+                  name: lensa-gw-mtls-iroha-a
+                  items: [{key: server-ca.pem, path: A/server-ca.pem}, {key: lensa.crt, path: A/lensa.crt}, {key: lensa.key, path: A/lensa.key}]
+              - secret:
+                  name: lensa-gw-mtls-iroha-b
+                  items: [{key: server-ca.pem, path: B/server-ca.pem}, {key: lensa.crt, path: B/lensa.crt}, {key: lensa.key, path: B/lensa.key}]
+              - secret:
+                  name: lensa-gw-mtls-iroha-c
+                  items: [{key: server-ca.pem, path: C/server-ca.pem}, {key: lensa.crt, path: C/lensa.crt}, {key: lensa.key, path: C/lensa.key}]
+        # public Iroha 3 state: iroha3.json (state.dir /iroha3-state, driverAps, public keys, driver URLs) and genesis.expected_hash. Created by the operator, never rendered.
+        - name: iroha3-state
+          configMap: {name: lensa-iroha3-state}
         # LENSA_SINK_TOKENS_DIR: one bearer token per party, file <BI|A|B|C>, from Secret lensa-sink-token-<bi|a|b|c> (key `token`, 64 hex, no newline). Each party
         # creates only its own Secret; they are never rendered here. Mode 0440 so the pod group (fsGroup 10001) reads it: server/src/policy/sink.ts pod mode
         # (LENSA_IN_CLUSTER=1 and this read-only mount) accepts exactly that. Not optional: a half-configured pod must not start.

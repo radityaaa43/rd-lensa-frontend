@@ -31,7 +31,7 @@ port_list() { # validates "8548,8545" and prints one "- {protocol: TCP, port: N}
   for p in "${ps[@]}"; do (( p >= 1 && p <= 65535 )) || die "port $p out of range in $gateways"; echo "        - {protocol: TCP, port: $p}"; done
 }
 
-# One NetworkPolicy per pod class (orchestrator ruling, GO-W c7; S17 2026-11-13, user-approved: the public pod also reaches the Stealth signer doors): the PUBLIC pod (role=server, plus the probe pod role=probe-public) reaches the Zeto/Noto and Stealth gateways;
+# One NetworkPolicy per pod class (orchestrator ruling, GO-W c7; S17 2026-11-13, user-approved: the public pod also reaches the Stealth signer doors): the PUBLIC pod (role=server, plus the probe pod role=probe-public) reaches the Zeto/Noto, Iroha 3 (keyless driverAps, mTLS) and Stealth gateways;
 # the FLOW pod (role=flow, probe-flow) reaches the Fabric-X, Iroha 3 and Stealth gateways. A gateways.conf row belongs to the platform in its namespace name
 # (rd-<platform>-<party>) or, for an `ipblock` row, in its 4th field. The union of both policies is the old single policy minus the cross-class rows: nothing is added.
 gateway_policy() { # $1 policy name, $2 role list (YAML flow list), $3 platform regex
@@ -81,7 +81,7 @@ $(port_list "$c")
 
 base() {
   cat "$here/templates/base.yaml"
-  echo '---'; gateway_policy egress-gateways-public 'server, probe-public' 'zeto|stealth'
+  echo '---'; gateway_policy egress-gateways-public 'server, probe-public' 'zeto|iroha3|stealth'
   echo '---'; gateway_policy egress-gateways-flow 'flow, probe-flow' 'fabricx|iroha3|stealth'
   if [[ "$entry" == a ]]; then echo '---'; cat "$here/templates/access.yaml"; else echo '---'; cat "$here/templates/entry-b.yaml"; fi
 }
@@ -107,6 +107,7 @@ data:
   HOST: "0.0.0.0"
   PORT: "8790"
   LENSA_GW_MTLS_DIR: "/certs"
+  LENSA_GW_MTLS_DIR_IROHA: "/certs-iroha"
   LENSA_IN_CLUSTER: "1"
   LENSA_SINK_TOKENS_DIR: "/sink-tokens"
   OPA_BIN: "/usr/local/bin/opa"
@@ -129,7 +130,7 @@ env_file_lines() {
   local k v
   while IFS='=' read -r k v; do
     [[ -z "${k:-}" || "$k" == \#* ]] && continue
-    [[ "$k" =~ ^(LENSA_GW_(PALADIN|FABRICX|STEALTH)_(BI|A|B|C)|LENSA_BESU_RPC|LENSA_BESU_RPC_BANKS|LENSA_FABRICX_GW)$ ]] || die "env key '$k' is not allowed in the ConfigMap"
+    [[ "$k" =~ ^(LENSA_GW_(PALADIN|FABRICX|STEALTH|IROHA)_(BI|A|B|C)|LENSA_BESU_RPC|LENSA_BESU_RPC_BANKS|LENSA_FABRICX_GW)$ ]] || die "env key '$k' is not allowed in the ConfigMap"
     [[ -n "$v" && "$v" != *[\"\\@\ ]* ]] || die "env value of $k is empty or holds a quote, backslash, space or '@' (no credentials in URLs)"
     printf '  %s: "%s"\n' "$k" "$v"
   done < "$LENSA_ENV_FILE"
