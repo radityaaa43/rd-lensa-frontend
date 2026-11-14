@@ -47,6 +47,7 @@ besu opa/bundles/bank/bank/platform/iroha3/iroha3.rego
 besu opa/bundles/bank/bank/platform/sink/sink.rego
 besu opa/bundles/bank/bank/platform/stealth/stealth.rego
 besu opa/bundles/bank/bank/platform/stealth_viewcopy/stealth_viewcopy.rego
+besu opa/bundles/bank/bank/stealth_usage/stealth_usage.rego
 besu opa/bundles/bank/.manifest
 besu opa/bundles/bi/bi/atom/atom.rego
 besu opa/bundles/bi/bi/caller/caller.rego
