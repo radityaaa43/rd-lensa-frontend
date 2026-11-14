@@ -66,4 +66,19 @@ describe('deploy/forwards.conf', () => {
     expect(c!.port).toBe('8548');
     expect(c!.host).not.toBe(envUrls("LENSA_BESU_RPC_BANKS")[2]!.host); // distinct host:port (gateway.ts assertGatewayEnv): same LB, other port
   });
+  it('forwards the Iroha 3 gateway of BI, A and B (cluster 1) to the LENSA_GW_IROHA_* ports; bank C uses its public gateway (cluster 2, no forward)', () => {
+    for (const [p, ns] of [['BI', 'bi'], ['A', 'bank-a'], ['B', 'bank-b']]) {
+      const f = byName(`iroha-gw-${ns}`);
+      expect(f, ns).toMatchObject({ ns: `rd-iroha3-${ns}`, svc: 'gateway' });
+      expect(f!.ports.split(':')[1]).toBe('8443');
+      const [u] = envUrls(`LENSA_GW_IROHA_${p}`);
+      expect(u?.protocol).toBe('https:');
+      expect(isLoopback(u!) && Number(u!.port)).toBe(f!.local);
+    }
+    expect(forwards.filter((f) => f.ns === 'rd-iroha3-bank-c')).toEqual([]);
+    const [c] = envUrls('LENSA_GW_IROHA_C');
+    expect(c?.protocol).toBe('https:');
+    expect(isLoopback(c!)).toBe(false);
+    expect(c!.port).toBe('8443');
+  });
 });
