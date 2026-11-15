@@ -471,7 +471,11 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
         return { id: journal[id]?.tx ?? id, at: null, block: heights.get(id) ?? null, flow, asset, role, verdict: role === 'regulator' ? 'reported' : 'clear', amount, rdAmount, counterparty };
       }).sort((a, b) => (b.block ?? 0) - (a.block ?? 0)).slice(0, want);
     }
-    const w = await walletFor(party);
+    return walletHistory(party, await walletFor(party), want);
+  }
+
+  // A party's own wallet items (the shared-pool mount or the keyless driver's GET /aps/wallet) as history rows.
+  function walletHistory(party: PartyId, w: Wallet, want: number): HistoryItem[] {
     const bundles = new Map<string, { height: number; rd?: string; dfabi?: string; rdDir?: string; dfabiDir?: string; fee?: string }>();
     for (const i of w.items) bundles.set(i.bundle_id, { ...bundles.get(i.bundle_id), height: i.height, [i.asset]: i.amount, [`${i.asset}Dir`]: i.direction, ...(i.asset === 'rd' && i.fee && i.fee !== '0' ? { fee: i.fee } : {}) });
     return [...bundles].map(([id, b]): HistoryItem => {
@@ -667,6 +671,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   async function history(party: PartyId, limit: number): Promise<HistoryItem[] & { truncated?: true }> {
     if (!Number.isInteger(limit) || limit < 1) throw new Error('limit harus bilangan bulat >= 1');
     const want = Math.min(limit, HISTORY_MAX);
+    if (driver?.aps) return walletHistory(party, await driver.apsWallet(party), want); // keyless pod: no operator key and no mount, the driver's wallet is the party's own record
     if (shared) return sharedHistory(party, want);
     // Lists and decodes both go through the party's operator account on its Torii, so they run in its lane, one after another.
     const lists = await scanOf(party);
