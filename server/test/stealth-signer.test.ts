@@ -317,12 +317,34 @@ describe('keyless adapter, scenario against fake signers', () => {
     expect(ok.reportPending).toBeUndefined();
   });
 
-  it('every flow is enabled; stress is host-only', async () => {
+  it('every flow is enabled', async () => {
     expect(Object.values(adapter.capabilities()).every((c) => c.enabled)).toBe(true);
-    expect(adapter.loadCirculates).toBe(false);
-    expect(await adapter.loadCapacity(1)).toBe(0);
-    await expect(adapter.prepareLoad(1, 1)).rejects.toThrow(/host/);
-    await expect(adapter.transferForLoad({ bank: 'A', i: 0 }, { bank: 'B', i: 0 }, 1n)).rejects.toThrow(/host/);
+  });
+
+  it('stress in the pod: capacity = the bank\'s total RD / (1000 x users); prepare only checks the balance; a load transfer is a serial rd-transfer intent that the receiver can spend again', async () => {
+    for (const b of ['A', 'B', 'C'] as const) world.seed(b, 'rd', 4000n);
+    expect(adapter.loadCirculates).toBe(true);
+    expect(adapter.maxLoadUsers).toBe(4);
+    const rd = async (b: PartyId) => adapter.balanceOf(b, 'RD');
+    const min = async (users: bigint) => Number((await Promise.all((['A', 'B', 'C'] as const).map(rd))).reduce((m, x) => (x < m ? x : m)) / (1000n * users));
+    expect(await adapter.loadCapacity(2)).toBe(await min(2n));
+    expect(await adapter.loadCapacity(2)).toBeGreaterThanOrEqual(2);
+    await adapter.prepareLoad(1, 2);
+    await expect(adapter.prepareLoad(4, 1_000_000)).rejects.toThrow(/Saldo RD .* kurang untuk uji beban/);
+    const [a0, b0] = [await rd('A'), await rd('B')];
+    const calls = world.calls.length;
+    // two users of one bank at once: one intent at a time, both land
+    const [s1, s2] = await Promise.all([
+      adapter.transferForLoad({ bank: 'A', i: 0 }, { bank: 'B', i: 0 }, 1000n),
+      adapter.transferForLoad({ bank: 'A', i: 1 }, { bank: 'B', i: 1 }, 1000n),
+    ]);
+    expect(s1.confirmedAt).toBeGreaterThanOrEqual(s1.submittedAt);
+    expect(s2.submittedAt).toBeGreaterThanOrEqual(s1.confirmedAt); // the second waited for the first
+    expect(world.calls.length).toBeGreaterThan(calls);
+    expect([await rd('A'), await rd('B')]).toEqual([a0 - 2000n, b0 + 2000n]);
+    // cancelled before anything is submitted
+    await expect(adapter.transferForLoad({ bank: 'A', i: 0 }, { bank: 'B', i: 0 }, 1000n, { aborted: true })).rejects.toThrow('Dibatalkan');
+    expect(await rd('A')).toBe(a0 - 2000n);
   });
 
   const cachedAdapter = () => createSignerStealthAdapter({

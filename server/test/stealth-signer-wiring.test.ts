@@ -55,7 +55,7 @@ describe('load(): pod mode never reads a stealth key file', () => {
     vi.stubEnv('LENSA_GW_MTLS_DIR', '');
     const a = await load();
     expect(a?.id).toBe('stealth');
-    expect(a?.loadCirculates).toBe(false);
+    expect(a?.loadCirculates).toBe(true);
     expect(keyReads).toEqual([]);
     vi.doUnmock('../src/state.ts');
   });

@@ -454,6 +454,31 @@ test('preflight-capacity omits a model whose capacity cannot be read', async () 
   expect(res.json()).toEqual({ noto: 7 });
 });
 
+test('stress/prepare: tops up only a model below the target, runs under the lock, reports done / error, and 409 while busy', async () => {
+  const z = fakeAdapter('zeto', { capacity: 3 }), n = fakeAdapter('noto', { capacity: 500 });
+  const topped: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  z.prepareLoad = async (u, units) => { topped.push(`zeto ${u} ${units}`); await gate; };
+  n.prepareLoad = async () => { topped.push('noto'); };
+  const app = make({ zeto: z, noto: n });
+  expect((await app.inject('/api/stress/prepare')).statusCode).toBe(204);
+  const r = await post(app, '/api/stress/prepare', { models: ['zeto', 'noto'], users: 2 });
+  expect(r.statusCode).toBe(202);
+  expect((await post(app, '/api/stress/prepare', { models: ['zeto'], users: 1 })).statusCode).toBe(409);
+  expect((await post(app, '/api/stress', { models: ['zeto'], users: 1, stageS: 60 })).statusCode).toBe(409);
+  release();
+  for (let i = 0; i < 50 && (await app.inject('/api/stress/prepare')).json().state === 'running'; i++) await new Promise((x) => setTimeout(x, 10));
+  expect((await app.inject('/api/stress/prepare')).json()).toEqual({ state: 'done' });
+  expect(topped).toEqual(['zeto 2 50']); // noto already had 500 >= 50
+  z.prepareLoad = async () => { throw new Error('Saldo RD kurang'); };
+  expect((await post(app, '/api/stress/prepare', { models: ['zeto'], users: 1 })).statusCode).toBe(202);
+  for (let i = 0; i < 50 && (await app.inject('/api/stress/prepare')).json().state === 'running'; i++) await new Promise((x) => setTimeout(x, 10));
+  expect((await app.inject('/api/stress/prepare')).json()).toEqual({ state: 'error', model: 'zeto', reason: 'Saldo RD kurang' });
+  expect((await post(app, '/api/stress/prepare', { models: ['zeto'], users: 3 })).statusCode).toBe(400);
+  expect((await post(make({ zeto: z }), '/api/stress/prepare', { models: ['noto'], users: 1 })).statusCode).toBe(503);
+});
+
 test('unknown routes are 404 with an Indonesian reason', async () => {
   const res = await make().inject('/api/nope');
   expect(res.statusCode).toBe(404);

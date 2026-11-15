@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, StepEvent } from '../adapter.ts';
-import { HISTORY_MAX } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, type LoadUser } from '../adapter.ts';
 import { besuNetwork, besuReceipt } from './besu-network.ts';
 import { besuTrace, nameFrom } from './besu-trace.ts';
 import { FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type FlowId, type FlowRequest, type ModelId, type PartyId } from '../domain.ts';
@@ -28,7 +28,6 @@ const REFUND_WINDOW_S = 600; // besu: the stored refund certificate is valid unt
 const hashesOf = (r: { txHash: string; txHashes?: string[] }): string[] => (r.txHashes?.length ? r.txHashes : [r.txHash]); // an older signer answers txHash only
 // RD may come from several of the bank's own addresses (besu signer, 2026-11-15): short only when the bank's total RD is short. A DFABI tranche is still one address.
 const NO_BALANCE = 'Saldo tidak cukup (RD: total semua alamat bank; DFABI: satu alamat stealth harus mencukupi)';
-const UNSUPPORTED = 'Uji beban stealth hanya berjalan di host (kunci ada di signer), tidak di pod';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const lc = (s: string) => s.toLowerCase();
 
@@ -464,6 +463,16 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { s
   };
   const rpc = deps.rpcUrl;
 
+  const LOAD_BANKS: PartyId[] = ['A', 'B', 'C'];
+  const LOAD_USERS_MAX = 4;
+  const rdOf = async (p: PartyId, fresh = false) => (await holdings(p, fresh)).filter((h) => h.partition === null).reduce((m, h) => m + h.amount, 0n);
+  const lanes = new Map<PartyId, Promise<unknown>>();
+  const inLane = <T>(p: PartyId, fn: () => Promise<T>): Promise<T> => {
+    const r = (lanes.get(p) ?? Promise.resolve()).then(fn);
+    lanes.set(p, r.catch(() => undefined));
+    return r;
+  };
+
   return {
     id: 'stealth',
     stepLabels: LABELS,
@@ -491,10 +500,29 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { s
     receipt: async (tx) => ({ ...(await besuReceipt(tx, undefined, rpc)), node: null }),
     sweepEscrows,
     usage,
-    loadCirculates: false,
-    loadCapacity: async () => 0,
-    prepareLoad: async () => { throw new Error(UNSUPPORTED); },
-    transferForLoad: async () => { throw new Error(UNSUPPORTED); },
+    // Stress test in the pod: a load transfer is a plain rd-transfer intent of the sending bank to the receiving bank's meta-address; the signer picks the bank's own addresses
+    // (k >= 1 payments). The bank's total RD is the pool, so a user is a slot, not an address. What a bank receives it can spend again.
+    loadCirculates: true,
+    maxLoadUsers: LOAD_USERS_MAX,
+    async loadCapacity(users) {
+      return Math.min(...(await Promise.all(LOAD_BANKS.map(async (b) => Number((await rdOf(b, true)) / (LOAD_AMOUNT * BigInt(users)))))));
+    },
+    async prepareLoad(users, units) {
+      const need = LOAD_AMOUNT * BigInt(users * units);
+      for (const b of LOAD_BANKS) {
+        const have = await rdOf(b, true);
+        if (have < need) throw new Error(`Saldo RD ${PARTIES[b].name} kurang untuk uji beban: perlu ${need}, punya ${have}`);
+      }
+    },
+    // One at a time per sending bank: two intents at once could pick the same address. The wait is queue time, which the orchestrator measures itself.
+    transferForLoad: (from: LoadUser, to: LoadUser, amount: bigint, signal?: { aborted: boolean }) => inLane(from.bank, async () => {
+      if (signal?.aborted) throw new Error(CANCELLED);
+      const toMeta = await meta(to.bank);
+      const submittedAt = Date.now();
+      const out = await call<{ txHash: string; txHashes?: string[] }>(from.bank, 'POST', '/intent', { kind: 'rd-transfer', from: from.bank, to: { metaAddress: toMeta.metaAddress }, amount: amount.toString() });
+      await Promise.all(hashesOf(out).map((h) => chain.waitReceipt(from.bank, h)));
+      return { submittedAt, confirmedAt: Date.now() };
+    }),
   };
 }
 

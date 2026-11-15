@@ -80,9 +80,9 @@ describe('W on: transactions', () => {
 });
 
 describe('W on: everything else stays closed', () => {
-  it('every other write verb answers 405 + Allow: GET, HEAD (stress, drafts, reject, cancel, login, unknown, PUT/DELETE/PATCH/OPTIONS)', async () => {
+  it('every other write verb answers 405 + Allow: GET, HEAD (stress events / csv, preflight, drafts, reject, cancel, login, unknown, PUT/DELETE/PATCH/OPTIONS)', async () => {
     const a = make(undefined, policyDeps());
-    const cases: [string, string][] = [['POST', '/api/stress'], ['POST', '/api/stress/stop'], ['POST', '/api/policy/bi/drafts'], ['POST', '/api/policy/bi/reject'], ['POST', '/api/policy/bank-a/cancel'], ['POST', '/api/login'], ['POST', '/anything'],
+    const cases: [string, string][] = [['POST', '/api/stress/events'], ['POST', '/api/stress/csv'], ['POST', '/api/preflight-capacity'], ['POST', '/api/policy/bi/drafts'], ['POST', '/api/policy/bi/reject'], ['POST', '/api/policy/bank-a/cancel'], ['POST', '/api/login'], ['POST', '/anything'],
       ['PUT', '/api/tx'], ['DELETE', '/api/tx'], ['PATCH', '/api/tx'], ['OPTIONS', '/api/tx'], ['PUT', '/api/meta'], ['DELETE', '/api/policy/bi/approve'], ['POST', '/api/tx/x/events']];
     for (const [method, url] of cases) {
       const r = await a.inject({ method: method as 'POST', url, payload: method === 'POST' || method === 'PUT' || method === 'PATCH' ? {} : undefined });
@@ -90,9 +90,13 @@ describe('W on: everything else stays closed', () => {
       expect(r.headers.allow).toBe('GET, HEAD');
     }
   });
-  it('stress and preflight-capacity stay 404; the kubelet probes stay', async () => {
+  it('the stress test is open (PoC decision): reads answer, start / stop / prepare reach their handlers; the kubelet probes stay', async () => {
     const a = make(undefined, policyDeps());
-    for (const url of ['/api/stress', '/api/stress/csv', '/api/stress/events', '/api/preflight-capacity']) expect([url, (await a.inject(url)).statusCode]).toEqual([url, 404]);
+    expect((await a.inject('/api/stress')).statusCode).toBe(204);
+    expect((await a.inject('/api/stress/prepare')).statusCode).toBe(204);
+    expect((await a.inject('/api/preflight-capacity')).statusCode).toBe(200);
+    expect((await a.inject({ method: 'POST', url: '/api/stress/stop', payload: {} })).statusCode).toBe(404); // reaches the handler: no run yet
+    expect((await a.inject({ method: 'POST', url: '/api/stress/prepare', payload: { models: ['zeto'], users: 1 } })).statusCode).toBe(202);
     expect((await a.inject('/api/livez')).statusCode).toBe(200);
   });
   it('Kebijakan GETs are readable now (not 404)', async () => {
