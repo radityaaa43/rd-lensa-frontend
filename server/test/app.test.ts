@@ -195,7 +195,7 @@ test('issue flows skip the balance check', async () => {
   z.balanceOf = async (p, asset) => { asked.push(`${p}:${asset}`); return 0n; };
   const res = await post(make({ zeto: z }), '/api/tx', { ...req, flow: 'rd-issue', from: 'BI' });
   expect(res.statusCode).toBe(202);
-  expect((await post(make({ zeto: z }), '/api/tx', { ...req, flow: 'dfabi-issue', from: 'BI' })).statusCode).toBe(202);
+  expect((await post(make({ zeto: z }), '/api/tx', { ...req, flow: 'dfabi-issue', from: 'BI', to: 'BI' })).statusCode).toBe(202); // issued BI -> BI
   expect(asked).toEqual([]);
 });
 

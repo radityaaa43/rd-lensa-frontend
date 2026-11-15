@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, StepEvent, Verdict } from '../adapter.ts';
-import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, loadLookup, type LoadUser } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, NotAvailableError, loadLookup, type LoadUser } from '../adapter.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
@@ -16,6 +16,7 @@ import { issueBond, issueCash } from '../../vendor/besu/noto+pente/bond/src/lib/
 import { custodianOf, executeOutright, type OnProgress, type TradeRecord } from '../../vendor/besu/noto+pente/bond/src/lib/outright.ts';
 import { readNotoTx, readStateHashes, readTxReceipt, tradeSpendTxIds, waitTxIndexed, watchDispatch, type NotoTxView } from '../../vendor/besu/noto+pente/bond/src/lib/receipts.ts';
 
+const NOTO_ISSUE_WHY = 'Penerbitan DFABI ke persediaan BI (tranche baru ke kustodian) belum tersedia; penjualan ke bank lewat penjualan perdana';
 const DEADLINE = 120_000;
 const DVP_DEADLINE = 100_000; // inside the app's 120 s flow deadline
 const NODE_PROBE_MS = 2_000;
@@ -272,6 +273,7 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
   })().catch((e) => { keys = undefined; throw e; }));
 
   async function runUnlocked(req: FlowRequest, amount: bigint, onStep: (s: StepEvent) => void, hold: (p: Promise<unknown>) => void): Promise<FlowResult> {
+    if (req.flow === 'dfabi-issue') throw new NotAvailableError(NOTO_ISSUE_WHY);
     const p = await plat();
     const flow = FLOWS[req.flow];
     const asset = flow.asset;
@@ -359,7 +361,8 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     id: 'noto',
     stepLabels: ['Notary BI memeriksa', 'Kirim ke node Paladin', 'Masuk block Besu', 'State dibagikan ke pihak terkait'],
 
-    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
+    // DFABI is issued BI -> BI (a new tranche minted to the custodian), then awarded; the tranche call (besu reissueBond) is not in the bond lib yet
+    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, f === 'dfabi-issue' ? { enabled: false, reason: NOTO_ISSUE_WHY } : { enabled: true }])) as Record<FlowId, Capability>,
 
     async health() {
       try {

@@ -231,10 +231,11 @@ describe('notoHistory', () => {
 });
 
 describe('noto capabilities', () => {
-  it('every flow is enabled, award included', () => {
+  it('every flow is enabled, award included, except dfabi-issue (BI -> BI tranche, not built yet)', () => {
     const caps = createNotoAdapter('/nonexistent').capabilities(); // the platform loads lazily: nothing is read here
     expect(caps.award.enabled).toBe(true);
-    for (const c of Object.values(caps)) expect(c.enabled).toBe(true);
+    expect(caps['dfabi-issue']).toMatchObject({ enabled: false, reason: expect.stringContaining('persediaan BI') });
+    for (const [f, c] of Object.entries(caps)) if (f !== 'dfabi-issue') expect(c.enabled).toBe(true);
   });
 });
 

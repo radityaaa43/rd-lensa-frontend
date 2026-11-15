@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, Network, NetworkNode, Receipt, StepEvent, Trace } from '../adapter.ts';
-import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, type LoadUser } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, NotAvailableError, type LoadUser } from '../adapter.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { irohaFetch, withIrohaGateways } from '../gateway.ts';
@@ -40,6 +40,8 @@ export interface Iroha3State {
 // Genesis hash (network id literal) of the OLD chain, as in the host's state/iroha3/genesis.expected_hash (public). The CLI with host keys is selectable
 // ONLY for this chain (analyst Q7): any other genesis needs drivers + public keys in the state, or the adapter does not load.
 export const OLD_CHAIN_GENESIS = 'hash:A3D75EEA3228F8C6C8AD05DD409FAB3CE861C25C0D5162044E7EA384856CE37B#AAF1';
+// DFABI is issued BI -> BI only; the APS driver has no tested BI -> BI pay yet (iroha, 2026-11-15), and BI's pool-init reserve already feeds the award
+const IROHA_ISSUE_WHY = 'Penerbitan DFABI ke persediaan BI belum didukung driver; penjualan ke bank lewat penjualan perdana memakai cadangan BI';
 const NEW_CHAIN_NO_TRANSFER = 'Transfer RD/DFABI tidak tersedia di rantai baru (hanya mint dan DvP lewat driver bank)';
 
 // Runs `iroha --config <dir>/<config>.toml <args>`; resolves stdout, rejects with the CLI's own error message.
@@ -330,6 +332,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   }
 
   async function run(req: FlowRequest, amount: bigint, onStep: (s: StepEvent) => void): Promise<FlowResult> {
+    if (driver?.aps && req.flow === 'dfabi-issue') throw new NotAvailableError(IROHA_ISSUE_WHY);
     const steps: StepEvent[] = [];
     const emit = (index: number, ms: number) => { const st = { index, label: adapter.stepLabels[index]!, ms }; steps.push(st); onStep(st); };
     const dvp = FLOWS[req.flow].dvp;
@@ -796,7 +799,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     id: 'iroha3',
     ...(driver?.aps ? { txDeadlineMs: APS_DRIVER_DEADLINE_MS } : aps ? { txDeadlineMs: APS_DEADLINE_MS } : {}),
     stepLabels: ['Tanda tangan & kirim ke Torii', 'Diterima pipeline', 'Commit di blok (3 dari 4 validator)', 'Tersalin ke 4 validator'],
-    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, driver && !driver.aps && !FLOWS[f].dvp && !FLOWS[f].issuer ? { enabled: false, reason: NEW_CHAIN_NO_TRANSFER } : { enabled: true }])) as Record<FlowId, Capability>,
+    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, driver?.aps && f === 'dfabi-issue' ? { enabled: false, reason: IROHA_ISSUE_WHY } : driver && !driver.aps && !FLOWS[f].dvp && !FLOWS[f].issuer ? { enabled: false, reason: NEW_CHAIN_NO_TRANSFER } : { enabled: true }])) as Record<FlowId, Capability>,
     async health() {
       const down: string[] = [];
       let blocks = 0;

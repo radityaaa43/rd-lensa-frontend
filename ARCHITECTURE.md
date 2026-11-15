@@ -537,6 +537,15 @@ award: { asset: 'DFABI', issuer: true, dvp: true },
 - **Laporan.** An award has BI as a party, so it creates no report row. BI's verdict on its own
   award is `clear`, not `reported`.
 
+- **DFABI issue is BI -> BI (user decision 2026-11-15).** On zeto, noto, stealth and iroha3 `dfabi-issue` is
+  only `from: BI, to: BI` (`DFABI_TO_BI_MODELS` in `domain.ts`): DFABI is issued into BI's own inventory, and a bank
+  gets it only through the award. `validateRequest` accepts that one shape and rejects `dfabi-issue` BI -> bank on
+  these models; Fabric-X and Fabric-X token v2 keep their own rules. Per model: zeto mints to BI's own node
+  (no report, BI ingests its own outputs); stealth sends `bond-issue` to BI's own meta-address (the gateway rule
+  already allows only that); noto needs a new tranche to the custodian (besu `reissueBond`) and iroha3 needs a
+  tested BI -> BI APS pay, so both show `dfabi-issue` disabled with a reason until then. The award keeps its own
+  top-up and stays the only way a bank receives DFABI. Web: BI's issue form for DFABI has no recipient field.
+
 ### 7.3 Web (from fe's needs report, 2026-11-03)
 
 - **One helper.** `isDvpFlow(f: FlowId | null): boolean` in domain.ts (`f !== null &&

@@ -10,6 +10,11 @@ describe('demo request', () => {
   test('the sender is the route party and the flow follows it: BI issues, a bank transfers', () => {
     expect(requestOf(base(), 'noto', 'BI', false)).toMatchObject({ model: 'noto', flow: 'rd-issue', from: 'BI' });
     expect(requestOf(base(), 'zeto', 'C', false)).toMatchObject({ model: 'zeto', flow: 'rd-transfer', from: 'C' });
+    // DFABI is issued BI -> BI (zeto/noto/stealth/iroha3), a bank gets it by the award; Fabric-X keeps a bank recipient
+    const dfabi = { ...base(), asset: 'DFABI' as const, to: 'A' as const };
+    for (const m of ['zeto', 'noto', 'stealth', 'iroha3'] as const) expect(requestOf(dfabi, m, 'BI', false)).toMatchObject({ flow: 'dfabi-issue', from: 'BI', to: 'BI' });
+    expect(requestOf(dfabi, 'fabricx', 'BI', false)).toMatchObject({ flow: 'dfabi-issue', to: 'A' });
+    expect(requestOf({ ...dfabi, asset: 'RD' }, 'zeto', 'BI', false)).toMatchObject({ flow: 'rd-issue', to: 'A' });
   });
 
   test('the asset picks RD or DFABI flows; the DvP screen is dvp for a bank and award for BI', () => {

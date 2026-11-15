@@ -53,6 +53,11 @@ export function roleOf(req: FlowRequest, party: PartyId): Role {
   return 'outsider';
 }
 
+// Models where DFABI is issued BI -> BI only (into BI's own inventory) and reaches a bank by the award (user decision 2026-11-15).
+// Fabric-X and Fabric-X token v2 keep their own rules.
+export const DFABI_TO_BI_MODELS: ModelId[] = ['zeto', 'noto', 'stealth', 'iroha3'];
+export const dfabiIssueToBi = (req: Pick<FlowRequest, 'model' | 'flow'>): boolean => req.flow === 'dfabi-issue' && DFABI_TO_BI_MODELS.includes(req.model);
+
 export function validateRequest(req: FlowRequest): { ok: true; amount: bigint } | { ok: false; reason: string } {
   const fail = (reason: string) => ({ ok: false as const, reason });
   const a = req.amount;
@@ -61,6 +66,11 @@ export function validateRequest(req: FlowRequest): { ok: true; amount: bigint } 
   const amount = BigInt(a);
   if (amount < 1n) return fail('Nominal harus lebih dari 0');
   if (amount > MAX_AMOUNT) return fail('Nominal melebihi batas 10^15 (1 kuadriliun)');
+  if (dfabiIssueToBi(req)) {
+    if (req.from !== 'BI') return fail('Penerbitan hanya dijalankan BI');
+    if (req.to !== 'BI') return fail('Penerbitan DFABI hanya ke persediaan BI; penjualan ke bank lewat penjualan perdana (award)');
+    return { ok: true, amount };
+  }
   if (req.from === req.to) return fail('Pengirim dan penerima harus berbeda');
   if (req.to === 'BI') return fail('Penerima harus bank');
   if (FLOWS[req.flow].issuer) { if (req.from !== 'BI') return fail('Penerbitan hanya dijalankan BI'); }

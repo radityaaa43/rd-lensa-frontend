@@ -267,7 +267,9 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { s
       const reportPending = await step(3, async (): Promise<string | undefined> => {
         try {
           const price = amount * PRICE_PER_UNIT;
-          const legs: [string | undefined, bigint][] = [[(await ledgerLeg(kind, txHash, req.to, true))?.amount, amount]];
+          // an issue to BI's own inventory has no bank row in BI's ledger: BI's own receipts show it (as the RD leg of an award does)
+          const first = req.to === 'BI' ? (await rowsOf('BI', true)).find((r) => r.txHash === txHash && r.kind === kind)?.amount : (await ledgerLeg(kind, txHash, req.to, true))?.amount;
+          const legs: [string | undefined, bigint][] = [[first, amount]];
           if (flow.dvp && !award) legs.push([(await ledgerLeg('rd', txHash, req.from, true))?.amount, price]);
           if (award) legs.push([(await rowsOf('BI', true)).find((r) => r.txHash === txHash && r.kind === 'rd')?.amount, price]); // an award's RD leg goes to BI itself
           if (legs.some(([got]) => got === undefined)) return PENDING;
