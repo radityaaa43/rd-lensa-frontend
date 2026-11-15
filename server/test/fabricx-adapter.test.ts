@@ -93,6 +93,7 @@ describe('fabricx-adapter (token v2)', () => {
 
   it('award: offer, read terms, accept, settle, only BI to Bank A for 1 SBN', async () => {
     const t = fakeTokenV2(); const a = createFabricxTokenAdapter(t.call, fast);
+    t.bal.A.RupiahDigital = 1_000_000_000n; t.bal.BI.SBN = 1n; // the award is funded: BI holds an SBN, A the fixed price
     const r = await a.run(req('award', 'BI', 'A', '1'), 1n, () => {});
     expect(r.txHash).toBe('txdvp');
     expect(t.log.filter((l) => /dvp-(offer|accept|settle)/.test(l))).toEqual(['BI POST /test/dvp-offer', 'A POST /test/dvp-accept', 'BI POST /test/dvp-settle']);
@@ -156,8 +157,18 @@ describe('fabricx-adapter (token v2)', () => {
     expect((await load())?.id).toBe('fabricx-adapter');
   });
 
-  it('award: one history item per party (both legs share one tx id), SBN as amount and RD as payment, in history, lens and receipt', async () => {
+  it('award: an unfunded award is refused BEFORE any offer, with the fixed price and the empty SBN stock named (the ledger would answer buyer_cannot_fund)', async () => {
     const t = fakeTokenV2(); const a = createFabricxTokenAdapter(t.call, fast);
+    t.bal.A.RupiahDigital = 99_000_240n; t.bal.BI.SBN = 0n;
+    await expect(a.run(req('award', 'BI', 'A', '1'), 1n, () => {})).rejects.toThrow(/1\.000\.000\.000 RD/);
+    t.bal.A.RupiahDigital = 1_000_000_000n;
+    await expect(a.run(req('award', 'BI', 'A', '1'), 1n, () => {})).rejects.toThrow(/Persediaan SBN BI kosong/);
+    expect(t.log.filter((l) => /dvp-offer/.test(l))).toEqual([]); // no offer was ever made
+    expect(t.gate.size).toBe(0);
+  });
+
+  it('award: one history item per party (both legs share one tx id), SBN as amount and RD as payment, in history, lens and receipt', async () => {
+    const t = fakeTokenV2(); t.bal.A.RupiahDigital = 1_000_000_000n; t.bal.BI.SBN = 1n; const a = createFabricxTokenAdapter(t.call, fast);
     const rq = req('award', 'BI', 'A', '1'); const r = await a.run(rq, 1n, () => {});
     expect(t.hist.A.filter((x) => x.transactionId === 'txdvp').length).toBe(2); // the fake models the two rows
     const ha = await a.history('A', 10); const hb = await a.history('BI', 10);
@@ -203,7 +214,7 @@ describe('fabricx-adapter (token v2)', () => {
   });
 
   it('gates: one already open (another client) is renewed but stays open; gates this call opened are closed', async () => {
-    const t = fakeTokenV2(); const a = createFabricxTokenAdapter(t.call, fast);
+    const t = fakeTokenV2(); t.bal.A.RupiahDigital = 1_000_000_000n; t.bal.BI.SBN = 1n; const a = createFabricxTokenAdapter(t.call, fast);
     t.gate.add('A'); // console-web holds A's lease
     await a.run(req('award', 'BI', 'A', '1'), 1n, () => {});
     expect(t.gate.has('A')).toBe(true);
