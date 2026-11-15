@@ -542,8 +542,8 @@ award: { asset: 'DFABI', issuer: true, dvp: true },
   gets it only through the award. `validateRequest` accepts that one shape and rejects `dfabi-issue` BI -> bank on
   these models; Fabric-X and Fabric-X token v2 keep their own rules. Per model: zeto mints to BI's own node
   (no report, BI ingests its own outputs); stealth sends `bond-issue` to BI's own meta-address (the gateway rule
-  already allows only that); noto needs a new tranche to the custodian (besu `reissueBond`) and iroha3 needs a
-  tested BI -> BI APS pay, so both show `dfabi-issue` disabled with a reason until then. The award keeps its own
+  already allows only that); noto runs besu's `reissueBond` (close the round, mint unsold + amount to the custodian, open it again; not
+  resumable, 20-40 s) and iroha3 needs a tested BI -> BI APS pay, so iroha3 shows `dfabi-issue` disabled with a reason until then. The award keeps its own
   top-up and stays the only way a bank receives DFABI. Web: BI's issue form for DFABI has no recipient field.
 
 ### 7.3 Web (from fe's needs report, 2026-11-03)

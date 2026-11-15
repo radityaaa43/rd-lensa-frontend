@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Capability, Counterparty, FlowResult, HistoryItem, LensView, ModelAdapter, StepEvent, Verdict } from '../adapter.ts';
-import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, NotAvailableError, loadLookup, type LoadUser } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, loadLookup, type LoadUser } from '../adapter.ts';
 import { DeadlineError, withDeadline } from '../deadline.ts';
 import { BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf, type BankId, type FlowId, type FlowRequest, type PartyId } from '../domain.ts';
 import { readState } from '../state.ts';
@@ -12,11 +12,10 @@ import type { Sample } from '../stats.ts';
 // Everything Paladin goes through the bond project's modules (its SDK 1.0.0 copy is the only one in play).
 import { appendTrade, loadPlatform, type Participant, type Platform } from '../../vendor/besu/noto+pente/bond/src/lib/platform.ts';
 import { transferNoto } from '../../vendor/besu/noto+pente/bond/src/lib/transfer.ts';
-import { issueBond, issueCash } from '../../vendor/besu/noto+pente/bond/src/lib/issue.ts';
+import { issueCash, reissueBond } from '../../vendor/besu/noto+pente/bond/src/lib/issue.ts';
 import { custodianOf, executeOutright, type OnProgress, type TradeRecord } from '../../vendor/besu/noto+pente/bond/src/lib/outright.ts';
 import { readNotoTx, readStateHashes, readTxReceipt, tradeSpendTxIds, waitTxIndexed, watchDispatch, type NotoTxView } from '../../vendor/besu/noto+pente/bond/src/lib/receipts.ts';
 
-const NOTO_ISSUE_WHY = 'Penerbitan DFABI ke persediaan BI (tranche baru ke kustodian) belum tersedia; penjualan ke bank lewat penjualan perdana';
 const DEADLINE = 120_000;
 const DVP_DEADLINE = 100_000; // inside the app's 120 s flow deadline
 const NODE_PROBE_MS = 2_000;
@@ -272,8 +271,30 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     return m;
   })().catch((e) => { keys = undefined; throw e; }));
 
+  // DFABI issue is BI -> BI: a new tranche minted to BI's custodian (besu reissueBond: close the round, mint unsold + amount, open it again), which the award then sells from.
+  // Not resumable: a failure names the step ("reissue <step>"), and the tranche is then finished by hand (besu). The custodian balance rises by exactly `amount`.
+  async function reissue(amount: bigint, onStep: (s: StepEvent) => void, hold: (p: Promise<unknown>) => void): Promise<FlowResult> {
+    const p = await plat();
+    const before = await balanceOf('BI', 'DFABI');
+    const steps: StepEvent[] = [];
+    const emit = (index: number, from: number, until: number) => { const s = { index, label: adapter.stepLabels[index], ms: until - from }; steps.push(s); onStep(s); };
+    const t0 = Date.now();
+    let submittedAt: number | undefined;
+    const raw = reissueBond(p, amount, () => { submittedAt = Date.now(); });
+    hold(raw); // BI stays locked until the sequence really ends, not when our deadline fires
+    const receipt = await withDeadline(raw, DVP_DEADLINE, 'Penerbitan DFABI ke persediaan BI').catch((e) => {
+      if (e instanceof DeadlineError) throw new Error('Status penerbitan DFABI belum diketahui; periksa saldo BI sebelum mengulang');
+      throw e;
+    });
+    const tReceipt = Date.now();
+    emit(0, t0, submittedAt ?? tReceipt); emit(1, t0, submittedAt ?? tReceipt); emit(2, submittedAt ?? tReceipt, tReceipt);
+    await untilBalance('BI', 'DFABI', before + amount);
+    emit(3, tReceipt, Date.now());
+    return { txHash: receipt.transactionHash, block: receipt.blockNumber, steps, context: { txIds: [receipt.id] } satisfies NotoContext };
+  }
+
   async function runUnlocked(req: FlowRequest, amount: bigint, onStep: (s: StepEvent) => void, hold: (p: Promise<unknown>) => void): Promise<FlowResult> {
-    if (req.flow === 'dfabi-issue') throw new NotAvailableError(NOTO_ISSUE_WHY);
+    if (req.flow === 'dfabi-issue') return reissue(amount, onStep, hold);
     const p = await plat();
     const flow = FLOWS[req.flow];
     const asset = flow.asset;
@@ -326,7 +347,6 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     const send = () => {
       const lookup = bank(p, to).verifier.lookup;
       if (req.flow === 'rd-issue') return issueCash(p, lookup, amount, onSubmitted);
-      if (req.flow === 'dfabi-issue') return issueBond(p, lookup, amount, onSubmitted);
       return transferNoto(p, asset === 'RD' ? 'cash' : 'bond', bank(p, req.from as BankId), lookup, amount, onSubmitted);
     };
     let receipt: Awaited<ReturnType<typeof send>>;
@@ -361,8 +381,7 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     id: 'noto',
     stepLabels: ['Notary BI memeriksa', 'Kirim ke node Paladin', 'Masuk block Besu', 'State dibagikan ke pihak terkait'],
 
-    // DFABI is issued BI -> BI (a new tranche minted to the custodian), then awarded; the tranche call (besu reissueBond) is not in the bond lib yet
-    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, f === 'dfabi-issue' ? { enabled: false, reason: NOTO_ISSUE_WHY } : { enabled: true }])) as Record<FlowId, Capability>,
+    capabilities: () => Object.fromEntries(FLOW_IDS.map((f): [FlowId, Capability] => [f, { enabled: true }])) as Record<FlowId, Capability>,
 
     async health() {
       try {
@@ -412,7 +431,7 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
         ...hashes.inputs.map((value) => ({ label: 'Input state', value })),
         ...hashes.outputs.map((value) => ({ label: 'Output state', value })),
       ];
-      const note = req.flow === 'dfabi-issue' ? ' Penerbitan DFABI di Noto = transfer dari kustodian BI (unit belum terjual), karena BondTracker hanya mencetak ke kustodian.' : '';
+      const note = req.flow === 'dfabi-issue' ? ' Penerbitan DFABI di Noto = tranche baru yang dicetak ke kustodian BI (persediaan untuk penjualan perdana); hanya BI yang membacanya.' : '';
       // dvp: txIds = [bond-leg spend tx, cash-leg spend tx], so reads[1] is the RD leg when this node can read it
       const rdLeg = FLOWS[req.flow].dvp && reads[1]?.visible ? reads[1].amount : undefined;
       const view = (verdict: Verdict, amount: bigint | undefined, counterparty: Counterparty | null, method: string): LensView =>
