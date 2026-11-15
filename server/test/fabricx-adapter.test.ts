@@ -10,7 +10,7 @@ type Row = { transactionId: string; timestamp: string; asset: string; units: str
 // An in-memory token v2: asset gate closed by default and ONE lease per pod (asset_gate.go, GET reports {open}), issue/transfer/DvP only with the gate open (api.go),
 // history only for the party's own rows with ONE ROW PER MOVEMENT and no dedup (history.go): an issue shows only in the recipient's history (BI's wallet is neither
 // sender nor recipient), a DvP shows two rows per side with the same transaction id. A bank's first read of a fresh offer is 404 offer_not_found (dvp_api.go).
-function fakeTokenV2(opts: { pending?: boolean; reject?: boolean } = {}) {
+function fakeTokenV2(opts: { pending?: boolean; reject?: boolean; } = {}) {
   const log: string[] = [];
   const gate = new Set<PartyId>();
   const bal: Record<PartyId, Record<string, bigint>> = { BI: {}, A: {}, B: {}, C: {} };
@@ -170,6 +170,15 @@ describe('fabricx-adapter (token v2)', () => {
     const call: Call = (p, m, path, b) => path === '/test/dvp-settle' ? Promise.resolve({ status: 409, body: { error: 'buyer_cannot_fund' } }) : t.call(p, m, path, b);
     const a = createFabricxTokenAdapter(call, fast);
     await expect(a.run(req('award', 'BI', 'A', '1'), 1n, () => {})).rejects.toThrow(/terpecah.*Terbitkan 1\.000\.000\.000 RD/);
+  });
+
+  it('receipt: a tx the party was not part of is sealed (200), a hash nobody holds stays an error', async () => {
+    const t = fakeTokenV2(); const a = createFabricxTokenAdapter(t.call, fast);
+    const r = await a.run(req('rd-transfer', 'A', 'B', '3'), 3n, () => {});
+    const rows = (await a.receipt(r.txHash, 'C')).chain[0]!.rows;
+    expect(rows[0]).toEqual({ label: 'Status', value: 'Tersegel' });
+    expect(JSON.stringify(rows)).not.toContain('"Jumlah"'); // nothing about amount or parties
+    await expect(a.receipt('nope', 'C')).rejects.toThrow(/tidak ada/);
   });
 
   it('award: BI needs no SBN stock (the v2 settle mints the SBN to the buyer)', async () => {

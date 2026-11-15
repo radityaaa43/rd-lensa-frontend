@@ -409,7 +409,7 @@ def matches(url):  # Kubernetes Ingress path semantics: Exact = equal, Prefix = 
     u = url.split("?")[0]
     return any((t == "Exact" and u == p) or (t == "Prefix" and (p == "/" or u == p or u.startswith(p.rstrip("/") + "/"))) for p, t, *_ in paths)
 check(not any(p == "/" and t == "Prefix" for p, t, *_ in paths), "no Prefix / path: that would route everything, hidden routes included")
-for ok in ["/", "/robots.txt", "/assets/index-abc.js", "/besu/zeto/dasbor", "/besu/zeto/dasbor?pihak=A", "/fabricx/riwayat", "/iroha3/lensa/0xabc", "/api/meta", "/api/health", "/api/history", "/api/network", "/api/receipt", "/api/trace", "/api/balance"]:
+for ok in ["/", "/robots.txt", "/assets/index-abc.js", "/besu/zeto/dasbor", "/besu/zeto/dasbor?pihak=A", "/fabricx/riwayat", "/fabricx-adapter/riwayat", "/iroha3/lensa/0xabc", "/api/meta", "/api/health", "/api/history", "/api/network", "/api/receipt", "/api/trace", "/api/balance"]:
     check(matches(ok), f"public path must be routed: {ok}")
 for hidden in ["/api/policy", "/api/policy/usage", "/api/policy/bi/approve", "/api/stress", "/api/stress/csv", "/api/stress/events", "/api/preflight-capacity", "/api/readyz", "/api/livez", "/api/tx", "/api/tx/abc/events", "/api/login", "/admin", "/.env", "/metrics", "/api"]:
     check(not matches(hidden), f"path must NOT be routed at the entry: {hidden}")

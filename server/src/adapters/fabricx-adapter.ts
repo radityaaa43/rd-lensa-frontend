@@ -294,7 +294,13 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
     },
     async receipt(tx, party): Promise<Receipt> {
       const e = await findEntry(party, tx, 0);
-      if (!e) throw new Error('Transaksi tidak ada di riwayat pihak ini');
+      if (!e) {
+        // A tx the party was not part of is sealed to it, not missing: another party's own history has it. A hash nobody holds stays an error.
+        const others = (Object.keys(PARTIES) as PartyId[]).filter((p) => p !== party);
+        const seen = await Promise.allSettled(others.map((p) => findEntry(p, tx, 0)));
+        if (!seen.some((r) => r.status === 'fulfilled' && r.value)) throw new Error('Transaksi tidak ada di riwayat pihak ini');
+        return { source: `Token v2 /test/history (node ${party})`, chain: [{ title: 'Catatan riwayat', rows: [{ label: 'Status', value: 'Tersegel' }, { label: 'Keterangan', value: `Transaksi ini tidak melibatkan ${PARTIES[party].name}: riwayat node ${PARTIES[party].name} tidak memuatnya, jadi nominal dan pihak tidak terlihat.` }] }], node: null };
+      }
       return { source: `Token v2 /test/history (node ${party})`, chain: [{ title: 'Catatan riwayat', rows: [{ label: 'Status', value: e.status }, { label: 'Aset', value: e.asset }, { label: 'Jumlah', value: e.units }, { label: 'Arah', value: e.direction }, ...(e.rdUnits ? [{ label: 'Pembayaran RD', value: e.rdUnits }] : []), ...(e.auditStatus ? [{ label: 'Audit', value: e.auditStatus }] : [])] }], node: null };
     },
     async trace() {
