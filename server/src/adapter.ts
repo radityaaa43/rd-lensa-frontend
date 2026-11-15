@@ -85,6 +85,11 @@ export interface ModelAdapter {
   loadCirculates: boolean;
   // Distinct senders a bank can have (Fabric-X: one wallet per node); absent = no limit.
   maxLoadUsers?: number;
+  // How the stress test reads this platform. 'capacity' (default): senders really run in parallel, a ramp finds the knee, loadLimit names the shared bottleneck.
+  // 'latency': one transfer in flight (a platform or Lensa serialisation), so the result is a latency sample, not a throughput; loadLimit says why.
+  // 'none': no load transfer yet; loadLimit says why.
+  loadMode?: 'capacity' | 'latency' | 'none';
+  loadLimit?: string;
 }
 
 // i: 0-based index of the user within its bank

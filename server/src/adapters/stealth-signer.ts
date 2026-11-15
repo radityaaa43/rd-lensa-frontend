@@ -464,7 +464,6 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { s
   const rpc = deps.rpcUrl;
 
   const LOAD_BANKS: PartyId[] = ['A', 'B', 'C'];
-  const LOAD_USERS_MAX = 4;
   const rdOf = async (p: PartyId, fresh = false) => (await holdings(p, fresh)).filter((h) => h.partition === null).reduce((m, h) => m + h.amount, 0n);
   const lanes = new Map<PartyId, Promise<unknown>>();
   const inLane = <T>(p: PartyId, fn: () => Promise<T>): Promise<T> => {
@@ -503,7 +502,9 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { s
     // Stress test in the pod: a load transfer is a plain rd-transfer intent of the sending bank to the receiving bank's meta-address; the signer picks the bank's own addresses
     // (k >= 1 payments). The bank's total RD is the pool, so a user is a slot, not an address. What a bank receives it can spend again.
     loadCirculates: true,
-    maxLoadUsers: LOAD_USERS_MAX,
+    maxLoadUsers: 1, // one intent at a time per bank signer: more users would only queue
+    loadMode: 'latency',
+    loadLimit: 'Satu intent sekaligus per signer bank (saldo satu alamat stealth belum bisa dicadangkan): batas jalur signer, bukan batas chain',
     async loadCapacity(users) {
       return Math.min(...(await Promise.all(LOAD_BANKS.map(async (b) => Number((await rdOf(b, true)) / (LOAD_AMOUNT * BigInt(users)))))));
     },

@@ -9,7 +9,7 @@ import {
   type FlowId, type FlowRequest, type ModelId, type PartyId,
 } from './domain.ts';
 import { probeNodes, type Probe } from './health.ts';
-import { HEALTH_MS, STAGE_S, StressRun, USERS, effectiveUsers, validateStress, type StressConfig } from './stress.ts';
+import { HEALTH_MS, RATES, STAGE_S, StressRun, USERS, effectiveUsers, validateStress, type StressConfig } from './stress.ts';
 import { toCsv } from './stats.ts';
 import { REGISTRY, isPlatform } from './policy/platforms.ts';
 import { HIDDEN, SECURITY_HEADERS, TX_WRITES, corrId, generic, scrubPublic } from './public.ts';
@@ -48,6 +48,8 @@ const stressBody = {
     models: { type: 'array', uniqueItems: true, items: { enum: MODELS } },
     users: { enum: USERS },
     stageS: { enum: STAGE_S },
+    mode: { enum: ['closed', 'open'] },
+    rate: { enum: RATES },
   },
 } as const;
 const prepareBody = {
@@ -57,6 +59,10 @@ const prepareBody = {
 } as const;
 // Public pod: nobody can run `preflight --prepare` there, so the load users are topped up in the pod (units per user: modest, a Zeto mint is a ZK proof).
 const PREPARE_UNITS = 50;
+// The public pod is triggered by anyone: one run at a time (the lock), a pause after each run, a cap on its length, and no more load users than a pod's funding and a node's memory take.
+const PUBLIC_COOLDOWN_MS = Number(process.env.LENSA_STRESS_COOLDOWN_S ?? 1800) * 1000;
+const PUBLIC_MAX_RUN_MS = 15 * 60_000;
+const PUBLIC_MAX_USERS = 16;
 const usersQuery = { type: 'object', properties: { users: { enum: USERS.map(String) } } } as const;
 // coerceTypes is off, so limit stays a string and the handler checks its range
 const modelQuery = { type: 'object', required: ['model'], properties: { model: { enum: MODELS } } } as const;
@@ -111,6 +117,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
   // ponytail: one process-wide lock; only one tx or stress run at a time by design
   let busy: 'tx' | 'stress' | null = null;
   let lastStress: StressRun | null = null;
+  let stressEndedAt = -Infinity;
   const streams = new Set<ServerResponse>();
   app.addHook('onClose', async () => { for (const r of streams) r.end(); });
   // one place for every JSON reply (4xx, 5xx, and 200 bodies that carry an error/detail text)
@@ -185,7 +192,9 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
         const a = adapters[m];
         // Kebijakan: a model with a policy document (the registry in policy/platforms.ts) and whether a gateway enforces it
         const policy = isPlatform(m) ? { registered: true, enforced: REGISTRY[m].enforced } : { registered: false, enforced: false, reason: `Kebijakan belum tersedia untuk ${MODEL_NAMES[m]}` };
-        return [m, { name: MODEL_NAMES[m], available: !!a, stepLabels: a?.stepLabels ?? [], capabilities: a ? capsOf(a) : unavailable, policy }];
+        // load: how the stress test reads the platform (capacity | latency | none), the bottleneck or reason, and the most senders per bank
+        const load = a ? { mode: a.loadMode ?? 'capacity', limit: a.loadLimit ?? null, maxUsers: a.maxLoadUsers ?? null } : null;
+        return [m, { name: MODEL_NAMES[m], available: !!a, stepLabels: a?.stepLabels ?? [], capabilities: a ? capsOf(a) : unavailable, policy, load }];
       })),
     };
   });
@@ -386,6 +395,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     const entries = await Promise.all(MODELS.map(async (m): Promise<[ModelId, number][]> => {
       const a = adapters[m];
       if (!a) return [];
+      if (a.loadMode === 'none') return [[m, 0]]; // listed with 0: it has no load transfer yet (the reason is in /api/meta)
       try { return [[m, await withDeadline(a.loadCapacity(effectiveUsers(users, a)), HEALTH_MS, 'Cek kapasitas')]]; } catch { return []; }
     }));
     return Object.fromEntries(entries.flat());
@@ -395,7 +405,10 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
   app.post<{ Body: StressConfig }>('/api/stress', { schema: { body: stressBody } }, async (request, reply) => {
     const cfg = request.body;
     for (const m of cfg.models) if (!adapters[m]) return reply.code(503).send(modelUnavailable(m));
+    if (opts.publicTx && cfg.users > PUBLIC_MAX_USERS) return reply.code(400).send({ reason: `Di URL publik paling banyak ${PUBLIC_MAX_USERS} user per bank` });
     if (busy) return reply.code(409).send({ reason: BUSY_REASON });
+    const wait = opts.publicTx ? stressEndedAt + PUBLIC_COOLDOWN_MS - Date.now() : 0;
+    if (wait > 0) return reply.code(429).header('retry-after', String(Math.ceil(wait / 1000))).send({ reason: `Stress test di URL publik dibatasi satu run per ${Math.round(PUBLIC_COOLDOWN_MS / 60_000)} menit; coba lagi dalam ${Math.ceil(wait / 60_000)} menit` });
 
     busy = 'stress';
     let started = false;
@@ -405,13 +418,16 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
         try { capacity[m] = await withDeadline(adapters[m]!.loadCapacity(effectiveUsers(cfg.users, adapters[m]!)), HEALTH_MS, 'Cek kapasitas'); }
         catch (e) { return reply.code(503).send({ reason: `${MODEL_NAMES[m]} belum siap: ${msg(e)}` }); }
       }
-      const v = validateStress(cfg, capacity);
+      const v = validateStress(cfg, capacity, adapters);
       if (!v.ok) return reply.code(400).send({ reason: v.reason });
 
-      const run = new StressRun(cfg, adapters);
+      const run = new StressRun(cfg, adapters, undefined, undefined, opts.publicTx ? { maxMs: PUBLIC_MAX_RUN_MS } : {});
       lastStress = run;
       started = true;
-      run.start().catch(() => { /* surfaced through the snapshot */ }).finally(() => { busy = null; });
+      run.start().catch(() => { /* surfaced through the snapshot */ }).finally(() => {
+        busy = null;
+        if (Object.values(run.snapshot().models).some((m) => m && m.stages.length > 0)) stressEndedAt = Date.now(); // a run that measured nothing does not start the pause
+      });
       return reply.code(202).send(run.snapshot());
     } finally {
       if (!started) busy = null;
@@ -423,6 +439,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
   app.post<{ Body: { models: ModelId[]; users: number } }>('/api/stress/prepare', { schema: { body: prepareBody } }, async (request, reply) => {
     const { models, users } = request.body;
     for (const m of models) if (!adapters[m]) return reply.code(503).send(modelUnavailable(m));
+    if (opts.publicTx && users > PUBLIC_MAX_USERS) return reply.code(400).send({ reason: `Di URL publik paling banyak ${PUBLIC_MAX_USERS} user per bank` });
     if (busy) return reply.code(409).send({ reason: BUSY_REASON });
     busy = 'stress';
     prep = { state: 'running' };
@@ -473,7 +490,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     const snap = lastStress.snapshot();
     const rows = MODELS.flatMap((m) => {
       const s = snap.models[m];
-      return s && s.status !== 'waiting' && s.status !== 'skipped' ? [{ model: MODEL_NAMES[m], stages: s.stages, stop: s.stop ?? '' }] : [];
+      return s && s.status !== 'waiting' && s.status !== 'skipped' ? [{ model: MODEL_NAMES[m], stages: s.stages, stop: s.stop ?? '', mode: s.load }] : [];
     });
     return reply.header('content-type', 'text/csv; charset=utf-8')
       .header('content-disposition', 'attachment; filename="lensa-stress.csv"').send(toCsv(rows));

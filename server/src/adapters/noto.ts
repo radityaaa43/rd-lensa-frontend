@@ -489,6 +489,8 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
       }
     },
     loadCirculates: true,
+    loadMode: 'capacity',
+    loadLimit: 'Notaris BI: setiap transfer dari semua bank disahkan satu notaris BI, jadi titik jenuh adalah batas notaris BI (hasil hanya sah selama BI hidup), bukan batas bank',
 
     // One lock per load user (its own coins), so users of one bank send in parallel from the bank's node.
     async transferForLoad(from: LoadUser, to: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {

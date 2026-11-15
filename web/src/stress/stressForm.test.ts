@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import type { ModelId } from '../../../server/src/domain.ts';
-import { conclusion, maxMinutes, ramp, ready, showZetoWarning } from './stressForm.ts';
+import { RATES as SERVER_RATES } from '../../../server/src/stress.ts';
+import type { Meta } from '../api.ts';
+import { RATES, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
 
 const row = (model: ModelId, tps: number, users = 4, p95Ms = 2000) => ({ model, stage: { tps, users, p95Ms } });
 
@@ -36,7 +38,42 @@ test('ready needs every selected model to have at least one transfer per load us
   expect(ready([], { zeto: 3 })).toBe(false);
 });
 
-test('showZetoWarning whenever Zeto is selected (its load runs one transfer at a time)', () => {
-  expect(showZetoWarning(['zeto'], 1)).toBe(true);
-  expect(showZetoWarning(['noto'], 8)).toBe(false);
+const meta = { models: {
+  zeto: { load: { mode: 'latency', limit: 'satu sekaligus', maxUsers: 1 } },
+  noto: { load: { mode: 'capacity', limit: 'notaris BI', maxUsers: null } },
+  stealth: { load: { mode: 'latency', limit: null, maxUsers: 1 } },
+  iroha3: { load: { mode: 'none', limit: 'settle 100 detik', maxUsers: null } },
+  fabricx: { load: null },
+} } as unknown as Meta;
+
+test('stages per model: a single-flight platform has one, a capacity platform ramps, the open loop steps through the rates', () => {
+  expect(stagesOf(meta, 'zeto', { users: 8 })).toBe(1);
+  expect(stagesOf(meta, 'noto', { users: 16 })).toBe(5); // 1 2 4 8 16
+  expect(stagesOf(meta, 'noto', { users: 4, mode: 'open', rate: 2 })).toBe(3); // 0.5 1 2 per bank
+  expect(totalMinutes(meta, { models: ['zeto', 'noto'], users: 4, stageS: 60 })).toBe(4); // 1 + 3 stages of 1 minute
 });
+
+test('a model without load info reads as capacity; open loop only when every selected model is a capacity platform', () => {
+  expect(loadOf(meta, 'fabricx').mode).toBe('capacity');
+  expect(openAllowed(meta, ['noto'])).toBe(true);
+  expect(openAllowed(meta, ['noto', 'zeto'])).toBe(false);
+  expect(openAllowed(meta, [])).toBe(false);
+});
+
+test('limits: only models with a stated bottleneck or reason, with their mode', () => {
+  expect(limitsOf(meta, ['zeto', 'noto', 'stealth', 'iroha3'])).toEqual([
+    { model: 'zeto', mode: 'latency', limit: 'satu sekaligus' }, { model: 'noto', mode: 'capacity', limit: 'notaris BI' }, { model: 'iroha3', mode: 'none', limit: 'settle 100 detik' },
+  ]);
+});
+
+test('p95 is reported only from 100 samples', () => {
+  expect([smallSample(11), smallSample(99), smallSample(100)]).toEqual([true, true, false]);
+});
+
+test('bestRows leaves out a latency model: it has no TPS to compare', () => {
+  const st = { tps: 0.2, users: 1, p95Ms: 1000 };
+  const snap = { config: { models: ['zeto', 'noto'] }, models: { zeto: { load: 'latency', best: 0, stages: [st] }, noto: { load: 'capacity', best: 0, stages: [{ ...st, tps: 3 }] } } };
+  expect(bestRows(snap as never).map((r) => r.model)).toEqual(['noto']);
+});
+
+test('the offered rates are the server list', () => { expect([...RATES]).toEqual([...SERVER_RATES]); });

@@ -211,3 +211,63 @@ test('validateStress', () => {
   expect(validateStress(cfg(), { zeto: 0 })).toMatchObject({ ok: false, reason: expect.stringMatching(/preflight --prepare/) });
   expect(validateStress(cfg(), { zeto: 5 })).toEqual({ ok: true });
 });
+
+const open = (o: Partial<StressConfig> = {}): StressConfig => cfg({ mode: 'open', rate: 2, users: 2, ...o });
+
+test('open loop: arrivals come at the offered rate whatever the chain answers; latency counts from the scheduled time', async () => {
+  const z = fakeAdapter('noto', { tps: 1, serial: true }); // 1 s per transfer, one at a time: far below 2/s x 3 banks
+  const s = spy(z);
+  const snap = await finish(new StressRun(open({ models: ['noto'] }), { noto: z }));
+  const m = snap.models.noto!;
+  expect(m.load).toBe('open');
+  expect(m.plan).toEqual([0.5, 1, 2]);
+  expect(m.stages[0]).toMatchObject({ offered: 0.5 });
+  // 0.5/s per bank = 30 arrivals per bank in the first 60 s stage, even though each takes 1 s and the adapter serves one at a time
+  const base = Math.min(...s.calls.map((c) => c.at));
+  expect(s.calls.filter((c) => c.at - base < 60_000 && c.from.bank === 'A').length).toBeGreaterThanOrEqual(29);
+  // the backlog shows as waiting time (e2e from the scheduled time grows), not as slower arrivals
+  expect(m.stages[0].p95Ms).toBeGreaterThan(m.stages[0].svcP95Ms);
+  expect(m.stop).toBe('saturated'); // it could not keep up with what it was offered
+});
+
+test('open loop: a platform that keeps up goes through every rate and finishes', async () => {
+  const z = fakeAdapter('noto', { tps: 100 });
+  const snap = await finish(new StressRun(open({ models: ['noto'], rate: 1 }), { noto: z }));
+  const m = snap.models.noto!;
+  expect(m.stop).toBe('done');
+  expect(m.stages.map((x) => x.offered)).toEqual([0.5, 1]);
+  expect(m.stages.every((x) => x.tps >= 0.9 * x.offered * 3 && x.dropped === 0)).toBe(true);
+  expect(m.best).toBe(1);
+});
+
+test('validate: open loop needs a rate and only runs on platforms that are really parallel; a platform without load transfer is refused with its reason', () => {
+  const modes = { zeto: { loadMode: 'latency' as const, loadLimit: 'satu sekaligus' }, iroha3: { loadMode: 'none' as const, loadLimit: 'settle 100 detik' }, noto: {} };
+  expect(validateStress({ models: ['noto'], users: 1, stageS: 60, mode: 'open' }, { noto: 5 }, modes)).toEqual({ ok: false, reason: 'Pilih laju kedatangan untuk mode laju tetap' });
+  expect(validateStress(open({ models: ['zeto'] }), { zeto: 5 }, modes)).toMatchObject({ ok: false, reason: expect.stringContaining('satu transaksi sekaligus') });
+  expect(validateStress(cfg({ models: ['iroha3'] }), { iroha3: 5 }, modes)).toEqual({ ok: false, reason: 'Iroha 3 belum bisa diuji beban: settle 100 detik' });
+  expect(validateStress(open({ models: ['noto'] }), { noto: 5 }, modes)).toEqual({ ok: true });
+  expect(validateStress(cfg({ models: ['zeto'] }), { zeto: 5 }, modes)).toEqual({ ok: true });
+});
+
+test('latency platform: one stage, report delay and gateway overhead are timed apart from the finality latency', async () => {
+  const z = fakeAdapter('zeto', { tps: 0.5, maxUsers: 1, loadMode: 'latency', loadLimit: 'satu sekaligus', reportMs: 500, overheadMs: 40 });
+  const snap = await finish(new StressRun(cfg({ users: 8 }), { zeto: z }));
+  const m = snap.models.zeto!;
+  expect(m.load).toBe('latency');
+  expect(m.limit).toBe('satu sekaligus');
+  expect(m.plan).toEqual([1]);
+  const s = m.stages[0];
+  expect(s.reportP50Ms).toBe(500);
+  expect(s.overheadP50Ms).toBe(40);
+  // the adapter call takes 2 s and ends with the 0.5 s report: finality is 1.5 s, the report is apart, one transfer in flight does 3600 s / 2 s = 1800 an hour
+  expect(s.p50Ms).toBe(1500);
+  expect(s.perHour).toBeCloseTo(1800, 0);
+});
+
+test('a run longer than the limit ends with "limit", and the models after it are skipped', async () => {
+  const a = fakeAdapter('zeto', { tps: 10 }), b = fakeAdapter('noto', { tps: 10 });
+  const snap = await finish(new StressRun(cfg({ models: ['zeto', 'noto'], users: 8 }), { zeto: a, noto: b }, undefined, undefined, { maxMs: 100_000 }));
+  expect(snap.models.zeto!.stop).toBe('limit');
+  expect(snap.models.noto!.status).toBe('skipped');
+  expect(snap.models.noto!.reason).toMatch(/Batas waktu/);
+});

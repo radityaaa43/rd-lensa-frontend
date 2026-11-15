@@ -5,7 +5,7 @@ import { getCapacity, getStress, postStress, stopStress, watchStress, type Capac
 import { Results } from './Results.tsx';
 import { RunRows } from './RunRows.tsx';
 import { StressConfig, type Form } from './StressConfig.tsx';
-import { maxMinutes, ramp } from './stressForm.ts';
+import { totalMinutes } from './stressForm.ts';
 
 // onRun: tells App a run started or stopped, so the global banner (UX H4) follows without waiting for its poll
 export function StressView({ meta, hidden, onRun }: { meta: Meta; hidden: boolean; onRun?: () => void }) {
@@ -82,7 +82,7 @@ export function StressView({ meta, hidden, onRun }: { meta: Meta; hidden: boolea
     onRun?.();
   }
 
-  const plan = (c: Form) => `${c.models.map((m) => meta.models[m].name).join(', ')} · tahap ${ramp(c.users).join(' → ')} user per bank · ${c.stageS} detik per tahap`;
+  const plan = (c: Form) => `${c.models.map((m) => meta.models[m].name).join(', ')} · ${c.mode === 'open' ? `laju tetap sampai ${c.rate} tx/detik per bank, ${c.users} pengirim per bank` : `sampai ${c.users} user per bank`} · ${c.stageS} detik per tahap`;
   const shown = snap?.config ?? form;
   const summary = shown.models.length ? plan(shown) : 'Pilih minimal satu model.';
 
@@ -92,7 +92,7 @@ export function StressView({ meta, hidden, onRun }: { meta: Meta; hidden: boolea
         error={error} onChange={change} onToggle={toggle} onGo={go} />
       <dialog ref={confirm} className="confirm" aria-labelledby="stress-confirm">
         <h2 id="stress-confirm">Mulai stress test?</h2>
-        <p>{plan(form)} · paling lama {maxMinutes(form.models.length, form.users, form.stageS)} menit.</p>
+        <p>{plan(form)} · paling lama {totalMinutes(meta, form)} menit.</p>
         <p>Transaksi dikirim ke jaringan nyata. Transfer dan DvP diblokir selama tes.</p>
         <div className="actions">
           <button className="btn" type="button" onClick={() => void start()}>Mulai</button>

@@ -856,6 +856,8 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
       }
     },
     loadCirculates: true,
+    // With the APS drivers one settle takes 100-200 s and a load transfer is not built: a 60 s stage cannot finish one. Measure N settles one after the other, outside the public button.
+    ...(driver ? { loadMode: 'none' as const, loadLimit: 'satu settle APS makan 100-200 detik dan transfer beban belum didukung driver; ukur 20 settle berurutan di luar tombol publik' } : {}),
     // ponytail: no per-sender lock; Iroha has no account nonce and the chain rejects an overdraft. Add one if spends start racing.
     // A load user is a parallel session of the bank account on the bank's own Torii (tahap 2: one account per user).
     async transferForLoad({ bank: from }: LoadUser, { bank: to }: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
