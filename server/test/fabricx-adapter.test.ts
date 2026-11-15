@@ -157,14 +157,19 @@ describe('fabricx-adapter (token v2)', () => {
     expect((await load())?.id).toBe('fabricx-adapter');
   });
 
-  it('award: an unfunded award is refused BEFORE any offer, with the fixed price and the empty SBN stock named (the ledger would answer buyer_cannot_fund)', async () => {
+  it('award: an unfunded award is refused BEFORE any offer, with the fixed price named (the ledger would answer buyer_cannot_fund)', async () => {
     const t = fakeTokenV2(); const a = createFabricxTokenAdapter(t.call, fast);
     t.bal.A.RupiahDigital = 99_000_240n; t.bal.BI.SBN = 0n;
     await expect(a.run(req('award', 'BI', 'A', '1'), 1n, () => {})).rejects.toThrow(/1\.000\.000\.000 RD/);
-    t.bal.A.RupiahDigital = 1_000_000_000n;
-    await expect(a.run(req('award', 'BI', 'A', '1'), 1n, () => {})).rejects.toThrow(/Persediaan SBN BI kosong/);
     expect(t.log.filter((l) => /dvp-offer/.test(l))).toEqual([]); // no offer was ever made
     expect(t.gate.size).toBe(0);
+  });
+
+  it('award: BI needs no SBN stock (the v2 settle mints the SBN to the buyer)', async () => {
+    const t = fakeTokenV2(); const a = createFabricxTokenAdapter(t.call, fast);
+    t.bal.A.RupiahDigital = 1_000_000_000n; t.bal.BI.SBN = 0n;
+    await a.run(req('award', 'BI', 'A', '1'), 1n, () => {});
+    expect(t.log.filter((l) => /dvp-offer/.test(l))).toEqual(['BI POST /test/dvp-offer']);
   });
 
   it('award: one history item per party (both legs share one tx id), SBN as amount and RD as payment, in history, lens and receipt', async () => {

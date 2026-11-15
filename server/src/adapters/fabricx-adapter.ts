@@ -234,11 +234,11 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
       if (req.flow === 'dvp') throw new NotAvailableError(FXA_WHY.dvp);
       if (req.flow === 'award' && (req.to !== 'A' || amount !== 1n)) throw new Error(AWARD_WHY);
       // The DvP terms are fixed (1 SBN for AWARD_MONEY RD): the generic check in app.ts prices an award at 1.000.000 per unit, so the ledger would be the first to refuse
-      // ("buyer_cannot_fund", "seller_cannot_deliver"). Say it here, before any offer exists.
+      // ("buyer_cannot_fund"). Say it here, before any offer exists. BI needs no SBN stock: the v2 settle mints the SBN straight to the
+      // buyer (dvp_v2_protocol.go PrepareDvPSettle), and the v2 issuer has no `bi` peer, so SBN can never be issued to BI anyway.
       if (req.flow === 'award') {
-        const [rd, sbn] = await Promise.all([balanceOf('A', 'RD'), balanceOf('BI', 'DFABI')]);
+        const rd = await balanceOf('A', 'RD');
         if (rd < BigInt(AWARD_MONEY)) throw new Error(`Saldo RD ${PARTIES.A.name} tidak cukup: award token v2 dibayar ${Number(AWARD_MONEY).toLocaleString('id-ID')} RD (punya ${rd.toLocaleString('id-ID')})`);
-        if (sbn < 1n) throw new Error('Persediaan SBN BI kosong: token v2 tidak bisa menerbitkan SBN ke BI dari Lensa, jadi award tidak bisa berjalan');
       }
       const parties: PartyId[] = req.flow === 'award' ? ['BI', 'A'] : [req.from];
       const t0 = Date.now();
