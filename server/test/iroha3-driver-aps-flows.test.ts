@@ -179,6 +179,36 @@ describe('iroha3 aps driver mode: keyless pod, no iroha CLI (ENOENT)', () => {
     expect(tr.steps[0]).toMatchObject({ tx: TX, block: 77 });
   });
 
+  it('receipt of a carrier tx adds the committed tx detail (GET /tx/<hash>); a bundle_id the chain does not know is "unknown", not a 502', async () => {
+    const urls: string[] = [];
+    const fetcher = (async (u: URL) => {
+      urls.push(u.pathname + u.search);
+      if (u.pathname.endsWith('/tx/' + TX)) return new Response(JSON.stringify({ hash: TX, transaction: { block_hash: 'hash:ABC#1', result: { Ok: [] }, result_hash: 'RH' } }), { status: 200 });
+      if (u.search.includes(TX)) return new Response(JSON.stringify({ status: { kind: 'Applied', block_height: 77 } }), { status: 200 });
+      return new Response('{}', { status: 404 });
+    }) as unknown as typeof globalThis.fetch;
+    const ad = createIroha3Adapter(state, enoent, { ...noRead, fetch: fetcher }, undefined, fakeDriver().driver);
+    const rc = JSON.stringify(await ad.receipt(TX, 'A'));
+    expect(rc).toContain('Applied, blok 77'); expect(rc).toContain('hash:ABC#1'); expect(rc).toContain('"Ok"'); expect(rc).toContain('RH');
+    const bundle = 'ab'.repeat(32);
+    expect(JSON.stringify(await ad.receipt(bundle, 'A'))).toContain('Tidak diketahui');
+    expect((await ad.trace(bundle, 'A')).note).toMatch(/bundle_id APS/);
+  });
+
+  it('history ids are the carrier tx: from the wallet item, or the carrier of a run made here; a bare bundle_id only as a last resort', async () => {
+    const d = fakeDriver();
+    const B1 = '1'.repeat(64), B2 = '2'.repeat(64), B3 = '3'.repeat(64), CARRIER = 'cd'.repeat(32);
+    d.driver.apsWallet = async () => ({ balances: { rd: '1', dfabi: '1' }, items: [
+      { bundle_id: B1, height: 5, asset: 'rd', direction: 'in', amount: '9', carrier_tx: CARRIER },
+      { bundle_id: B3, height: 4, asset: 'rd', direction: 'in', amount: '8' },
+      { bundle_id: '2'.repeat(64), height: 6, asset: 'rd', direction: 'in', amount: '7' }] });
+    const ad = adapter(d.driver);
+    const ids = (await ad.history('A', 10)).map((h) => h.id);
+    expect(ids).toEqual([B2, CARRIER, B3]);
+    await ad.run(req('rd-transfer', 'A', 'B', '1'), 1n, () => {}); // this run's bundle is '2'*64 in the fake: its carrier is TX
+    expect((await ad.history('A', 10)).map((h) => h.id)).toEqual([TX, CARRIER, B3]);
+  });
+
   it('the transaction deadline is 600 s (Envoy /aps/ route) for driver APS; other modes keep the server default', () => {
     expect(a().txDeadlineMs).toBe(600_000);
     const plain = fakeDriver().driver; plain.aps = false;

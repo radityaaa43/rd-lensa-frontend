@@ -145,6 +145,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   const journalFile = shared ? join(shared.mounts.pools!, 'lensa-journal.json') : '';
   let journal: Journal = {};
   if (shared) { try { journal = JSON.parse(readFileSync(journalFile, 'utf8')) as Journal; } catch { /* first run */ } }
+  const carriers = new Map<string, string>(); // APS bundle_id -> the carrier tx of a run made here (the chain knows the carrier tx, never the bundle_id)
   const wallets = new Map<PartyId, Promise<Wallet>>();
   const walletFor = (party: PartyId) => {
     let w = wallets.get(party);
@@ -257,6 +258,23 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     if (!r.ok) throw new Error(`Torii ${PARTIES[party].name} menjawab HTTP ${r.status}`);
     return (await r.json()) as Status;
   }
+  // A hash the chain does not know (an APS bundle_id from an old history row, whose carrier tx is not kept) is "unknown", not a failure.
+  const statusOrNull = (party: PartyId, hash: string) => keylessStatus(party, hash).catch((e) => { if (/HTTP 404/.test(errMsg(e))) return null; throw e; });
+  const NOT_A_TX = 'Hash ini tidak dikenal chain (kemungkinan bundle_id APS; hash transaksi carrier-nya tidak tersimpan)';
+  // The committed tx (rego row 12, GET /tx/<hash>), best effort: block hash, result and result hash. No payload, no signed content.
+  async function keylessTx(party: PartyId, hash: string): Promise<{ label: string; value: string }[]> {
+    try {
+      const r = await (read?.fetch ?? irohaFetch)(new URL(`tx/${hash}`, s.torii[party]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+      if (!r.ok) return [];
+      const t = ((await r.json()) as { transaction?: { block_hash?: string; result?: { Ok?: unknown; Err?: string }; result_hash?: string } }).transaction;
+      if (!t) return [];
+      return [
+        ...(t.block_hash ? [{ label: 'Hash blok', value: t.block_hash }] : []),
+        ...(t.result ? [{ label: 'Hasil', value: t.result.Err ? 'Ditolak' : 'Ok' }] : []),
+        ...(t.result_hash ? [{ label: 'Hash hasil', value: t.result_hash }] : []),
+      ];
+    } catch { return []; }
+  }
   async function appliedBlock(signer: PartyId, hash: string): Promise<number> {
     try {
       return (await keylessStatus(signer, hash)).status.block_height ?? 0;
@@ -284,6 +302,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
       await driver!.apsIntent(req.from, { intent: intentDfabi, asset: 'dfabi', to: req.to, amount }); // the seller delivers DFABI
       done = await driver!.apsSubmit(req.from, { kind: 'dvp', intentRd, intentDfabi, buyer: req.to, seller: req.from, rd: price, dfabi: amount });
     }
+    if (done.bundleId) carriers.set(done.bundleId, done.txHash);
     emit(0, Date.now() - t0);
     emit(1, 0);
     emit(2, 0); // the coordinator answers once the bundle is finalized
@@ -479,8 +498,8 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
 
   // A party's own wallet items (the shared-pool mount or the keyless driver's GET /aps/wallet) as history rows.
   function walletHistory(party: PartyId, w: Wallet, want: number): HistoryItem[] {
-    const bundles = new Map<string, { height: number; rd?: string; dfabi?: string; rdDir?: string; dfabiDir?: string; fee?: string }>();
-    for (const i of w.items) bundles.set(i.bundle_id, { ...bundles.get(i.bundle_id), height: i.height, [i.asset]: i.amount, [`${i.asset}Dir`]: i.direction, ...(i.asset === 'rd' && i.fee && i.fee !== '0' ? { fee: i.fee } : {}) });
+    const bundles = new Map<string, { height: number; carrier?: string; rd?: string; dfabi?: string; rdDir?: string; dfabiDir?: string; fee?: string }>();
+    for (const i of w.items) bundles.set(i.bundle_id, { ...bundles.get(i.bundle_id), height: i.height, ...(i.carrier_tx ? { carrier: i.carrier_tx } : {}), [i.asset]: i.amount, [`${i.asset}Dir`]: i.direction, ...(i.asset === 'rd' && i.fee && i.fee !== '0' ? { fee: i.fee } : {}) });
     return [...bundles].map(([id, b]): HistoryItem => {
       const j = journal[id];
       const flow = j?.flow ?? (b.rd && b.dfabi ? 'dvp' : null);
@@ -490,7 +509,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
       const out = (asset === 'RD' ? b.rdDir : b.dfabiDir) === 'out';
       const counterparty = j ? { from: j.from, to: j.to } : { from: out ? party : null, to: out ? null : party };
       const role = roleFromParties(party, counterparty, !!j && FLOWS[j.flow].issuer);
-      return { id: j?.tx ?? id, at: null, block: b.height, flow, asset, role, verdict: 'clear', amount: (asset === 'RD' ? b.rd : b.dfabi) ?? null, rdAmount: dvp ? b.rd ?? null : null, counterparty, ...(b.fee ? { fee: b.fee } : {}) };
+      return { id: j?.tx ?? b.carrier ?? carriers.get(id) ?? id, at: null, block: b.height, flow, asset, role, verdict: 'clear', amount: (asset === 'RD' ? b.rd : b.dfabi) ?? null, rdAmount: dvp ? b.rd ?? null : null, counterparty, ...(b.fee ? { fee: b.fee } : {}) };
     }).sort((a, b) => (b.block ?? 0) - (a.block ?? 0)).slice(0, want);
   }
 
@@ -699,11 +718,14 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   async function receipt(tx: string, party: PartyId): Promise<Receipt> {
     if (!/^[0-9a-f]{64}$/.test(tx)) throw new Error(`Hash transaksi tidak valid: ${tx.slice(0, 80)}`); // it goes to the CLI as an argument
     if (driver) { // keyless: the pipeline status of the party's own Torii is all that is readable without an operator key
-      const st = await keylessStatus(party, tx);
+      const st = await statusOrNull(party, tx);
+      if (!st) return { source: `Torii ${PARTIES[party].name} (status tanpa kunci)`, chain: [{ title: 'Transaksi di ledger', rows: [{ label: 'Status', value: `Tidak diketahui. ${NOT_A_TX}` }, { label: 'Hash', value: tx }] }], node: null };
+      const detail = await keylessTx(party, tx);
       return { source: `Torii ${PARTIES[party].name} (status tanpa kunci)`, chain: [{ title: 'Transaksi di ledger', rows: [
         { label: 'Status', value: `${st.status.kind}${st.status.block_height !== null ? `, blok ${st.status.block_height}` : ''}` },
         { label: 'Hash', value: tx },
-        { label: 'Detail transaksi', value: 'NOT-RUN (tanpa kunci operator)' },
+        ...detail,
+        ...(detail.length ? [] : [{ label: 'Detail transaksi', value: 'NOT-RUN (tanpa kunci operator)' }]),
       ] }], node: null };
     }
     return inLane(party, async () => {
@@ -735,7 +757,9 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   async function trace(tx: string, party: PartyId): Promise<Trace> {
     if (!/^[0-9a-f]{64}$/.test(tx)) throw new Error(`Hash transaksi tidak valid: ${tx.slice(0, 80)}`);
     if (driver) {
-      const st = await keylessStatus(party, tx);
+      const st = await statusOrNull(party, tx);
+      if (!st) return { source: `Torii ${PARTIES[party].name} (status tanpa kunci)`, note: NOT_A_TX, steps: [{ title: 'Transaksi', tx, block: null, at: null, spans: [], events: [], req: null,
+        resp: { summary: [{ label: 'Status', value: 'Tidak diketahui' }], json: {} }, node: null }] };
       return {
         source: `Torii ${PARTIES[party].name} (status tanpa kunci)`,
         note: 'Tanpa kunci operator hanya status pipeline yang terbaca; isi transaksi dan waktu tanda tangan NOT-RUN.',
