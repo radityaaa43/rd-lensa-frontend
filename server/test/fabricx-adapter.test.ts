@@ -10,7 +10,7 @@ type Row = { transactionId: string; timestamp: string; asset: string; units: str
 // An in-memory token v2: asset gate closed by default and ONE lease per pod (asset_gate.go, GET reports {open}), issue/transfer/DvP only with the gate open (api.go),
 // history only for the party's own rows with ONE ROW PER MOVEMENT and no dedup (history.go): an issue shows only in the recipient's history (BI's wallet is neither
 // sender nor recipient), a DvP shows two rows per side with the same transaction id. A bank's first read of a fresh offer is 404 offer_not_found (dvp_api.go).
-function fakeTokenV2(opts: { pending?: boolean; reject?: boolean; settle409?: boolean } = {}) {
+function fakeTokenV2(opts: { pending?: boolean; reject?: boolean; } = {}) {
   const log: string[] = [];
   const gate = new Set<PartyId>();
   const bal: Record<PartyId, Record<string, bigint>> = { BI: {}, A: {}, B: {}, C: {} };
@@ -41,7 +41,6 @@ function fakeTokenV2(opts: { pending?: boolean; reject?: boolean; settle409?: bo
     if (path === '/test/transfer') return write((tx) => move(P[b.Sender]!, P[b.Recipient]!, b.Asset, BigInt(b.Units), tx, '2026-11-13T02:00:00Z'));
     if (path === '/test/dvp-offer' || path === '/test/dvp-accept') return { status: 200, body: {} };
     if (path.startsWith('/test/dvp/') && party === 'A') return offerReads++ === 0 ? { status: 404, body: { error: 'offer_not_found' } } : { status: 200, body: { TermsHash: 'abc' } };
-    if (path === '/test/dvp-settle' && opts.settle409) return { status: 409, body: { error: 'buyer_cannot_fund' } };
     if (path === '/test/dvp-settle') { move('BI', 'A', 'SBN', 1n, 'txdvp', '2026-11-13T03:00:00Z'); move('A', 'BI', 'RupiahDigital', 1_000_000_000n, 'txdvp', '2026-11-13T03:00:00Z'); return { status: 200, body: {} }; }
     if (path.startsWith('/test/dvp/')) return { status: 200, body: { Receipt: { Status: 'confirmed', TransactionID: 'txdvp' } } };
     return { status: 404, body: { error: 'route_not_found' } };
@@ -166,11 +165,11 @@ describe('fabricx-adapter (token v2)', () => {
     expect(t.gate.size).toBe(0);
   });
 
-  it('award: a settle the ledger refuses as buyer_cannot_fund (RD split over several tokens) says to issue one token, not that the balance is short', async () => {
-    const t = fakeTokenV2({ settle409: true }); const a = createFabricxTokenAdapter(t.call, fast);
-    t.bal.A.RupiahDigital = 1_000_000_000n;
-    await expect(a.run(req('award', 'BI', 'A', '1'), 1n, () => {})).rejects.toThrow(/SATU token RD.*rd-issue/);
-    expect(t.gate.size).toBe(0);
+  it('award: settle buyer_cannot_fund (RD split over tokens, none >= price) names the cause and the fix', async () => {
+    const t = fakeTokenV2(); t.bal.A.RupiahDigital = 1_000_000_000n;
+    const call: Call = (p, m, path, b) => path === '/test/dvp-settle' ? Promise.resolve({ status: 409, body: { error: 'buyer_cannot_fund' } }) : t.call(p, m, path, b);
+    const a = createFabricxTokenAdapter(call, fast);
+    await expect(a.run(req('award', 'BI', 'A', '1'), 1n, () => {})).rejects.toThrow(/terpecah.*Terbitkan 1\.000\.000\.000 RD/);
   });
 
   it('receipt: a tx the party was not part of is sealed (200), a hash nobody holds stays an error', async () => {

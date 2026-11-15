@@ -144,6 +144,9 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
     const accept = await call('A', 'POST', '/test/dvp-accept', { OfferID, TermsHash });
     if (accept.status !== 200 && accept.status !== 202) fail('Persetujuan DvP', accept);
     const done = await call('BI', 'POST', '/test/dvp-settle', { OfferID });
+    // v2 DvP pays with ONE buyer RD token >= price (DvPMaxBuyerInputs = 1); the pre-check only sees the summed balance, and token v2 has
+    // no per-token read. ponytail: refused here, after the offer; a real pre-check needs a token v2 endpoint listing unspent tokens.
+    if ((str(obj(done.body).error) || str(obj(done.body).code)) === 'buyer_cannot_fund') throw new Error(`Saldo RD ${PARTIES.A.name} terpecah: DvP token v2 dibayar dari SATU token RD minimal ${Number(AWARD_MONEY).toLocaleString('id-ID')}. Terbitkan ${Number(AWARD_MONEY).toLocaleString('id-ID')} RD ke ${PARTIES.A.name} dulu, lalu ulangi award`);
     if (done.status !== 200 && done.status !== 202) fail('Settlement DvP', done);
     const until = Date.now() + WAIT_MS;
     for (;;) {
@@ -249,11 +252,7 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
         const tx = req.flow === 'rd-issue' ? await issueRd(to, amount)
           : req.flow === 'rd-transfer' ? await transfer(req.from, req.to, 'RD', amount)
           : req.flow === 'dfabi-transfer' ? await transfer(req.from, req.to, 'DFABI', amount)
-          : await award().catch((err: unknown) => {
-            // Token v2 pays an award from ONE RD token >= the price (DvPMaxBuyerInputs=1): a balance split over several tokens is enough in total but cannot settle. The gateway lists no tokens, so this cannot be checked before the offer.
-            if (/buyer_cannot_fund/.test(err instanceof Error ? err.message : '')) throw new Error(`Settlement DvP ditolak (buyer_cannot_fund): award token v2 dibayar dari SATU token RD senilai ${Number(AWARD_MONEY).toLocaleString('id-ID')} RD. Saldo ${PARTIES.A.name} cukup tetapi bisa tersebar di beberapa token. Terbitkan ${Number(AWARD_MONEY).toLocaleString('id-ID')} RD ke ${PARTIES.A.name} (rd-issue) lalu ulangi.`);
-            throw err;
-          });
+          : await award();
         emit(1, Date.now() - t1); // submit and finality are one call in token v2: the second step reports the same span
         emit(2, Date.now() - t1);
         return tx;
