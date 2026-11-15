@@ -4,7 +4,7 @@
 #     base    S4a: namespace rd-lensa, default-deny + DNS + gateway egress policies, SAs and Roles
 #     volume  S4b: PVC lensa-state (Secrets are never rendered: their owners create them)
 #     app     S6:  ConfigMap lensa-env, Deployment lensa, Service lensa (needs LENSA_IMAGE)
-#     ingress interim public entry (LENSA_PUBLIC_TX=1, GO-W: + Kebijakan reads, event stream, Ingress lensa-public-tx for POST /api/tx): Issuer (HTTP-01, no e-mail) + Ingress (path allow-list) + NetworkPolicy; LENSA_PUBLIC_HOST, LENSA_ACME=staging|prod. NOT part of `all`.
+#     ingress interim public entry (LENSA_PUBLIC_TX=1, GO-W: + Kebijakan reads, event stream, Ingress lensa-public-tx for POST /api/tx, Ingress lensa-public-stress for the stress test): Issuer (HTTP-01, no e-mail) + Ingress (path allow-list) + NetworkPolicy; LENSA_PUBLIC_HOST, LENSA_ACME=staging|prod. NOT part of `all`.
 #     flow    B1: the internal write instance: ConfigMap lensa-flow-env + Deployment lensa-flow (replicas 0, LENSA_FLOWS=1, no Service, no Ingress, emptyDir state, no sink tokens); needs LENSA_IMAGE; NOT part of `all`.
 #     probe   egress proof Job from LENSA_PROBE_TARGETS (host port lines); app=lensa + role=egress-probe; NOT part of `all`.
 #     seed    state seed: ConfigMap lensa-seed + Job lensa-seed from LENSA_SEED_DIR (seed-state --out); seedcheck: no-egress read Job that greps the PVC + image for key material. NOT part of `all`.
@@ -332,6 +332,7 @@ ingress() {
   if [[ "${LENSA_PUBLIC_TX:-}" == 1 ]]; then   # GO-W: Kebijakan reads (Exact paths, no write path), the event stream, and a separate tighter Ingress for POST /api/tx
     sed "$sub; s#^ *\#TX_PATHS\$#$(printf '%s' "$(tx_paths)" | sed 's/[#&\\]/\\&/g' | sed ':a;N;$!ba;s/\n/\\n/g')#" "$here/templates/ingress.yaml"
     echo '---'; sed "$sub" "$here/templates/ingress-tx.yaml"
+    echo '---'; sed "$sub" "$here/templates/ingress-stress.yaml"
   else
     sed "$sub; /^ *#TX_PATHS$/d" "$here/templates/ingress.yaml"
   fi

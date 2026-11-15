@@ -1,0 +1,28 @@
+# Public stress test (PoC, user decision 2026-11-16): the stress API and the capacity probe, on their own Ingress so they carry their own limits. Needs LENSA_PUBLIC_TX=1.
+# Prefix /api/stress covers start, stop, prepare, events (SSE), csv; Exact /api/preflight-capacity. Same host and TLS Secret as lensa-public, NO cert-manager annotation.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lensa-public-stress
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa}
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "4k"
+    nginx.ingress.kubernetes.io/limit-rps: "5"
+    nginx.ingress.kubernetes.io/limit-connections: "10"
+    # the event stream stays open for a whole run (a tick every second); a quiet gap longer than this closes it and the page reconnects
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [${HOST}]
+      secretName: lensa-public-tls
+  rules:
+    - host: ${HOST}
+      http:
+        paths:
+          - {path: /api/stress, pathType: Prefix, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/preflight-capacity, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}

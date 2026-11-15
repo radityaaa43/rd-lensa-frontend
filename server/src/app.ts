@@ -12,7 +12,7 @@ import { probeNodes, type Probe } from './health.ts';
 import { HEALTH_MS, STAGE_S, StressRun, USERS, effectiveUsers, validateStress, type StressConfig } from './stress.ts';
 import { toCsv } from './stats.ts';
 import { REGISTRY, isPlatform } from './policy/platforms.ts';
-import { HIDDEN, HIDDEN_TX, SECURITY_HEADERS, TX_WRITES, corrId, generic, scrubPublic } from './public.ts';
+import { HIDDEN, SECURITY_HEADERS, TX_WRITES, corrId, generic, scrubPublic } from './public.ts';
 import { registerPolicyRoutes, registerPolicyUnavailable, type PolicyDeps } from './policy/routes.ts';
 
 type Adapters = Partial<Record<ModelId, ModelAdapter>>;
@@ -50,6 +50,13 @@ const stressBody = {
     stageS: { enum: STAGE_S },
   },
 } as const;
+const prepareBody = {
+  type: 'object', additionalProperties: false,
+  required: ['models', 'users'],
+  properties: { models: stressBody.properties.models, users: stressBody.properties.users },
+} as const;
+// Public pod: nobody can run `preflight --prepare` there, so the load users are topped up in the pod (units per user: modest, a Zeto mint is a ZK proof).
+const PREPARE_UNITS = 50;
 const usersQuery = { type: 'object', properties: { users: { enum: USERS.map(String) } } } as const;
 // coerceTypes is off, so limit stays a string and the handler checks its range
 const modelQuery = { type: 'object', required: ['model'], properties: { model: { enum: MODELS } } } as const;
@@ -115,7 +122,7 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     app.addHook('onRequest', async (req, reply) => {
       const path = req.url.split('?')[0]!;
       if (req.method !== 'GET' && req.method !== 'HEAD' && !(opts.publicTx && req.method === 'POST' && TX_WRITES.test(path))) return reply.code(405).header('allow', 'GET, HEAD').send({ reason: 'Hanya baca (publik)' });
-      if ((opts.publicTx ? HIDDEN_TX : HIDDEN).test(path)) return reply.code(404).send({ reason: 'Tidak ditemukan' });
+      if (!opts.publicTx && HIDDEN.test(path)) return reply.code(404).send({ reason: 'Tidak ditemukan' });
     });
     app.addHook('onSend', async (req, reply, payload) => {
       for (const [k, v] of Object.entries(SECURITY_HEADERS)) reply.header(k, v);
@@ -410,6 +417,31 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       if (!started) busy = null;
     }
   });
+
+  // Tops the load users up to PREPARE_UNITS transfers each, in the background under the same lock as a run (minutes on Zeto / Noto). Poll GET /api/stress/prepare, then start the run.
+  let prep: { state: 'running' | 'done' | 'error'; model?: ModelId; reason?: string } | null = null;
+  app.post<{ Body: { models: ModelId[]; users: number } }>('/api/stress/prepare', { schema: { body: prepareBody } }, async (request, reply) => {
+    const { models, users } = request.body;
+    for (const m of models) if (!adapters[m]) return reply.code(503).send(modelUnavailable(m));
+    if (busy) return reply.code(409).send({ reason: BUSY_REASON });
+    busy = 'stress';
+    prep = { state: 'running' };
+    void (async () => {
+      let model: ModelId | undefined;
+      try {
+        for (const m of models) {
+          model = m;
+          const a = adapters[m]!, u = effectiveUsers(users, a);
+          prep = { state: 'running', model: m };
+          if (await withDeadline(a.loadCapacity(u), HEALTH_MS, 'Cek kapasitas') >= PREPARE_UNITS) continue;
+          await a.prepareLoad(u, PREPARE_UNITS);
+        }
+        prep = { state: 'done' };
+      } catch (e) { prep = { state: 'error', ...(model ? { model } : {}), reason: msg(e) }; } finally { busy = null; }
+    })();
+    return reply.code(202).send(prep);
+  });
+  app.get('/api/stress/prepare', async (_req, reply) => (prep ?? reply.code(204).send()));
 
   const noStress = (reply: FastifyReply) => reply.code(404).send({ reason: 'Belum ada stress test' });
 

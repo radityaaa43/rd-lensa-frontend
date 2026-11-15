@@ -462,9 +462,14 @@ check(wa.get("nginx.ingress.kubernetes.io/limit-rps") == "1" and wa.get("nginx.i
 check("cert-manager.io/issuer" not in wa and "cert-manager.io/cluster-issuer" not in wa, "lensa-public-tx has NO cert-manager annotation (two Ingresses with one secret would make two Certificates)")
 check(wtx["spec"]["tls"] == name(ingw, "Ingress", "lensa-public")["spec"]["tls"] and wtx["spec"]["rules"][0]["host"] == "x.example.com", "lensa-public-tx: same host and TLS secret")
 allp = " ".join(paths(ingw, "lensa-public") + paths(ingw, "lensa-public-tx"))
-for hidden in ["/api/stress", "preflight", "readyz", "livez", "approve", "republish", "drafts"]:
+for hidden in ["readyz", "livez", "approve", "republish", "drafts"]:
     check(hidden not in allp, f"W: nothing at the entry routes {hidden}")
-check(sorted((d["kind"], d["metadata"]["name"]) for d in ingw) == sorted([(d["kind"], d["metadata"]["name"]) for d in ing0] + [("Ingress", "lensa-public-tx")]), "W ingress render = the read-only render + exactly one Ingress")
+check("/api/stress" not in allp and "preflight" not in allp, "W: the stress paths are on their own Ingress, not on lensa-public / lensa-public-tx")
+wst = name(ingw, "Ingress", "lensa-public-stress")
+check(paths(ingw, "lensa-public-stress") == ["/api/stress:Prefix", "/api/preflight-capacity:Exact"], f"lensa-public-stress routes exactly the stress API and the capacity probe: {paths(ingw, 'lensa-public-stress')}")
+check(wst["spec"]["tls"] == name(ingw, "Ingress", "lensa-public")["spec"]["tls"] and wst["spec"]["rules"][0]["host"] == "x.example.com" and not any(k.startswith("cert-manager.io/") for k in wst["metadata"]["annotations"]), "lensa-public-stress: same host and TLS secret, no cert-manager annotation")
+check(not [d for d in ing0 if d["kind"] == "Ingress" and d["metadata"]["name"] == "lensa-public-stress"], "without W there is no lensa-public-stress Ingress")
+check(sorted((d["kind"], d["metadata"]["name"]) for d in ingw) == sorted([(d["kind"], d["metadata"]["name"]) for d in ing0] + [("Ingress", "lensa-public-tx"), ("Ingress", "lensa-public-stress")]), "W ingress render = the read-only render + exactly the tx and stress Ingresses")
 check(not of(ingw, "Secret"), "W ingress render: no Secret")
 check(not any(k.startswith("cert-manager.io/") for k in wa), "lensa-public-tx carries no cert-manager annotation at all (incl. the key policy)")
 

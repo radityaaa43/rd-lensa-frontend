@@ -14,9 +14,8 @@ export function assertPublicEnv(env: Record<string, string | undefined>): void {
 
 // routes the public host never serves (the kubelet probes livez/readyz stay: the entry hides readyz)
 export const HIDDEN = /^\/api\/(?:policy|stress|preflight-capacity)(?:\/|$)/;
-// with LENSA_PUBLIC_TX the Kebijakan reads open; stress and the capacity probe stay closed. The only writes that pass: a transaction, and approve / republish (the freeze answers 403).
-export const HIDDEN_TX = /^\/api\/(?:stress|preflight-capacity)(?:\/|$)/;
-export const TX_WRITES = /^\/api\/(?:tx|policy\/(?:bi|bank-a|bank-b|bank-c)\/(?:approve|republish))$/;
+// with LENSA_PUBLIC_TX nothing is hidden: the Kebijakan reads and the stress test (PoC, user decision 2026-11-16) are open. The only writes that pass: a transaction, a stress start / stop / prepare, and approve / republish (the freeze answers 403).
+export const TX_WRITES = /^\/api\/(?:tx|stress(?:\/(?:stop|prepare))?|policy\/(?:bi|bank-a|bank-b|bank-c)\/(?:approve|republish))$/;
 
 // What must never reach a public client: IPs, URLs, cluster hosts, namespaces, node / gateway names.
 const PATTERNS: RegExp[] = [
