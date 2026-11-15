@@ -25,6 +25,7 @@ LABELS = {"app.kubernetes.io/part-of": "fabricx-token-gw"}
 SEC = {"allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True, "capabilities": {"drop": ["ALL"]}, "runAsNonRoot": True, "runAsUser": UID, "seccompProfile": {"type": "RuntimeDefault"}}  # PodSecurity restricted
 # the images fx-gw runs today (imageID of pod fx-gw-1), pinned by digest
 ENVOY_IMAGE = "envoyproxy/envoy:v1.38.9@sha256:b1f389c3a6148e85e9de364cb867aa2e5802153abb37ad80f1f2241d693da32a"
+LENSA_POD = {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "rd-lensa"}}, "podSelector": {"matchLabels": {"app": "lensa"}}}
 LENSA_CIDR = "172.24.0.0/16"  # Jakarta VPC: the Lensa host (172.24.11.235) and pod rd-lensa; NodePort traffic keeps this source or the node IP, both inside
 OPA_IMAGE = "openpolicyagent/opa:1.21.1-envoy-1-static@sha256:c1f40d815a15c4ca0ccbdf300e0a3515fccf1d30fbd92e69917ab96bad83811d"
 
@@ -110,7 +111,7 @@ def render(party, envoy_image=ENVOY_IMAGE, opa_image=OPA_IMAGE):
     tcp = lambda port: {"port": port, "protocol": "TCP"}
     np_gw = {"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": meta(name), "spec": {
         "podSelector": {"matchLabels": sel}, "policyTypes": ["Ingress", "Egress"],
-        "ingress": [{"from": [{"ipBlock": {"cidr": LENSA_CIDR}}], "ports": [tcp(8443)]}],
+        "ingress": [{"from": [{"ipBlock": {"cidr": LENSA_CIDR}}, LENSA_POD], "ports": [tcp(8443)]}],  # ipBlock: host and NodePort; LENSA_POD: in-cluster (terway eBPF does not match pod sources by ipBlock)
         "egress": [{"to": [{"podSelector": {"matchLabels": token}}], "ports": [tcp(9440)]},
                    {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}, "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}}}],
                     "ports": [{"port": 53, "protocol": "UDP"}, tcp(53)]}]}}

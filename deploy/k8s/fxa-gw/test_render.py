@@ -26,7 +26,7 @@ class Render(unittest.TestCase):
             gw, tok = by_kind(render.render(p))["NetworkPolicy"]
             n, role = render.PARTY_N[p], render.ROLE[p]
             self.assertEqual(gw["spec"]["podSelector"]["matchLabels"], {"app.kubernetes.io/name": f"fxa-gw-{n}"})
-            self.assertEqual(gw["spec"]["ingress"], [{"from": [{"ipBlock": {"cidr": "172.24.0.0/16"}}], "ports": [{"port": 8443, "protocol": "TCP"}]}])
+            self.assertEqual(gw["spec"]["ingress"], [{"from": [{"ipBlock": {"cidr": "172.24.0.0/16"}}, {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "rd-lensa"}}, "podSelector": {"matchLabels": {"app": "lensa"}}}], "ports": [{"port": 8443, "protocol": "TCP"}]}])
             self.assertEqual(gw["spec"]["egress"][0]["to"][0]["podSelector"]["matchLabels"]["app"], f"token-{role}-v2")
             self.assertEqual(tok["spec"]["podSelector"]["matchLabels"]["app"], f"token-{role}-v2")
             self.assertEqual(tok["spec"]["policyTypes"], ["Ingress"])
