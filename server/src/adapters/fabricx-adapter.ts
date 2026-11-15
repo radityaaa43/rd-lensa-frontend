@@ -249,7 +249,11 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
         const tx = req.flow === 'rd-issue' ? await issueRd(to, amount)
           : req.flow === 'rd-transfer' ? await transfer(req.from, req.to, 'RD', amount)
           : req.flow === 'dfabi-transfer' ? await transfer(req.from, req.to, 'DFABI', amount)
-          : await award();
+          : await award().catch((err: unknown) => {
+            // Token v2 pays an award from ONE RD token >= the price (DvPMaxBuyerInputs=1): a balance split over several tokens is enough in total but cannot settle. The gateway lists no tokens, so this cannot be checked before the offer.
+            if (/buyer_cannot_fund/.test(err instanceof Error ? err.message : '')) throw new Error(`Settlement DvP ditolak (buyer_cannot_fund): award token v2 dibayar dari SATU token RD senilai ${Number(AWARD_MONEY).toLocaleString('id-ID')} RD. Saldo ${PARTIES.A.name} cukup tetapi bisa tersebar di beberapa token. Terbitkan ${Number(AWARD_MONEY).toLocaleString('id-ID')} RD ke ${PARTIES.A.name} (rd-issue) lalu ulangi.`);
+            throw err;
+          });
         emit(1, Date.now() - t1); // submit and finality are one call in token v2: the second step reports the same span
         emit(2, Date.now() - t1);
         return tx;
@@ -291,7 +295,13 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
     },
     async receipt(tx, party): Promise<Receipt> {
       const e = await findEntry(party, tx, 0);
-      if (!e) throw new Error('Transaksi tidak ada di riwayat pihak ini');
+      if (!e) {
+        // A tx the party was not part of is sealed to it, not missing: another party's own history has it. A hash nobody holds stays an error.
+        const others = (Object.keys(PARTIES) as PartyId[]).filter((p) => p !== party);
+        const seen = await Promise.allSettled(others.map((p) => findEntry(p, tx, 0)));
+        if (!seen.some((r) => r.status === 'fulfilled' && r.value)) throw new Error('Transaksi tidak ada di riwayat pihak ini');
+        return { source: `Token v2 /test/history (node ${party})`, chain: [{ title: 'Catatan riwayat', rows: [{ label: 'Status', value: 'Tersegel' }, { label: 'Keterangan', value: `Transaksi ini tidak melibatkan ${PARTIES[party].name}: riwayat node ${PARTIES[party].name} tidak memuatnya, jadi nominal dan pihak tidak terlihat.` }] }], node: null };
+      }
       return { source: `Token v2 /test/history (node ${party})`, chain: [{ title: 'Catatan riwayat', rows: [{ label: 'Status', value: e.status }, { label: 'Aset', value: e.asset }, { label: 'Jumlah', value: e.units }, { label: 'Arah', value: e.direction }, ...(e.rdUnits ? [{ label: 'Pembayaran RD', value: e.rdUnits }] : []), ...(e.auditStatus ? [{ label: 'Audit', value: e.auditStatus }] : [])] }], node: null };
     },
     async trace() {
