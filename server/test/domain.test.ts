@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest';
+import { hasInternal } from '../src/public.ts';
 import { isDvpFlow, roleFromParties, roleOf, validateRequest, type FlowRequest } from '../src/domain.ts';
 
 const t = (o: Partial<FlowRequest>): FlowRequest => ({ model: 'zeto', flow: 'rd-transfer', from: 'A', to: 'B', amount: '1000', ...o });
@@ -29,7 +30,7 @@ test.each([
   [{ amount: '' }, 'Nominal wajib diisi'],
   [{ amount: '0' }, 'Nominal harus lebih dari 0'],
   [{ amount: '12a' }, 'Nominal harus angka bulat'],
-  [{ amount: '1000000000000001' }, 'Nominal melebihi batas 1.000.000.000.000.000'],
+  [{ amount: '1000000000000001' }, 'Nominal melebihi batas 10^15 (1 kuadriliun)'],
   [{ to: 'A' }, 'Pengirim dan penerima harus berbeda'],
   [{ to: 'BI' }, 'Penerima harus bank'],
   [{ flow: 'rd-issue', from: 'A' }, 'Penerbitan hanya dijalankan BI'],
@@ -46,6 +47,10 @@ test.each(['zeto', 'noto', 'stealth', 'iroha3'] as const)('%s: dfabi-issue is BI
 test('fabricx keeps dfabi-issue BI -> bank', () => {
   expect(validateRequest(t({ model: 'fabricx', flow: 'dfabi-issue', from: 'BI', to: 'A' }))).toEqual({ ok: true, amount: 1000n });
   expect(validateRequest(t({ model: 'fabricx', flow: 'dfabi-issue', from: 'BI', to: 'BI' }))).toEqual({ ok: false, reason: 'Pengirim dan penerima harus berbeda' });
+});
+// the public host redacts any reason that looks like an IPv4 (dotted 000.000.000.000 groups did): a validation reason must survive it
+test.each([{ amount: '' }, { amount: '0' }, { amount: '12a' }, { amount: '1000000000000001' }, { to: 'A' }] as Partial<FlowRequest>[])('reason of %o is not redacted on the public host', (o) => {
+  const r = validateRequest(t(o)); expect(r.ok).toBe(false); expect(hasInternal((r as { reason: string }).reason)).toBe(false);
 });
 test('accepts and parses', () => expect(validateRequest(t({ amount: '1000000000' }))).toEqual({ ok: true, amount: 1_000_000_000n }));
 test.each([

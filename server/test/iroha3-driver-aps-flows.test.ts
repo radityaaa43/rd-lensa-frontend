@@ -65,6 +65,17 @@ describe('iroha3 aps driver mode: the plan\'s flow table', () => {
     });
   }
 
+  it('history in the keyless pod comes from the party\'s own driver wallet (no CLI, no operator key)', async () => {
+    const d = fakeDriver();
+    d.driver.apsWallet = async (party) => { d.calls.push({ fn: 'apsWallet', party }); return { balances: { rd: '1', dfabi: '1' }, items: [
+      { bundle_id: 'b1', height: 259, asset: 'rd', direction: 'out', amount: '1000001', fee: '1' },
+      { bundle_id: 'b1', height: 259, asset: 'dfabi', direction: 'in', amount: '1' }] }; };
+    const h = await adapter(d.driver).history('A', 10);
+    expect(order(d.calls)).toEqual(['A:apsWallet']);
+    expect(h).toHaveLength(1);
+    expect(h[0]).toMatchObject({ id: 'b1', block: 259, flow: 'dvp', asset: 'DFABI', amount: '1', rdAmount: '1000001' });
+  });
+
   it('award BI sells DFABI to A: intents on the buyer A (RD to BI) and on BI (DFABI to A), THEN one submit by BI (buyer A, seller BI)', async () => {
     const d = fakeDriver();
     const out = await adapter(d.driver).run(req('award', 'BI', 'A', '2'), 2n, () => {});
