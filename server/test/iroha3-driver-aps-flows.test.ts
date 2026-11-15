@@ -41,7 +41,7 @@ const order = (c: { fn: string; party: string }[]) => c.map((x) => `${x.party}:$
 const HEX = /^[0-9a-f]{64}$/;
 
 describe('iroha3 aps driver mode: the plan\'s flow table', () => {
-  for (const [flow, asset, key] of [['rd-issue', 'rd', 'RD'], ['dfabi-issue', 'dfabi', 'DFABI']] as const) {
+  for (const [flow, asset, key] of [['rd-issue', 'rd', 'RD']] as const) {
     it(`${flow} BI->A: intent on BI (its own leg), then BI submits pay; txHash = carrier_tx, block = height`, async () => {
       const d = fakeDriver();
       const out = await adapter(d.driver).run(req(flow, 'BI', 'A', '10'), 10n, () => {});
@@ -122,7 +122,11 @@ describe('iroha3 aps driver mode: the plan\'s flow table', () => {
 
   it('every flow is enabled (transfers included) and balanceOf reads the party\'s own /aps/wallet (rd, dfabi), no Torii read', async () => {
     const d = fakeDriver(); const a = adapter(d.driver);
-    for (const f of ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp', 'award'] as const) expect(a.capabilities()[f]).toEqual({ enabled: true });
+    for (const f of ['rd-issue', 'rd-transfer', 'dfabi-transfer', 'dvp', 'award'] as const) expect(a.capabilities()[f]).toEqual({ enabled: true });
+    // DFABI is issued BI -> BI only and the driver has no tested BI -> BI pay yet: off with a reason, never a BI -> bank issue
+    expect(a.capabilities()['dfabi-issue']).toMatchObject({ enabled: false, reason: expect.stringContaining('persediaan BI') });
+    await expect(a.run(req('dfabi-issue', 'BI', 'BI', '4'), 4n, () => {})).rejects.toThrow(/persediaan BI/);
+    expect(d.calls).toEqual([]);
     expect(await a.balanceOf('A', 'RD')).toBe(1500n);
     expect(await a.balanceOf('B', 'DFABI')).toBe(7n);
     expect(order(d.calls)).toEqual(['A:apsWallet', 'B:apsWallet']);
@@ -134,7 +138,7 @@ describe('iroha3 aps driver mode: the plan\'s flow table', () => {
   });
 });
 
-const ALL_FLOWS = [['rd-issue', 'BI', 'A', '4'], ['dfabi-issue', 'BI', 'A', '4'], ['rd-transfer', 'A', 'B', '3'], ['dfabi-transfer', 'A', 'B', '3'], ['dvp', 'A', 'B', '2'], ['award', 'BI', 'A', '2']] as const;
+const ALL_FLOWS = [['rd-issue', 'BI', 'A', '4'], ['rd-transfer', 'A', 'B', '3'], ['dfabi-transfer', 'A', 'B', '3'], ['dvp', 'A', 'B', '2'], ['award', 'BI', 'A', '2']] as const;
 
 describe('iroha3 aps driver mode: keyless pod, no iroha CLI (ENOENT)', () => {
   const enoent: Cli = async () => { throw new Error('iroha CLI gagal (kode ENOENT)'); };

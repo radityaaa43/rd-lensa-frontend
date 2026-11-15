@@ -1,5 +1,5 @@
 import type { LensView, StepEvent } from '../../../server/src/adapter.ts';
-import { BANKS, type FlowId, type FlowRequest, type ModelId, type PartyId } from '../../../server/src/domain.ts';
+import { BANKS, dfabiIssueToBi, type FlowId, type FlowRequest, type ModelId, type PartyId } from '../../../server/src/domain.ts';
 
 export type Asset = 'RD' | 'DFABI';
 export interface TxResult { txHash: string; block: number; steps: StepEvent[]; lenses: LensView[]; reportPending?: string } // reportPending: settled, but the report to BI is not confirmed yet
@@ -37,7 +37,10 @@ export const flowOf = (dvp: boolean, party: PartyId, asset: Asset): FlowId =>
 export const toOf = (s: DemoState, party: PartyId): PartyId => (s.to !== party && s.to !== 'BI' ? s.to : BANKS.find((b) => b !== party)!);
 
 export function requestOf(s: DemoState, model: ModelId, party: PartyId, dvp: boolean): FlowRequest {
-  return { model, flow: flowOf(dvp, party, s.asset), from: party, to: toOf(s, party), amount: s.amounts[dvp ? 'DFABI' : s.asset] };
+  const flow = flowOf(dvp, party, s.asset);
+  // DFABI is issued BI -> BI (into BI's inventory); a bank gets it only through the award
+  const to = dfabiIssueToBi({ model, flow }) ? 'BI' : toOf(s, party);
+  return { model, flow, from: party, to, amount: s.amounts[dvp ? 'DFABI' : s.asset] };
 }
 
 export function demoReducer(s: DemoState, a: DemoAction): DemoState {

@@ -358,6 +358,8 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
       }
       if (flow.issuer && !flow.dvp) {
         const tx = (await mintUtxos(from, zeto(token, from), to, 1, amount))[0]!;
+        // DFABI is issued BI -> BI (the award sells it later): BI does not report to itself, it takes the outputs from its own node into its own ledger
+        if (req.to === 'BI') return { tx, t0, tokens: [token], after: async () => { await ledger.ingest(await buildReport(P.BI.c, LOOKUP.BI, token, address[token], tx.receipt.transactionHash!)); } };
         return { tx, t0, tokens: [token], after: async () => { await report(req.to as BankId, token, tx); } };
       }
       if (flow.dvp) {

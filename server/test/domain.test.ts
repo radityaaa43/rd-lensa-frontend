@@ -35,6 +35,18 @@ test.each([
   [{ flow: 'rd-issue', from: 'A' }, 'Penerbitan hanya dijalankan BI'],
   [{ flow: 'rd-transfer', from: 'BI' }, 'Transfer dijalankan oleh bank'],
 ] as [Partial<FlowRequest>, string][])('rejects %o', (o, reason) => expect(validateRequest(t(o))).toEqual({ ok: false, reason }));
+// DFABI is issued BI -> BI only on zeto/noto/stealth/iroha3 (user decision 2026-11-15); Fabric-X keeps BI -> bank
+test.each(['zeto', 'noto', 'stealth', 'iroha3'] as const)('%s: dfabi-issue is BI -> BI only', (model) => {
+  const r = (o: Partial<FlowRequest>) => validateRequest(t({ model, flow: 'dfabi-issue', from: 'BI', to: 'BI', ...o }));
+  expect(r({})).toEqual({ ok: true, amount: 1000n });
+  expect(r({ to: 'A' })).toMatchObject({ ok: false, reason: expect.stringContaining('persediaan BI') });
+  expect(r({ from: 'A', to: 'BI' })).toEqual({ ok: false, reason: 'Penerbitan hanya dijalankan BI' });
+  expect(validateRequest(t({ model, flow: 'rd-issue', from: 'BI', to: 'BI' }))).toEqual({ ok: false, reason: 'Pengirim dan penerima harus berbeda' });
+});
+test('fabricx keeps dfabi-issue BI -> bank', () => {
+  expect(validateRequest(t({ model: 'fabricx', flow: 'dfabi-issue', from: 'BI', to: 'A' }))).toEqual({ ok: true, amount: 1000n });
+  expect(validateRequest(t({ model: 'fabricx', flow: 'dfabi-issue', from: 'BI', to: 'BI' }))).toEqual({ ok: false, reason: 'Pengirim dan penerima harus berbeda' });
+});
 test('accepts and parses', () => expect(validateRequest(t({ amount: '1000000000' }))).toEqual({ ok: true, amount: 1_000_000_000n }));
 test.each([
   ['A', { from: 'A', to: 'B' }, false, 'sender'],

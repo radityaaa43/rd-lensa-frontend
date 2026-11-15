@@ -44,7 +44,7 @@ const tx = (a: FastifyInstance, model: string, flow: string, from = 'A', to = 'B
 
 describe('W on: transactions', () => {
   it('Zeto and Noto rd-transfer / issue are served (202)', async () => {
-    for (const [model, flow, from, to] of [['zeto', 'rd-transfer', 'A', 'B'], ['noto', 'rd-transfer', 'B', 'A'], ['zeto', 'rd-issue', 'BI', 'A'], ['noto', 'dfabi-issue', 'BI', 'B']] as const) {
+    for (const [model, flow, from, to] of [['zeto', 'rd-transfer', 'A', 'B'], ['noto', 'rd-transfer', 'B', 'A'], ['zeto', 'rd-issue', 'BI', 'A'], ['zeto', 'dfabi-issue', 'BI', 'BI']] as const) {
       const a = make();
       const r = await tx(a, model, flow, from, to);
       expect([model, flow, r.statusCode]).toEqual([model, flow, 202]);

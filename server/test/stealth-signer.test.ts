@@ -206,6 +206,18 @@ describe('keyless adapter, scenario against fake signers', () => {
     expect(posts(world, before)).toEqual(['BI POST /dvp/offer', 'A POST /dvp/bid', 'BI POST /dvp/escrow', 'BI POST /intent', 'A POST /intent', 'A POST /dvp/settle']);
   });
 
+  it('dfabi-issue BI -> BI (the inventory the award sells from): bond-issue to BI\'s own meta-address, confirmed from BI\'s own receipts, no reportPending', async () => {
+    const before = world.calls.length;
+    const bi0 = await adapter.balanceOf('BI', 'DFABI'), a0 = await adapter.balanceOf('A', 'DFABI');
+    const r = await adapter.run(req('dfabi-issue', 'BI', 'BI', '7'), 7n, noop);
+    expect(r.reportPending).toBeUndefined();
+    expect(posts(world, before).filter((c) => c.includes('/intent'))).toHaveLength(1);
+    expect(await adapter.balanceOf('BI', 'DFABI')).toBe(bi0 + 7n);
+    expect(await adapter.balanceOf('A', 'DFABI')).toBe(a0);
+    const lensBI = await adapter.lens(req('dfabi-issue', 'BI', 'BI', '7'), r, 'BI');
+    expect(lensBI).toMatchObject({ role: 'issuer', verdict: 'clear', amount: '7', counterparty: { from: 'BI', to: 'BI' } });
+  });
+
   it('lens: sender and seller clear, receiver clear with the authenticated sender, BI viewkey with both legs, outsider partial', async () => {
     const seller = await adapter.lens(dvpRq, dvp, 'B');
     expect([seller.role, seller.verdict, seller.amount, seller.rdAmount, seller.counterparty]).toEqual(['sender', 'clear', '2', '2000000', { from: 'B', to: 'A' }]);

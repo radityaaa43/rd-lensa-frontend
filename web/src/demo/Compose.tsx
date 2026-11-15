@@ -1,9 +1,9 @@
-import { BANKS, FLOWS, MAX_AMOUNT, PRICE_PER_UNIT, type FlowRequest, type PartyId } from '../../../server/src/domain.ts';
+import { BANKS, FLOWS, MAX_AMOUNT, PRICE_PER_UNIT, dfabiIssueToBi, type FlowRequest, type PartyId } from '../../../server/src/domain.ts';
 import type { Meta } from '../api.ts';
 import type { Route } from '../app/route.ts';
 import { amountWords, formatRupiah, parseAmountInput } from '../format.ts';
 import { JsonView } from './JsonView.tsx';
-import { FLOW_NAME } from './copy.ts';
+import { FLOW_NAME, MINT_TO_BI } from './copy.ts';
 import { flowOf, requestOf, type Asset, type DemoAction, type DemoState } from './demoState.ts';
 
 type ModelRoute = Extract<Route, { page: 'model' }>;
@@ -18,6 +18,7 @@ export function Compose({ meta, route, s, dispatch, dvp, onSend }: {
   const busy = s.phase === 'run';
   const req = requestOf(s, model, party, dvp);
   const f = FLOWS[req.flow];
+  const toBi = dfabiIssueToBi(req);
   const cap = meta.models[model].capabilities[req.flow];
   const name = (id: PartyId) => meta.parties[id].name;
   const asset: Asset = dvp ? 'DFABI' : s.asset;
@@ -46,9 +47,15 @@ export function Compose({ meta, route, s, dispatch, dvp, onSend }: {
         <div className="fields2">
           <div>
             <label htmlFor="to">{dvp ? 'Bank pembeli' : f.issuer ? 'Diterbitkan untuk' : 'Bank penerima'}</label>
-            <select id="to" value={req.to} disabled={busy} onChange={(e) => dispatch({ type: 'to', to: e.target.value as PartyId })}>
-              {BANKS.filter((b) => b !== party).map((b) => <option key={b} value={b}>{name(b)}</option>)}
-            </select>
+            {toBi ? (
+              // DFABI is issued into BI's own inventory; a bank gets it through the sale on the next screen
+              <select id="to" value="BI" disabled aria-describedby="to-hint"><option value="BI">{MINT_TO_BI}</option></select>
+            ) : (
+              <select id="to" value={req.to} disabled={busy} onChange={(e) => dispatch({ type: 'to', to: e.target.value as PartyId })}>
+                {BANKS.filter((b) => b !== party).map((b) => <option key={b} value={b}>{name(b)}</option>)}
+              </select>
+            )}
+            {toBi && <p className="hint2" id="to-hint">Bank menerima DFABI lewat Penjualan perdana, dari persediaan BI ini.</p>}
           </div>
           <div>
             <label htmlFor="amount">{asset === 'RD' ? 'Nominal (Rupiah)' : 'Jumlah (unit DFABI)'}</label>
