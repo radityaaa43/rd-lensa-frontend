@@ -46,8 +46,8 @@ The adapter loads only when all four URLs are set.
 ## Policy
 
 `policy.rego` allows only the routes the adapter calls, only for this party (`data.fxa_party`), no query string, no `..`, no `%` (Envoy runs with `normalize_path` and `merge_slashes`, so OPA sees the path that is forwarded). A transfer must
-carry `Sender` = the party's org; the asset-gate lease is capped at 120 s. No NetworkPolicy is rendered: console-web and the FSC p2p
-ports use the same pods.
+carry `Sender` = the party's org; the asset-gate lease is capped at 120 s. The namespaces run `default-deny-all`; two allow-only NetworkPolicies per party open Lensa (172.24.0.0/16) -> gateway :8443 and
+gateway -> its own token pod :9440 (plus kube-dns). Nothing else changes.
 
 ## Images
 

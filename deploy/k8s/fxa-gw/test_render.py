@@ -16,11 +16,21 @@ class Render(unittest.TestCase):
     def test_objects_and_custody(self):
         for p in PARTIES:
             k = by_kind(render.render(p))
-            self.assertEqual({a: len(b) for a, b in k.items()}, {"ConfigMap": 2, "Service": 2, "Deployment": 1}, p)
+            self.assertEqual({a: len(b) for a, b in k.items()}, {"ConfigMap": 2, "Service": 2, "Deployment": 1, "NetworkPolicy": 2}, p)
             self.assertNotIn("Secret", k, "keys are a custody step, never rendered")
-            self.assertNotIn("NetworkPolicy", k)
             for o in sum(k.values(), []):
                 self.assertEqual(o["metadata"]["namespace"], f"fabricx-{p}")
+
+    def test_network_policies_open_only_lensa_to_gateway_and_gateway_to_its_token_pod(self):
+        for p in PARTIES:
+            gw, tok = by_kind(render.render(p))["NetworkPolicy"]
+            n, role = render.PARTY_N[p], render.ROLE[p]
+            self.assertEqual(gw["spec"]["podSelector"]["matchLabels"], {"app.kubernetes.io/name": f"fxa-gw-{n}"})
+            self.assertEqual(gw["spec"]["ingress"], [{"from": [{"ipBlock": {"cidr": "172.24.0.0/16"}}], "ports": [{"port": 8443, "protocol": "TCP"}]}])
+            self.assertEqual(gw["spec"]["egress"][0]["to"][0]["podSelector"]["matchLabels"]["app"], f"token-{role}-v2")
+            self.assertEqual(tok["spec"]["podSelector"]["matchLabels"]["app"], f"token-{role}-v2")
+            self.assertEqual(tok["spec"]["policyTypes"], ["Ingress"])
+            self.assertEqual(tok["spec"]["ingress"], [{"from": [{"podSelector": {"matchLabels": {"app.kubernetes.io/name": f"fxa-gw-{n}"}}}], "ports": [{"port": 9440, "protocol": "TCP"}]}])
 
     def test_node_ports_are_distinct_and_in_the_reserved_block(self):
         ports = [by_kind(render.render(p))["Service"][1]["spec"]["ports"][0]["nodePort"] for p in PARTIES]
@@ -35,6 +45,7 @@ class Render(unittest.TestCase):
             self.assertEqual((addr["address"], addr["port_value"]), (want[p] + ".svc.cluster.local", 9440))
             ctx = token["transport_socket"]["typed_config"]
             self.assertEqual(ctx["sni"], addr["address"])
+            self.assertEqual(ctx["common_tls_context"]["tls_params"]["tls_maximum_protocol_version"], "TLSv1_3")  # token server refuses <= 1.2
             self.assertEqual(ctx["common_tls_context"]["validation_context"]["match_typed_subject_alt_names"][0]["matcher"]["exact"], addr["address"])
 
     def test_downstream_requires_a_client_cert_and_asks_opa_with_the_body(self):

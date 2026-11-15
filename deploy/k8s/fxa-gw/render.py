@@ -10,7 +10,8 @@ Objects: ConfigMaps fxa-gw-<N>-envoy and fxa-gw-<N>-opa (policy.rego + data.json
 Service fxa-gw-<N>-ext (NodePort 31460+N-1, eTP Cluster: the Lensa path, like fx-gw-<N>-ext), Deployment fxa-gw-<N>.
 NOT rendered (custody step, README): Secrets fxa-gw-<N>-server (tls.crt, tls.key; SAN fxa-gw-<N>), fxa-gw-<N>-client-ca (ca.crt that signs Lensa's client cert),
 fxa-gw-<N>-operator (tls.crt, tls.key: the party's operator identity for the token API) and fxa-gw-<N>-upstream-ca (ca.crt that signs the token pod's server cert).
-No NetworkPolicy: console-web and the FSC p2p ports use these pods too, and the namespaces have none today.
+NetworkPolicies (the namespaces run default-deny-all for Ingress and Egress): fxa-gw-<N> lets Lensa (172.24.0.0/16, Jakarta: host and rd-lensa pod) in on 8443
+and the gateway out to its own token pod on 9440 and to kube-dns; fxa-gw-<N>-to-token lets the gateway into the token pod on 9440. Allow-only, nothing else changes.
 """
 import argparse, json, os, sys
 import yaml
@@ -24,6 +25,7 @@ LABELS = {"app.kubernetes.io/part-of": "fabricx-token-gw"}
 SEC = {"allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True, "capabilities": {"drop": ["ALL"]}, "runAsNonRoot": True, "runAsUser": UID, "seccompProfile": {"type": "RuntimeDefault"}}  # PodSecurity restricted
 # the images fx-gw runs today (imageID of pod fx-gw-1), pinned by digest
 ENVOY_IMAGE = "envoyproxy/envoy:v1.38.9@sha256:b1f389c3a6148e85e9de364cb867aa2e5802153abb37ad80f1f2241d693da32a"
+LENSA_CIDR = "172.24.0.0/16"  # Jakarta VPC: the Lensa host (172.24.11.235) and pod rd-lensa; NodePort traffic keeps this source or the node IP, both inside
 OPA_IMAGE = "openpolicyagent/opa:1.21.1-envoy-1-static@sha256:c1f40d815a15c4ca0ccbdf300e0a3515fccf1d30fbd92e69917ab96bad83811d"
 
 
@@ -54,7 +56,7 @@ def envoy_config(party):
         "tls_certificates": [{"certificate_chain": {"filename": "/mtls/tls.crt"}, "private_key": {"filename": "/mtls/tls.key"}}],
         "validation_context": {"trusted_ca": {"filename": "/client-ca/ca.crt"}}})
     upstream = typed("transport_sockets.tls.v3.UpstreamTlsContext", sni=host, common_tls_context={
-        "tls_params": {"tls_minimum_protocol_version": "TLSv1_2"},
+        "tls_params": {"tls_minimum_protocol_version": "TLSv1_3", "tls_maximum_protocol_version": "TLSv1_3"},  # the token server accepts TLS 1.3 only
         "tls_certificates": [{"certificate_chain": {"filename": "/operator/tls.crt"}, "private_key": {"filename": "/operator/tls.key"}}],
         "validation_context": {"trusted_ca": {"filename": "/upstream-ca/ca.crt"},
                                "match_typed_subject_alt_names": [{"san_type": "DNS", "matcher": {"exact": host}}]}})
@@ -104,7 +106,18 @@ def render(party, envoy_image=ENVOY_IMAGE, opa_image=OPA_IMAGE):
             "volumes": [{"name": "config", "configMap": {"name": f"{name}-envoy"}}, {"name": "policy", "configMap": {"name": f"{name}-opa"}},
                         {"name": "mtls", **secret("server")}, {"name": "client-ca", **secret("client-ca")},
                         {"name": "operator", **secret("operator")}, {"name": "upstream-ca", **secret("upstream-ca")}]}}}}
-    return [cm_envoy, cm_opa, svc, ext, dep]
+    token = {"app": f"token-{ROLE[party]}-v2", "app.kubernetes.io/part-of": "fabricx-transfer-v2"}
+    tcp = lambda port: {"port": port, "protocol": "TCP"}
+    np_gw = {"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": meta(name), "spec": {
+        "podSelector": {"matchLabels": sel}, "policyTypes": ["Ingress", "Egress"],
+        "ingress": [{"from": [{"ipBlock": {"cidr": LENSA_CIDR}}], "ports": [tcp(8443)]}],
+        "egress": [{"to": [{"podSelector": {"matchLabels": token}}], "ports": [tcp(9440)]},
+                   {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}, "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}}}],
+                    "ports": [{"port": 53, "protocol": "UDP"}, tcp(53)]}]}}
+    np_token = {"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": meta(f"{name}-to-token"), "spec": {
+        "podSelector": {"matchLabels": token}, "policyTypes": ["Ingress"],
+        "ingress": [{"from": [{"podSelector": {"matchLabels": sel}}], "ports": [tcp(9440)]}]}}
+    return [cm_envoy, cm_opa, svc, ext, dep, np_gw, np_token]
 
 
 def main():
