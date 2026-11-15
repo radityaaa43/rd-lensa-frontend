@@ -94,6 +94,8 @@ describe('driverClient APS', () => {
     await expect(f.client.apsIntent('A', { intent: INTENT, asset: 'rd', to: 'B', amount: 1n })).rejects.toThrow(/409.*intent exists with other terms|intent exists with other terms.*409/);
     f = await fleet(() => ({ status: 502, json: { error: 'insufficient' } }));
     await expect(f.client.apsSubmit('A', pay)).rejects.toThrow('Rantai menolak: insufficient');
+    f = await fleet(() => ({ status: 502, json: { error: 'no terminal receipt on all nodes: [finalized, pending, finalized, finalized]' } }));
+    await expect(f.client.apsSubmit('A', pay)).rejects.toThrow(/Status belum pasti.*jangan diulang/);
   });
 
   it('an unreachable driver fails with the party named (same as the other routes)', async () => {
