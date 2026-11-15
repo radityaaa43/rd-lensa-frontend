@@ -65,7 +65,7 @@ export function validateRequest(req: FlowRequest): { ok: true; amount: bigint } 
   if (!/^\d+$/.test(a)) return fail('Nominal harus angka bulat');
   const amount = BigInt(a);
   if (amount < 1n) return fail('Nominal harus lebih dari 0');
-  if (amount > MAX_AMOUNT) return fail('Nominal melebihi batas 1.000.000.000.000.000');
+  if (amount > MAX_AMOUNT) return fail('Nominal melebihi batas 10^15 (1 kuadriliun)');
   if (dfabiIssueToBi(req)) {
     if (req.from !== 'BI') return fail('Penerbitan hanya dijalankan BI');
     if (req.to !== 'BI') return fail('Penerbitan DFABI hanya ke persediaan BI; penjualan ke bank lewat penjualan perdana (award)');

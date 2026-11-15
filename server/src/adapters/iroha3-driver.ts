@@ -76,6 +76,8 @@ export function driverClient(c: DriverConfig): DriverClient {
       if (res.status !== 200) {
         console.error(`[iroha3] driver ${party} ${path} HTTP ${res.status}: ${sanitize(json.error ?? text)}`);
         if (path.startsWith('/aps/') && (res.status === 403 || res.status === 409)) throw new Error(`Driver iroha ${party} menolak (kode ${res.status}): ${sanitize(json.error)}`); // 403: intent does not match; 409: same intent, other terms
+        // the driver saw no terminal receipt on every node (e.g. one peer down): the chain may well have applied it, so this is not a refusal
+        if (path === '/aps/submit' && res.status === 502 && /no terminal receipt/i.test(String(json.error))) throw new Error(`Status belum pasti: driver iroha ${party} tidak mendapat receipt akhir dari semua node (${sanitize(json.error)}). Dana mungkin sudah berpindah; jangan diulang, periksa saldo.`);
         throw new Error(res.status === 502 ? `Rantai menolak: ${sanitize(json.error)}` : `Driver iroha ${party} menolak (kode ${res.status})`);
       }
       return json;
