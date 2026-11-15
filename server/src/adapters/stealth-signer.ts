@@ -25,7 +25,9 @@ const HEALTH_MS = 3000;
 const TX_MS = 120_000;
 const MAX_CANCEL_TRIES = 3; // a failing refund is retried at the next ticks this many times, then left alone until a restart
 const REFUND_WINDOW_S = 600; // besu: the stored refund certificate is valid until expiry + 600 s
-const NO_BALANCE = 'Saldo di satu alamat stealth tidak cukup';
+const hashesOf = (r: { txHash: string; txHashes?: string[] }): string[] => (r.txHashes?.length ? r.txHashes : [r.txHash]); // an older signer answers txHash only
+// RD may come from several of the bank's own addresses (besu signer, 2026-11-15): short only when the bank's total RD is short. A DFABI tranche is still one address.
+const NO_BALANCE = 'Saldo tidak cukup (RD: total semua alamat bank; DFABI: satu alamat stealth harus mencukupi)';
 const UNSUPPORTED = 'Uji beban stealth hanya berjalan di host (kunci ada di signer), tidak di pod';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const lc = (s: string) => s.toLowerCase();
@@ -210,6 +212,7 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { s
     try {
       const kind: 'rd' | 'bond' = flow.asset === 'RD' && !flow.dvp ? 'rd' : 'bond';
       let txHash: string, block: number, from: string | null = null;
+      let txs: string[] = []; // the payments of a non-dvp run; a dvp has its single settle tx
 
       if (flow.dvp) {
         const seller = req.from, buyer = req.to, price = amount * PRICE_PER_UNIT;
@@ -238,8 +241,8 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { s
           escrowed = { escrow: e.escrow, seller: offer.seller, bondAmount: amount.toString(), expiry: e.expiry };
           const l1 = await call<{ from: string; txHash: string }>(seller, 'POST', '/intent', { kind: 'dvp-leg', leg: 'bond', from: seller, amount: amount.toString(), escrow: e.escrow, source: offer.seller });
           await chain.waitReceipt(seller, l1.txHash);
-          const l2 = await call<{ txHash: string }>(buyer, 'POST', '/intent', { kind: 'dvp-leg', leg: 'rd', from: buyer, amount: price.toString(), escrow: e.escrow, source: bid.buyer });
-          await chain.waitReceipt(buyer, l2.txHash);
+          const l2 = await call<{ txHash: string; txHashes?: string[] }>(buyer, 'POST', '/intent', { kind: 'dvp-leg', leg: 'rd', from: buyer, amount: price.toString(), escrow: e.escrow, source: bid.buyer });
+          for (const h of hashesOf(l2)) await chain.waitReceipt(buyer, h); // an RD leg may be k payments from k own addresses: every one must land before the settle
           from = l1.from;
           return e;
         });
@@ -252,15 +255,16 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { s
         txHash = st.hash; block = st.rc.block;
       } else {
         const to = await step(0, () => meta(req.to));
-        const out = await step(1, () => call<{ from: string; txHash: string }>(req.from, 'POST', '/intent', {
+        const out = await step(1, () => call<{ from: string; txHash: string; txHashes?: string[] }>(req.from, 'POST', '/intent', {
           kind: flow.issuer ? (kind === 'rd' ? 'rd-mint' : 'bond-issue') : (kind === 'rd' ? 'rd-transfer' : 'bond-transfer'),
           from: req.from, to: { metaAddress: to.metaAddress }, amount: amount.toString(),
         }));
-        const rc = await step(2, () => chain.waitReceipt(req.from, out.txHash));
-        txHash = out.txHash; block = rc.block; from = out.from;
+        // every payment of the run (k >= 1, from different own addresses, no order between them): all must land; the run's hash is the last one
+        const rcs = await step(2, () => Promise.all(hashesOf(out).map((h) => chain.waitReceipt(req.from, h))));
+        txs = hashesOf(out); txHash = out.txHash; block = Math.max(...rcs.map((r) => r.block)); from = out.from;
       }
       // The tx has settled: a record that cannot be saved is logged, never the run's failure (live: EPERM on the state volume reported a landed tx as an error).
-      if (!flow.issuer) { record.sent[lc(txHash)] = { from: req.from, to: req.to, block, flow: req.flow }; try { deps.save(); } catch (w) { console.error('[stealth] sent record not saved:', w); } }
+      if (!flow.issuer) { for (const h of txs.length ? txs : [txHash]) record.sent[lc(h)] = { from: req.from, to: req.to, block, flow: req.flow }; try { deps.save(); } catch (w) { console.error('[stealth] sent record not saved:', w); } }
 
       // BI reads it back from its own ledger: the bank that got the leg, the amount, and (a dvp) the RD leg to the seller. An award's RD leg goes to BI itself: BI's own receipts show it.
       // The tx has settled: whatever BI's ledger says, the run does not fail on it. A missing or conflicting row is reported as reportPending, like a BI report that is still pending.
@@ -268,7 +272,10 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { s
         try {
           const price = amount * PRICE_PER_UNIT;
           // an issue to BI's own inventory has no bank row in BI's ledger: BI's own receipts show it (as the RD leg of an award does)
-          const first = req.to === 'BI' ? (await rowsOf('BI', true)).find((r) => r.txHash === txHash && r.kind === kind)?.amount : (await ledgerLeg(kind, txHash, req.to, true))?.amount;
+          // k payments make k rows: their sum is the amount (undefined while any row is missing)
+          const one = async (h: string) => req.to === 'BI' ? (await rowsOf('BI', true)).find((r) => r.txHash === h && r.kind === kind)?.amount : (await ledgerLeg(kind, h, req.to, true))?.amount;
+          const parts = await Promise.all((txs.length ? txs : [txHash]).map(one));
+          const first = parts.some((x) => x === undefined) ? undefined : parts.reduce((t, x) => t + BigInt(x!), 0n).toString();
           const legs: [string | undefined, bigint][] = [[first, amount]];
           if (flow.dvp && !award) legs.push([(await ledgerLeg('rd', txHash, req.from, true))?.amount, price]);
           if (award) legs.push([(await rowsOf('BI', true)).find((r) => r.txHash === txHash && r.kind === 'rd')?.amount, price]); // an award's RD leg goes to BI itself

@@ -32,7 +32,7 @@ interface LRow { bank: string; amount: string; sender: string | null; tx: string
 class World {
   block = 100; n = 0; addr = 0;
   calls: string[] = []; failSettle = false; ledgerEmpty = false;
-  legacy = false; cancelFail = false; // legacy = an older signer: no partition, no blockNumber, no contracts
+  split = false; legacy = false; cancelFail = false; // legacy = an older signer: no partition, no blockNumber, no contracts
   pubAnns: PublicAnn[] = []; annCalls: [number, number][] = [];
   hold: Record<PartyId, H[]> = { BI: [], A: [], B: [], C: [] };
   hist: Record<PartyId, Row[]> = { BI: [], A: [], B: [], C: [] };
@@ -86,6 +86,11 @@ function signer(w: World, p: PartyId): Server {
         if (b.kind === 'rd-mint' || b.kind === 'bond-issue') { w.pay(meta(b.to.metaAddress), b.kind === 'rd-mint' ? 'rd' : 'bond', amount, 'BI', hash); return send(200, { kind: b.kind, from: IDENT.BI, txHash: hash, rawTx: '0x' }); }
         if (b.kind === 'rd-transfer' || b.kind === 'bond-transfer') {
           const kind = b.kind === 'rd-transfer' ? 'rd' : 'bond', src = w.take(p, kind, amount);
+          if (w.split && kind === 'rd') { // k = 2 payments from one bank's own addresses: the first half, then the rest, two hashes, the last one is txHash
+            const first = amount / 2n, h1 = w.tx(), h2 = w.tx();
+            src.amount -= amount; w.pay(meta(b.to.metaAddress), 'rd', first, p, h1); w.pay(meta(b.to.metaAddress), 'rd', amount - first, p, h2);
+            return send(200, { kind: b.kind, from: src.stealthAddress, txHash: h2, txHashes: [h1, h2], rawTx: '0x' });
+          }
           src.amount -= amount; w.pay(meta(b.to.metaAddress), kind, amount, p, hash);
           return send(200, { kind: b.kind, from: src.stealthAddress, txHash: hash, rawTx: '0x' });
         }
@@ -271,6 +276,18 @@ describe('keyless adapter, scenario against fake signers', () => {
     expect([...blocks].sort((x, y) => y - x)).toEqual(blocks);
     expect((await adapter.history('BI', 2)).length).toBe(2);
     await expect(adapter.history('BI', 0)).rejects.toThrow(/limit/);
+  });
+
+  it('an RD transfer that the signer split over k addresses: every hash is awaited and recorded, the ledger rows are summed, no reportPending', async () => {
+    world.seed('A', 'rd', 50n);
+    world.split = true;
+    try {
+      const r = await adapter.run(req('rd-transfer', 'A', 'C', '10'), 10n, noop);
+      const mine = Object.entries(record.sent).filter(([, v]) => v.to === 'C' && v.flow === 'rd-transfer' && v.block === r.block);
+      expect(mine).toHaveLength(2); // both payments are in the sent record
+      expect(mine.map(([h]) => h)).toContain(r.txHash.toLowerCase()); // the run's hash is the last one
+      expect(r.reportPending).toBeUndefined(); // 5 + 5 = 10 in BI's ledger
+    } finally { world.split = false; }
   });
 
   it('a failed settle after the escrow exists is recorded (refund tracking) and the error is reported', async () => {
