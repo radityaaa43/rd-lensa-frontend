@@ -165,6 +165,13 @@ describe('fabricx-adapter (token v2)', () => {
     expect(t.gate.size).toBe(0);
   });
 
+  it('award: settle buyer_cannot_fund (RD split over tokens, none >= price) names the cause and the fix', async () => {
+    const t = fakeTokenV2(); t.bal.A.RupiahDigital = 1_000_000_000n;
+    const call: Call = (p, m, path, b) => path === '/test/dvp-settle' ? Promise.resolve({ status: 409, body: { error: 'buyer_cannot_fund' } }) : t.call(p, m, path, b);
+    const a = createFabricxTokenAdapter(call, fast);
+    await expect(a.run(req('award', 'BI', 'A', '1'), 1n, () => {})).rejects.toThrow(/terpecah.*Terbitkan 1\.000\.000\.000 RD/);
+  });
+
   it('award: BI needs no SBN stock (the v2 settle mints the SBN to the buyer)', async () => {
     const t = fakeTokenV2(); const a = createFabricxTokenAdapter(t.call, fast);
     t.bal.A.RupiahDigital = 1_000_000_000n; t.bal.BI.SBN = 0n;
