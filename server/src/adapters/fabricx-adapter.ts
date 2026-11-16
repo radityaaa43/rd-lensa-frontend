@@ -44,11 +44,12 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 interface Entry { transactionId: string; timestamp: string; asset: string; units: string; direction: string; counterparty: string; status: string; auditStatus?: string }
 // A grouped history view of one transaction (history.go writes one row per token movement, so a DvP shows two rows per side): rdUnits = the RD payment leg of an award.
 type Tx = Entry & { rdUnits?: string };
-export interface FxaOpts { waitMs?: number; pollMs?: number; lockWaitMs?: number }
+export interface FxaOpts { waitMs?: number; pollMs?: number; lockWaitMs?: number; historyTtlMs?: number }
 
 export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): ModelAdapter {
   const WAIT_MS = opts.waitMs ?? 45_000;
   const POLL_MS = opts.pollMs ?? 1_000;
+  const HISTORY_TTL_MS = opts.historyTtlMs ?? 10_000;
   const LENS_WAIT_MS = Math.min(WAIT_MS, 5_000); // run() already waited for the receiver: a lens read only confirms what is there
   const LOCKED_MS = WAIT_MS * 2 + 30_000; // longest held-lock span: an award polls twice (offer read, finality) plus gate calls
   const LOCK_WAIT_MS = opts.lockWaitMs ?? LOCKED_MS; // like fabricx.ts: a party's queue is bounded, and the bound is part of txDeadlineMs
@@ -109,7 +110,19 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
     return tx;
   }
 
-  async function entries(party: PartyId): Promise<Entry[]> {
+  // BI's /test/history takes ~5.5 s on the node (token-issuer-v2 makes ~27 sequential ledger calls per read), the banks' ~30 ms. Reads share
+  // one in-flight request per party and reuse its answer for HISTORY_TTL_MS; run() drops the cache, a findEntry miss re-reads fresh.
+  // ponytail: a tx written by another client (console-web) can stay unseen for up to HISTORY_TTL_MS; fix at the source = token v2 history.go.
+  const cache = new Map<PartyId, { at: number; p: Promise<Entry[]> }>();
+  function entries(party: PartyId, fresh = false): Promise<Entry[]> {
+    const c = cache.get(party);
+    if (!fresh && c && Date.now() - c.at < HISTORY_TTL_MS) return c.p;
+    const hit = { at: Infinity, p: readEntries(party) }; // Infinity while in flight: concurrent reads join it
+    cache.set(party, hit);
+    hit.p.then(() => { hit.at = Date.now(); }, () => { if (cache.get(party) === hit) cache.delete(party); });
+    return hit.p;
+  }
+  async function readEntries(party: PartyId): Promise<Entry[]> {
     const r = await call(party, 'GET', '/test/history');
     if (r.status !== 200) fail(`Riwayat ${party}`, r);
     const list = obj(r.body).transactions;
@@ -198,8 +211,8 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
   };
   async function findEntry(party: PartyId, tx: string, wait = WAIT_MS): Promise<Tx | undefined> {
     const until = Date.now() + wait;
-    for (;;) {
-      const e = txs(party, await entries(party)).find((x) => x.transactionId === tx);
+    for (let fresh = false; ; fresh = true) {
+      const e = txs(party, await entries(party, fresh)).find((x) => x.transactionId === tx);
       if (e || Date.now() >= until) return e;
       await sleep(POLL_MS);
     }
@@ -258,6 +271,7 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
         return tx;
       }));
       const t3 = Date.now();
+      cache.clear(); // balances and history moved: no cached read may hide this tx
       await findEntry(req.flow === 'award' ? 'A' : req.to, txHash); // the receiver's own read has the tx before lens() asks
       emit(3, Date.now() - t3);
       return { txHash, block: 0, steps, context: { flow: req.flow } };

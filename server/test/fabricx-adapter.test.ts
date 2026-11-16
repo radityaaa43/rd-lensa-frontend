@@ -85,6 +85,17 @@ describe('fabricx-adapter (token v2)', () => {
     expect(await a.balanceOf('C', 'DFABI')).toBe(4n);
   });
 
+  it('history: reads share one in-flight request and reuse it within the TTL; run() drops the cache', async () => {
+    const t = fakeTokenV2(); t.bal.A.SBN = 9n; const a = createFabricxTokenAdapter(t.call, fast);
+    const reads = () => t.log.filter((l) => l === 'A GET /test/history').length;
+    await Promise.all([a.history('A', 50), a.history('A', 50)]);
+    await a.history('A', 50);
+    expect(reads()).toBe(1);
+    const r = await a.run(req('dfabi-transfer', 'A', 'C', '4'), 4n, () => {});
+    expect((await a.history('A', 50)).map((x) => x.id)).toContain(r.txHash); // fresh after the write, not the cached list
+    expect(reads()).toBe(2);
+  });
+
   it('closes the gate and reports the code when the ledger rejects', async () => {
     const t = fakeTokenV2({ reject: true }); const a = createFabricxTokenAdapter(t.call, fast);
     await expect(a.run(req('rd-issue', 'BI', 'A'), 5n, () => {})).rejects.toThrow(/MVCC/);
