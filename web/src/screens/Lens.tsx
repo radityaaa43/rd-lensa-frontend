@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { HISTORY_MAX } from '../../../server/src/adapter.ts';
-import { FLOWS, PLATFORM_OF, type FlowRequest, type ModelId, type PartyId } from '../../../server/src/domain.ts';
+import { COMPLETE_HISTORY_MODELS, FLOWS, PLATFORM_OF, type FlowRequest, type ModelId, type PartyId } from '../../../server/src/domain.ts';
 import { getHistory, type HistoryPage, type Meta } from '../api.ts';
 import type { Route } from '../app/route.ts';
 import { usePoll } from '../app/usePoll.ts';
@@ -28,8 +28,11 @@ export function columnsFromRun(req: FlowRequest, r: TxResult): LensCol[] {
 
 // A tx from Riwayat or a deep link: each party's own history. A party without the tx is "absent" only when its list
 // reaches back to the tx block (ARCHITECTURE.md §3.3); otherwise it is "out" of range and absence is never claimed.
-export function columnsFromHistory(tx: string, reads: Record<PartyId, Read>): LensCol[] {
+// complete: the model's history is a party's whole wallet history (COMPLETE_HISTORY_MODELS), so an untruncated list without the tx is
+// "absent" as soon as another party holds the tx, even without block numbers.
+export function columnsFromHistory(tx: string, reads: Record<PartyId, Read>, complete = false): LensCol[] {
   const txBlock = ORDER.map((p) => reads[p].data?.items.find((i) => i.id === tx)?.block).find((b) => b != null) ?? null;
+  const held = ORDER.some((p) => reads[p].data?.items.some((i) => i.id === tx));
   return ORDER.map((party): LensCol => {
     const r = reads[party];
     if (r.error !== null) return { party, kind: 'error', reason: r.error, notAvailable: r.status === 501 };
@@ -39,7 +42,8 @@ export function columnsFromHistory(tx: string, reads: Record<PartyId, Read>): Le
     if (r.data.pending.includes(tx)) return { party, kind: 'pending' }; // held back by this party's node: never claim absence
     const blocks = r.data.items.map((i) => i.block).filter((b): b is number => b !== null);
     const oldest = blocks.length ? Math.min(...blocks) : null;
-    return { party, kind: txBlock !== null && oldest !== null && oldest <= txBlock ? 'absent' : 'out' };
+    const inRange = (complete && held && !r.data.truncated) || (txBlock !== null && oldest !== null && oldest <= txBlock);
+    return { party, kind: inRange ? 'absent' : 'out' };
   });
 }
 
@@ -47,7 +51,7 @@ function FromHistory({ meta, model, tx, active }: { meta: Meta; model: ModelId; 
   const read = (p: PartyId) => usePoll(`${model}|${p}|lensa`, () => getHistory(model, p, HISTORY_MAX));
   const reads = { BI: read('BI'), A: read('A'), B: read('B'), C: read('C') }; // fixed order: four hooks every render
   const rechecked = useRef(new Set<PartyId>());
-  const cols = columnsFromHistory(tx, reads).map((c) => (c.kind === 'pending' && rechecked.current.has(c.party) ? { ...c, rechecked: true } : c));
+  const cols = columnsFromHistory(tx, reads, COMPLETE_HISTORY_MODELS.includes(model)).map((c) => (c.kind === 'pending' && rechecked.current.has(c.party) ? { ...c, rechecked: true } : c));
   // a pending column gets ONE automatic recheck after 10 s (v1.3); this component is keyed by model|tx, so "once" resets per tx
   const pendingParties = cols.filter((c) => c.kind === 'pending').map((c) => c.party).join(',');
   useEffect(() => {

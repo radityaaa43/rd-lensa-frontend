@@ -49,6 +49,14 @@ test('if no party lists the tx, no column claims absence', () => {
   expect(cols.every((c) => c.kind === 'out')).toBe(true);
 });
 
+test('complete history without blocks (token v2): an untruncated list without the tx is absent, a truncated one stays out', () => {
+  const nb = (id: string) => item(id, 0, { block: null });
+  const reads = { BI: page([nb('0xA')]), A: page([nb('0xT'), nb('0xA')]), B: page([]), C: page([nb('0xB')], true) };
+  expect(columnsFromHistory('0xT', reads).map((c) => c.kind)).toEqual(['out', 'view', 'out', 'out']); // other models: never claim absence without blocks
+  expect(columnsFromHistory('0xT', reads, true).map((c) => c.kind)).toEqual(['absent', 'view', 'absent', 'out']);
+  expect(columnsFromHistory('0xZ', reads, true).every((c) => c.kind === 'out')).toBe(true); // nobody holds it: no claim
+});
+
 test('loading and errors are per party; 501 is marked not available', () => {
   const cols = columnsFromHistory('0xT', {
     BI: { data: undefined, error: null }, A: { data: undefined, error: 'node mati', status: 502 },
