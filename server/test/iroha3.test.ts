@@ -360,6 +360,61 @@ describe('iroha3 private shared pools (APS, every flow)', () => {
     expect((h[0] as { fee?: string }).fee).toBe('1');
   });
 
+  // Pool index v2 (iroha3-rd-dfabi#95): up to four pools, each entry {lane, asset, ...PoolRecord}; a bundle can sit in two pools with the same height.
+  const biHeights = async (poolsJson: unknown, ids: string[]) => {
+    writeFileSync(join(dir, 'pools.json'), JSON.stringify(poolsJson));
+    const records = ids.map((id) => ({ bundle_id: id, leg: 0, verdict: 'approved', payer: 'w-A', recipient: 'w-B', asset: 'RD-ID', amount: '5' }));
+    const a = createIroha3Adapter(sharedState, fake().cli, undefined, driver().run);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify(records))) as typeof fetch;
+    try { return (await a.history('BI', 10)).map((x) => [x.id, x.block]); } finally { globalThis.fetch = realFetch; }
+  };
+  const X1 = '11'.repeat(32), X2 = '22'.repeat(32), X3 = '33'.repeat(32), X4 = '44'.repeat(32);
+
+  it('pool heights come from every pool (v2 file)', async () => {
+    const pool = (lane: number, asset: string, bundles: { id: string; height: number }[]) => ({ lane, asset, pool_id: `p${lane}${asset}`, route: 'r', policy: 'x', governance: 'g', origin: [], bundles });
+    const rows = await biHeights({ version: 2, pools: [
+      pool(1, 'rd', [{ id: X1, height: 12 }, { id: X4, height: 0 }]), pool(1, 'dfabi', [{ id: X2, height: 13 }]),
+      pool(2, 'rd', [{ id: X1, height: 12 }, { id: X3, height: 14 }]), pool(2, 'dfabi', []),
+    ], carriers: { [X1]: 'c1', [X2]: 'c2', [X3]: 'c3' } }, [X1, X2, X3, X4]);
+    expect(rows).toEqual([[X3, 14], [X2, 13], [X1, 12]]); // X4 is in flight (height 0); X1 sits in two pools and shows once
+  });
+
+  it('legacy pools.json still yields heights', async () => {
+    const rows = await biHeights({ rd: { bundles: [{ id: X1, height: 12 }, { id: X4, height: 0 }] }, dfabi: { bundles: [{ id: X2, height: 13 }] }, carriers: {} }, [X1, X2, X4]);
+    expect(rows).toEqual([[X2, 13], [X1, 12]]);
+  });
+
+  it('a pools.json that is unreadable or of an unknown shape yields no heights, not a crash', async () => {
+    expect(await biHeights({ version: 3 }, [X1])).toEqual([]);
+    writeFileSync(join(dir, 'pools.json'), 'not json');
+    const a = createIroha3Adapter(sharedState, fake().cli, undefined, driver().run);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response('[]')) as typeof fetch;
+    try { expect(await a.history('BI', 10)).toEqual([]); } finally { globalThis.fetch = realFetch; }
+  });
+
+  it('outsider lens names no asset: pools read "Pool 1 (ds-1)" / "Pool 2 (ds-2)"', async () => {
+    const a = createIroha3Adapter(sharedState, fake().cli, undefined, driver({
+      'bank-a': wallet('bank-a', '699', '0', [{ bundle_id: BUNDLE, height: 50, asset: 'rd', direction: 'out', amount: '300' }]),
+    }).run);
+    const rq = req('rd-transfer', 'A', 'B', '300');
+    const res = await a.run(rq, 300n, () => {});
+    const outsider = await a.lens(rq, res, 'C');
+    const pools = outsider.onChain.filter((x) => x.label.startsWith('Pool'));
+    expect(pools.map((x) => [x.label, x.value])).toEqual([['Pool 1 (ds-1)', 'p1'], ['Pool 2 (ds-2)', 'p2']]);
+    expect(JSON.stringify(outsider)).not.toMatch(/\b(RD|DFABI)\b|ds-rd|ds-dfabi/i);
+  });
+
+  it('history: the fee "1" shows when the leg-0 payer paid it in DFABI', async () => {
+    const id = 'f1'.repeat(32);
+    const items = [{ bundle_id: id, height: 80, asset: 'dfabi', direction: 'out', amount: '1', fee: '1' }, { bundle_id: id, height: 80, asset: 'rd', direction: 'in', amount: '5', fee: '0' }];
+    const a = createIroha3Adapter(sharedState, fake().cli, undefined, driver({ 'bank-a': wallet('bank-a', '5', '0', items) }).run);
+    const h = await a.history('A', 10);
+    expect(h).toHaveLength(1);
+    expect((h[0] as { fee?: string }).fee).toBe('1');
+  });
+
   it('history: a bank lists its own movements from the chain, BI every finalized bundle from its audit records', async () => {
     writeFileSync(join(dir, 'pools.json'), JSON.stringify({ rd: { bundles: [{ id: BUNDLE, height: 50 }, { id: 'aa'.repeat(32), height: 0 }] }, dfabi: { bundles: [] } }));
     const items = [{ bundle_id: BUNDLE, height: 50, asset: 'rd', direction: 'out', amount: '300' }];
