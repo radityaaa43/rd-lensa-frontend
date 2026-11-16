@@ -128,6 +128,11 @@ class Render(unittest.TestCase):
         ctx = main["typed_per_filter_config"]["envoy.filters.http.ext_authz"]["check_settings"]["context_extensions"]
         self.assertEqual(ctx, {"node": "node3", "target": "fabricx-adapter"})
 
+    def test_bank_c_stays_on_the_node_lensa_names(self):
+        spec = lambda p: by_kind(render.render(p))["Deployment"][0]["spec"]["template"]["spec"]
+        self.assertEqual(spec("bank-c")["nodeSelector"], {"kubernetes.io/hostname": "core-06225-node"})
+        self.assertNotIn("nodeSelector", spec("bank-a"))
+
 
 if __name__ == "__main__":
     unittest.main()

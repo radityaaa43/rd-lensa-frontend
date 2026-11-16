@@ -40,6 +40,10 @@ SINK_IMAGE = "python:3.12-alpine@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d
 OPA_TOOLS_IMAGE = "openpolicyagent/opa:1.21.1-static-debug@sha256:d01f4f2c4affb9c2cee511b2654ac949509747af439cc695307c245857c3f96f"  # static /opa + cp
 KEYID = {"bi": "bi", "bank-a": "bank-a", "bank-b": "bank-b", "bank-c": "bank-c"}  # the key a party's sink signs with (Lensa publish.ts keyIds)
 OWN_BUNDLES = {"bi": "bi,bank", "bank-a": "bank", "bank-b": "bank", "bank-c": "bank"}  # BI's sink signs bi and node 1's bank (seed bank-bi)
+# Lensa reaches bank-c (SG cluster) by NodePort, and a NodePort answers only on the node that runs the pod (eTP Cluster does not forward on
+# this cluster); Lensa's egress and LENSA_FXA_GW_C name 172.28.6.225, so fxa-gw-4 stays on that node.
+# ponytail: one fixed node; a LoadBalancer/ingress for bank-c removes the pin.
+NODE_PIN = {"bank-c": "core-06225-node"}
 STORAGE_CLASS = "fabricx-essd"  # the class every fabricx-* namespace already uses (both clusters)
 
 
@@ -150,6 +154,7 @@ def render(party, envoy_image=ENVOY_IMAGE, opa_image=OPA_IMAGE, sink_image=SINK_
         "strategy": {"type": "Recreate"},  # the bundle store is a ReadWriteOnce disk: the old pod lets go before the new one mounts it
         "template": {"metadata": {"labels": {**LABELS, **sel}}, "spec": {
             "automountServiceAccountToken": False,
+            **({"nodeSelector": {"kubernetes.io/hostname": NODE_PIN[party]}} if party in NODE_PIN else {}),
             "securityContext": {"fsGroup": UID, "fsGroupChangePolicy": "OnRootMismatch"},  # the sink (uid 10001) writes the bundle store
             "initContainers": [{"name": "opa-tool", "image": OPA_TOOLS_IMAGE, "command": ["cp", "/opa", "/tools/opa"], "securityContext": SEC,
                                 "resources": {"requests": {"cpu": "10m", "memory": "16Mi"}, "limits": {"memory": "64Mi"}},
