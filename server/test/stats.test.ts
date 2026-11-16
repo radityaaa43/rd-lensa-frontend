@@ -72,7 +72,15 @@ test('batchSummary: per party and total', () => {
   const b = batchSummary(recs, 0, 5000, ['BI', 'A', 'C']);
   expect(b.parties.BI).toMatchObject({ ok: 2, failed: 0, durationMs: 4000, tps: 0.5, p50Ms: 2000, maxMs: 4000 });
   expect(b.parties.A).toMatchObject({ ok: 1, failed: 1, durationMs: 3000, maxMs: 1000 });
-  expect(b.parties.C).toEqual({ ok: 0, failed: 0, tps: 0, p50Ms: 0, p95Ms: 0, maxMs: 0, durationMs: 0 });
+  expect(b.parties.C).toEqual({ ok: 0, failed: 0, tps: 0, p50Ms: 0, p95Ms: 0, maxMs: 0, svcP50Ms: 0, svcP95Ms: 0, durationMs: 0 });
   expect(b.total).toMatchObject({ ok: 3, failed: 1, durationMs: 4000, tps: 0.75 });
   expect(batchSummary([], 1000, 6000, ['BI']).total.durationMs).toBe(5000);
+});
+
+test('batchSummary: service latency counts from submit, not from the request (queue left out)', () => {
+  // asked at 0, queued behind a lock until 3000 / 6000, final 1000 ms after each submit
+  const recs = [rec('BI', 0, 3000, 4000, true, 'A'), rec('BI', 0, 6000, 7000, true, 'A')];
+  const b = batchSummary(recs, 0, 8000, ['BI']);
+  expect(b.parties.BI).toMatchObject({ p50Ms: 4000, p95Ms: 7000, svcP50Ms: 1000, svcP95Ms: 1000 });
+  expect(b.total).toMatchObject({ svcP50Ms: 1000, svcP95Ms: 1000 });
 });

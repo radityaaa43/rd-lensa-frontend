@@ -94,7 +94,7 @@ export function batchRows(m: ModelSnapshot, names: Partial<Record<PartyId, strin
     if (why !== undefined) return { party, label, cells: [`Tidak ikut: ${why}`] };
     const r = b?.byParty[party];
     const sent = String(b?.sent[party] ?? 0);
-    return { party, label, cells: r ? [sent, String(r.ok), String(r.failed), formatDecimal(r.tps, 2), sec(r.p50Ms), sec(r.p95Ms), sec(r.maxMs)] : [sent, '—', '—', '—', '—', '—', '—'] };
+    return { party, label, cells: r ? [sent, String(r.ok), String(r.failed), formatDecimal(r.tps, 2), sec(r.p50Ms), sec(r.p95Ms), sec(r.maxMs), sec(r.svcP50Ms), sec(r.svcP95Ms)] : [sent, ...Array<string>(8).fill('—')] };
   });
 }
 

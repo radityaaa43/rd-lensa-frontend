@@ -7,7 +7,7 @@ import { LOAD_LABEL, STOP_TEXT, WARMUP_S, batchRows, batchStatus, bestRows, conc
 
 const sec = (ms: number) => `${formatDecimal(ms / 1000, 2)} s`;
 
-const BATCH_HEAD = ['Pihak', 'Terkirim', 'OK', 'Gagal', 'TPS', 'p50', 'p95', 'Maks'];
+const BATCH_HEAD = ['Pihak', 'Terkirim', 'OK', 'Gagal', 'TPS', 'p50', 'p95', 'Maks', 'p50 layanan', 'p95 layanan'];
 
 // batch: totals and one row per party; renders live too (the snapshot ticks every second)
 function BatchResults({ meta, snap, models }: { meta: Meta; snap: StressSnapshot; models: ModelId[] }) {
@@ -15,15 +15,15 @@ function BatchResults({ meta, snap, models }: { meta: Meta; snap: StressSnapshot
   return (
     <section className="card" aria-label="Hasil">
       <div className="result-head">
-        <div><h2>Hasil</h2><p>BI dan ketiga bank mengirim transaksinya sekaligus; angka per pihak dan gabungan.</p></div>
+        <div><h2>Hasil</h2><p>BI dan ketiga bank mengirim transaksinya sekaligus; angka per pihak dan gabungan. TPS = transaksi final dibagi waktu dari awal run sampai hasil terakhir. p50/p95/Maks dihitung sejak transaksi diminta sampai final, termasuk antre di Lensa; p50/p95 layanan dihitung sejak transaksi benar-benar dikirim ke node sampai final.</p></div>
         {snap.state !== 'running' && <a className="ghost" href={CSV_URL} download style={{ textDecoration: 'none', color: 'inherit' }}>Unduh hasil (CSV)</a>}
       </div>
       {models.map((model) => {
         const m = snap.models[model]!, t = m.batch!.total;
-        const tiles: [string, string][] = [['Total waktu', `${formatDecimal(t.durationMs / 1000, 1)} s`], ['TPS gabungan', formatDecimal(t.tps, 2)], ['p95 gabungan', sec(t.p95Ms)], ['Gagal', String(t.failed)]];
+        const tiles: [string, string][] = [['Total waktu', `${formatDecimal(t.durationMs / 1000, 1)} s`], ['TPS gabungan', formatDecimal(t.tps, 2)], ['p95 gabungan', sec(t.p95Ms)], ['p95 layanan', sec(t.svcP95Ms)], ['Gagal', String(t.failed)]];
         return (
           <div key={model}>
-            <div className="kpis" style={{ gridTemplateColumns: 'repeat(4,1fr)', padding: '12px 20px' }}>
+            <div className="kpis" style={{ gridTemplateColumns: 'repeat(5,1fr)', padding: '12px 20px' }}>
               {tiles.map(([k, v]) => <div key={k}>{k}<b>{v}</b></div>)}
             </div>
             <div className="tablewrap">

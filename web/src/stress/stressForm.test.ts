@@ -123,12 +123,12 @@ test('batchBody has no stageS and a rate only when sending at a rate', () => {
 });
 
 test('batchRows: BI, A, B, C in order; a skipped party reads "Tidak ikut"; times in seconds', () => {
-  const pb = (ok: number, failed: number) => ({ ok, failed, tps: 1.234, p50Ms: 2500, p95Ms: 9876, maxMs: 12000, durationMs: 40000 });
+  const pb = (ok: number, failed: number) => ({ ok, failed, tps: 1.234, p50Ms: 2500, p95Ms: 9876, maxMs: 12000, svcP50Ms: 1500, svcP95Ms: 2250, durationMs: 40000 });
   const m = { load: 'batch', batch: { parties: ['A', 'B', 'C'], skipped: { BI: 'x' }, sent: { A: 50, B: 50, C: 49 }, byParty: { A: pb(48, 2), B: pb(50, 0), C: pb(49, 0) } } };
   const rows = batchRows(m as never);
   expect(rows.map((r) => [r.party, r.label])).toEqual([['BI', 'BI'], ['A', 'Bank A'], ['B', 'Bank B'], ['C', 'Bank C']]);
   expect(rows[0].cells).toEqual(['Tidak ikut: x']);
-  expect(rows[1].cells).toEqual(['50', '48', '2', '1,23', '2,50 s', '9,88 s', '12,00 s']);
+  expect(rows[1].cells).toEqual(['50', '48', '2', '1,23', '2,50 s', '9,88 s', '12,00 s', '1,50 s', '2,25 s']);
   expect(batchRows(m as never, { A: 'Bank Alfa' })[1].label).toBe('Bank Alfa');
 });
 
