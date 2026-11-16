@@ -533,19 +533,24 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall, opts: { pod?: bool
         node: null,
       };
     },
-    // The load users of a bank share the bank's account, so its balance is split between them.
-    async loadCapacity(users) {
-      const balances = await Promise.all(BANKS.map((b) => balanceOf(b, 'RD')));
+    // The load users of a party share the party's account, so its balance is split between them.
+    async loadCapacity(users, parties = BANKS) {
+      const balances = await Promise.all(parties.map((p) => balanceOf(p, 'RD')));
       return Math.floor(Number(balances.reduce((m, x) => (x < m ? x : m)) / LOAD_AMOUNT) / users);
     },
-    async prepareLoad(users, units) {
+    async prepareLoad(users, units, parties = BANKS) {
       const need = BigInt(users * units) * LOAD_AMOUNT;
-      for (const b of BANKS) {
-        const have = await balanceOf(b, 'RD');
-        if (have < need) await issue(b, 'RD', need - have);
+      for (const p of parties) {
+        const have = await balanceOf(p, 'RD');
+        if (have >= need) continue;
+        // RD is issued to a bank only (bi.platform.fabricx issue: bank(to); driver serve.go the same): BI sends the RD it holds (award proceeds)
+        if (p === 'BI') throw new Error(`Saldo RD BI kurang untuk uji beban: perlu ${need}, punya ${have}; BI tidak menerbitkan RD untuk dirinya sendiri, RD BI berasal dari award`);
+        await issue(p, 'RD', need - have);
       }
     },
     loadCirculates: true,
+    // BI sends from the issuer node's owner wallet (topology.go WithDefaultOwnerIdentity); bi.platform.fabricx transfer needs from = own node, to another node
+    loadParties: ['BI', 'A', 'B', 'C'],
     loadMode: 'latency',
     loadLimit: 'Satu wallet per node FSC, jadi satu pengirim per bank',
     maxLoadUsers: 1, // one wallet per FSC node: a bank has one sender (tahap 2: more wallets per node)

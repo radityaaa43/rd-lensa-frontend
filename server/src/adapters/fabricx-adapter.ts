@@ -335,6 +335,8 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
     loadCirculates: true,
     maxLoadUsers: 1, // one wallet per token node
     loadMode: 'latency',
+    // fxa-gw policy.rego: /test/transfer for role owner only, and BI is the issuer (render.py ROLE)
+    biReason: 'BI di token v2 adalah node penerbit tanpa dompet pemilik: RD hanya diterbitkan dari BI ke bank dan /test/transfer hanya untuk pemilik, jadi BI tidak dapat mengirim maupun menerima RD beban',
     loadLimit: 'Satu wallet per node token, jadi satu pengirim per bank. Konfirmasi = final di ledger; panggilan gate aset (buka/tutup) dihitung terpisah sebagai overhead gateway',    async transferForLoad({ bank: from }: LoadUser, { bank: to }: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
       return exclusive([from], () => {
         const t0 = Date.now(); // after the lock: the wait for it is queue time, not gateway

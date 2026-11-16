@@ -49,6 +49,8 @@ const HEALTH_MS = 2000;
 const ESCROW_TTL = 600n; // seconds; the escrow is settled right away, the window only has to outlast the run
 const NO_BALANCE = 'Saldo di satu alamat stealth tidak cukup';
 const NO_BI_KEY = 'BI belum punya kunci penerima stealth';
+// Batch stress: why BI does not send load here or in the signer path (besu/opa bi.platform.stealth: rd-transfer bank(own) and bank(to), rd-mint to a bank only).
+export const BI_LOAD_REASON = 'Kebijakan BI di gateway stealth hanya mengizinkan rd-transfer dari bank ke bank lain dan rd-mint ke bank, jadi BI tidak dapat mengirim, menerima, maupun mencetak RD beban untuk dirinya sendiri';
 // History window (ARCHITECTURE.md §2.3). Measured 2026-11-02 against the live Besu: block time 2.0 s, head 1,965,520, a 1000-block
 // eth_getLogs page takes 5-15 ms and the announcer holds about 7 announcements per 1000 blocks. 100,000 blocks is about 2.3 days of
 // chain, 100 pages per token (about 1-2 s cold, incremental after) and about 700 announcements to scan per bank. Transactions older
@@ -641,11 +643,13 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
       }
     },
     loadCirculates: true,
+    biReason: BI_LOAD_REASON,
     // No lock queue here: the pooled address is the slot, and the 120 s deadline (confirm) starts at submit.
     // The recipient bank derives the key of the address it was paid at (its own view + spend key, as a real receiver would), so
     // the payment goes back into the pool and can be spent again.
     async transferForLoad(fromU: LoadUser, toU: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
-      const from = fromU.bank as BankId, to = toU.bank as BankId; // BI does not send here yet
+      const from = fromU.bank, to = toU.bank;
+      if (from === 'BI' || to === 'BI') throw new Error(BI_LOAD_REASON); // no loadParties: the engine never picks BI
       if (amount > LOAD_AMOUNT) throw new Error('Nominal beban melebihi isi alamat stealth');
       const entry = unusedOf(from)[0];
       if (!entry) throw new Error('Alamat stealth beban habis, jalankan prepareLoad');

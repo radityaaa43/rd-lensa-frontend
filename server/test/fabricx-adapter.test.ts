@@ -162,6 +162,12 @@ describe('fabricx-adapter (token v2)', () => {
     expect(a.maxLoadUsers).toBe(1);
   });
 
+  it('batch stress: BI does not send (issuer node, no owner wallet), with the reason', () => {
+    const a = createFabricxTokenAdapter(fakeTokenV2().call, fast);
+    expect(a.loadParties).toBeUndefined();
+    expect(a.biReason).toMatch(/penerbit/);
+  });
+
   it('load() is null until all four gateway URLs are set', async () => {
     expect(await load()).toBeNull();
     for (const p of ['BI', 'A', 'B', 'C']) vi.stubEnv(`LENSA_FXA_GW_${p}`, 'http://127.0.0.1:1');
