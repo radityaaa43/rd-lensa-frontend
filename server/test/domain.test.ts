@@ -59,6 +59,12 @@ test('fabricx keeps dfabi-issue BI -> bank', () => {
 test.each([{ amount: '' }, { amount: '0' }, { amount: '12a' }, { amount: '1000000000000001' }, { to: 'A' }] as Partial<FlowRequest>[])('reason of %o is not redacted on the public host', (o) => {
   const r = validateRequest(t(o)); expect(r.ok).toBe(false); expect(hasInternal((r as { reason: string }).reason)).toBe(false);
 });
+test('the public scrub still catches IPs, not id-ID amounts of a billion and more', () => {
+  for (const ip of ['10.0.0.1', '172.24.16.29:31460', '47.236.100.234', '255.255.255.255', 'gw 192.168.1.10 down']) expect(hasInternal(ip), ip).toBe(true);
+  for (const amount of ['dibayar Rp 1.000.000.000', '1.001.001.703 RD', 'punya 4.035.999.999', 'Rp 10.002.015.971.920']) expect(hasInternal(amount), amount).toBe(false);
+  expect(validateRequest(t({ model: 'fabricx-adapter', flow: 'award', from: 'BI', to: 'B', amount: '1' })).ok).toBe(false);
+  expect(hasInternal((validateRequest(t({ model: 'fabricx-adapter', flow: 'award', from: 'BI', to: 'B', amount: '1' })) as { reason: string }).reason)).toBe(false);
+});
 test('accepts and parses', () => expect(validateRequest(t({ amount: '1000000000' }))).toEqual({ ok: true, amount: 1_000_000_000n }));
 test.each([
   ['A', { from: 'A', to: 'B' }, false, 'sender'],
