@@ -47,6 +47,20 @@ export function stageSummary(recs: Rec[], t0: number, start: number, end: number
   };
 }
 
+// One party's slice of a batch run, or all parties together. durationMs: t0 -> its last result; tps = ok / duration.
+export interface PartyBatch { ok: number; failed: number; tps: number; p50Ms: number; p95Ms: number; maxMs: number; durationMs: number }
+
+// Batch mode: every party sent its transfers at once at t0. Latency (issued -> done) counts successes only.
+export function batchSummary(recs: Rec[], t0: number, end: number, parties: PartyId[]): { total: PartyBatch; parties: Partial<Record<PartyId, PartyBatch>> } {
+  const slice = (rs: Rec[], noneMs: number): PartyBatch => {
+    const ok = rs.filter((r) => r.ok);
+    const lat = sortNum(ok.map((r) => r.doneAt - r.issuedAt));
+    const durationMs = rs.length ? Math.max(...rs.map((r) => r.doneAt)) - t0 : noneMs;
+    return { ok: ok.length, failed: rs.length - ok.length, tps: durationMs ? ok.length / (durationMs / 1000) : 0, p50Ms: pct(lat, 0.5), p95Ms: pct(lat, 0.95), maxMs: lat.at(-1) ?? 0, durationMs };
+  };
+  return { total: slice(recs, end - t0), parties: Object.fromEntries(parties.map((p) => [p, slice(recs.filter((r) => r.bank === p), 0)])) };
+}
+
 // Confirmed transfers per second since t0, for the live chart.
 export function perSecond(recs: Rec[], t0: number, now: number): number[] {
   const out: number[] = new Array(Math.max(0, Math.floor((now - t0) / 1000)) + 1).fill(0);

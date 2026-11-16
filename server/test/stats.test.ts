@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { CSV_HEAD, perSecond, stageSummary, toCsv, type Rec } from '../src/stats.ts';
+import { batchSummary, CSV_HEAD, perSecond, stageSummary, toCsv, type Rec } from '../src/stats.ts';
 
 const rec = (bank: Rec['bank'], issuedAt: number, submittedAt: number, doneAt: number, ok = true, to: Rec['to'] = bank === 'A' ? 'B' : 'A', toUser = `${to}0`): Rec =>
   ({ bank, to, toUser, issuedAt, submittedAt, doneAt, ok });
@@ -65,4 +65,14 @@ test('csv ends with ok_BI,recv_BI', () => {
   const [head, row] = toCsv([{ model: 'Zeto', stages: [s], stop: 'x' }]).split('\n');
   expect(row.split(',')).toHaveLength(head.split(',').length);
   expect(row.endsWith(',1,0')).toBe(true);
+});
+
+test('batchSummary: per party and total', () => {
+  const recs = [rec('BI', 0, 0, 2000, true, 'A'), rec('BI', 0, 0, 4000, true, 'A'), rec('A', 0, 0, 1000, true, 'B'), rec('A', 0, 0, 3000, false, 'B')];
+  const b = batchSummary(recs, 0, 5000, ['BI', 'A', 'C']);
+  expect(b.parties.BI).toMatchObject({ ok: 2, failed: 0, durationMs: 4000, tps: 0.5, p50Ms: 2000, maxMs: 4000 });
+  expect(b.parties.A).toMatchObject({ ok: 1, failed: 1, durationMs: 3000, maxMs: 1000 });
+  expect(b.parties.C).toEqual({ ok: 0, failed: 0, tps: 0, p50Ms: 0, p95Ms: 0, maxMs: 0, durationMs: 0 });
+  expect(b.total).toMatchObject({ ok: 3, failed: 1, durationMs: 4000, tps: 0.75 });
+  expect(batchSummary([], 1000, 6000, ['BI']).total.durationMs).toBe(5000);
 });
