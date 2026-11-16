@@ -27,7 +27,7 @@ function BatchResults({ meta, snap, models }: { meta: Meta; snap: StressSnapshot
               {tiles.map(([k, v]) => <div key={k}>{k}<b>{v}</b></div>)}
             </div>
             <div className="tablewrap">
-              <table className="res" aria-label={`Batch ${meta.models[model].name}`}>
+              <table className="res tight" aria-label={`Batch ${meta.models[model].name}`}>
                 <caption style={{ textAlign: 'left', fontWeight: 600, padding: '8px 20px' }}>
                   {meta.models[model].name} · {batchStatus(m)}{m.unfinished ? ` · ${m.unfinished} transaksi belum selesai saat ditutup` : ''}
                   {m.limit && <small style={{ display: 'block', fontWeight: 400, color: 'var(--muted)' }}>Batas: {m.limit}.</small>}
@@ -37,7 +37,7 @@ function BatchResults({ meta, snap, models }: { meta: Meta; snap: StressSnapshot
                   {batchRows(m, names).map((r) => (
                     <tr key={r.party}>
                       <td>{r.label}</td>
-                      {r.cells.length === 1 ? <td colSpan={BATCH_HEAD.length - 1} style={{ textAlign: 'left', color: 'var(--muted)' }}>{r.cells[0]}</td> : r.cells.map((c, i) => <td key={i}>{c}</td>)}
+                      {r.cells.length === 1 ? <td colSpan={BATCH_HEAD.length - 1} style={{ textAlign: 'left', color: 'var(--muted)', whiteSpace: 'normal' }}>{r.cells[0]}</td> : r.cells.map((c, i) => <td key={i}>{c}</td>)}
                     </tr>
                   ))}
                 </tbody>
