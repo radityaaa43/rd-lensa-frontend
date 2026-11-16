@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { CANCELLED, LOAD_AMOUNT, type LoadUser, type ModelAdapter } from './adapter.ts';
 import { BANKS, MODEL_NAMES, type BankId, type ModelId, type PartyId } from './domain.ts';
 import { withDeadline } from './deadline.ts';
-import { perSecond, stageSummary, type Rec, type StageSummary } from './stats.ts';
+import { batchSummary, perSecond, stageSummary, type PartyBatch, type Rec, type StageSummary } from './stats.ts';
 
 // Stress test as a ramp of closed-loop virtual users (VUs). A VU is one sender of a bank (its own identity where the platform
 // has them) sending from that bank's own node, one transfer at a time, to a random VU of another bank. Every stage adds VUs
@@ -30,11 +30,13 @@ export type Stage = StageSummary & { complete: boolean }; // complete: ran its f
 export interface ModelSnapshot {
   status: ModelRunStatus; reason?: string; stop?: StopReason; firstError?: string; elapsedS: number;
   plan: number[]; // users per bank, one entry per stage (open loop: offered transfers per second per bank)
-  load: 'capacity' | 'latency' | 'open'; limit?: string; // how to read the numbers: a knee, a one-in-flight latency sample, or an open-loop offered rate; limit = the bottleneck / why
+  load: 'capacity' | 'latency' | 'open' | 'batch'; limit?: string; // how to read the numbers: a knee, a one-in-flight latency sample, an open-loop offered rate, or a batch; limit = the bottleneck / why
   stages: Stage[]; // finished stages, then the running one so far
   ok: number; failed: number; unfinished: number; // whole run; unfinished = still in flight when the run gave up waiting
   best: number; // bestStage(): the sustainable maximum; -1 = none
   series: number[]; // confirmations per second
+  // batch only: who sends (skipped = left out and why), transfers sent per party (cancelled ones not counted), results in total and per party
+  batch?: { count: number; pace: 'serial' | 'rate'; rate?: number; limitMin: number; parties: PartyId[]; skipped: Partial<Record<PartyId, string>>; sent: Partial<Record<PartyId, number>>; total: PartyBatch; byParty: Partial<Record<PartyId, PartyBatch>> };
 }
 export interface StressSnapshot {
   state: 'running' | 'done' | 'stopped'; config: StressConfig;
@@ -97,6 +99,7 @@ interface ModelState {
   t0?: number; endedAt?: number; plan: number[]; recs: Rec[]; stages: Stage[]; unfinished: number;
   current?: { start: number; users: number; offered: number };
   load: ModelSnapshot['load']; limit?: string; drops: number[]; // drops: when an open-loop arrival was not sent
+  batch?: Omit<NonNullable<ModelSnapshot['batch']>, 'total' | 'byParty'>;
 }
 
 const key = (u: LoadUser) => `${u.bank}${u.i}`;
@@ -135,11 +138,13 @@ export class StressRun extends EventEmitter {
         ? [...s.stages, { ...this.summ(s, s.current.start, end, s.current.users, s.current.offered), complete: false }]
         : s.stages;
       const ok = s.recs.filter((r) => r.ok).length;
+      const b = s.batch && batchSummary(s.recs, s.t0!, end, s.batch.parties);
       models[m] = {
         status: s.status, reason: s.reason, stop: s.stop, firstError: s.firstError,
         elapsedS: s.t0 === undefined ? 0 : Math.floor((end - s.t0) / 1000),
-        load: s.load, ...(s.limit ? { limit: s.limit } : {}), plan: s.plan, stages, ok, failed: s.recs.length - ok, unfinished: s.unfinished, best: bestStage(stages),
+        load: s.load, ...(s.limit ? { limit: s.limit } : {}), plan: s.plan, stages, ok, failed: s.recs.length - ok, unfinished: s.unfinished, best: s.batch ? -1 : bestStage(stages),
         series: s.t0 === undefined ? [] : perSecond(s.recs, s.t0, end),
+        ...(b ? { batch: { ...s.batch!, total: b.total, byParty: b.parties } } : {}),
       };
     }
     return { state: this.state, config: this.cfg, models };
@@ -159,6 +164,7 @@ export class StressRun extends EventEmitter {
   }
 
   private summ(st: ModelState, start: number, end: number, users: number, offered: number): StageSummary {
+    if (st.batch) return stageSummary(st.recs, st.t0!, start, end, 0, users, users * st.batch.parties.length); // no warm-up: every transfer counts
     const dropped = st.drops.filter((t) => t >= start + WARMUP_S * 1000 && t <= end).length;
     return stageSummary(st.recs, st.t0!, start, end, WARMUP_S * 1000, users, users * BANKS.length, { offered, dropped });
   }
@@ -177,21 +183,22 @@ export class StressRun extends EventEmitter {
     const adapter = this.adapters[m];
     const skip = (reason: string) => { st.status = 'skipped'; st.reason = reason; };
     if (!adapter) return skip(`${MODEL_NAMES[m]} belum tersedia`);
-    const open = this.cfg.mode === 'open';
-    st.load = open ? 'open' : (adapter.loadMode ?? 'capacity') === 'latency' ? 'latency' : 'capacity';
+    const open = this.cfg.mode === 'open', batch = this.cfg.mode === 'batch';
+    st.load = batch ? 'batch' : open ? 'open' : (adapter.loadMode ?? 'capacity') === 'latency' ? 'latency' : 'capacity';
     if (adapter.loadLimit) st.limit = adapter.loadLimit;
     if (adapter.loadMode === 'none') return skip(adapter.loadLimit ?? 'Uji beban belum didukung');
     if (this.deadline - this.clock.now() <= 0) return skip('Batas waktu satu run habis');
-    const users = effectiveUsers(this.cfg.users, adapter);
+    const users = batch ? batchUsers(this.cfg, adapter) : effectiveUsers(this.cfg.users, adapter);
     let units0: number;
     try {
       const health = await withDeadline(adapter.health(), HEALTH_MS, 'Cek kesiapan');
       if (!health.ready) return skip(health.detail);
-      units0 = await withDeadline(adapter.loadCapacity(users), HEALTH_MS, 'Cek kapasitas');
+      units0 = await withDeadline(batch ? adapter.loadCapacity(users, senders(adapter)) : adapter.loadCapacity(users), HEALTH_MS, 'Cek kapasitas');
     } catch (e) {
       return skip(e instanceof Error ? e.message : String(e));
     }
     if (units0 < 1) return skip('Saldo user beban belum siap, jalankan preflight --prepare');
+    if (batch) return this.runBatch(st, adapter, users, units0);
 
     const now = () => this.clock.now();
     st.plan = open ? RATES.filter((r) => r <= this.cfg.rate!) : stagePlan(this.cfg.users, adapter.maxLoadUsers);
@@ -306,6 +313,102 @@ export class StressRun extends EventEmitter {
 
     // wait for in-flight calls at most DRAIN_MS; they count in the totals, not in any stage
     await Promise.race([Promise.all([...workers, ...sent]), this.sleep(DRAIN_MS)]);
+    clearTimeout(limitTimer);
+    closed = true;
+    st.unfinished = inflight;
+    st.endedAt = now();
+    st.status = st.stop === 'stopped' ? 'stopped' : 'done';
+  }
+
+  // Batch: every sender party starts at t0 and sends exactly `count` transfers, one after another (serial) or on a schedule of
+  // `rate` per second (rate; round-robin over its pool, never dropped: a busy pool queues in the adapter, latency counts from the
+  // scheduled time). One stage, no warm-up. Ends when every transfer has a result, or on errors / stalled / stopped / funds, or
+  // after modelLimitMin ('limit', this model only: the next one still runs).
+  private async runBatch(st: ModelState, adapter: ModelAdapter, users: number, units0: number): Promise<void> {
+    const now = () => this.clock.now();
+    const count = this.cfg.count!, rate = this.cfg.pace === 'rate' ? this.cfg.rate! : undefined;
+    const limitMin = this.cfg.modelLimitMin ?? BATCH_DEFAULT.modelLimitMin;
+    const parties = senders(adapter);
+    const sent: Partial<Record<PartyId, number>> = Object.fromEntries(parties.map((p) => [p, 0]));
+    st.plan = [users];
+    st.status = 'running';
+    const t0 = st.t0 = now();
+    st.batch = { count, pace: rate ? 'rate' : 'serial', ...(rate ? { rate } : {}), limitMin, parties, skipped: parties.includes('BI') ? {} : { BI: adapter.biReason ?? 'Tidak didukung model ini' }, sent };
+    st.current = { start: t0, users, offered: 0 };
+    const pools = Object.fromEntries(parties.map((p) => [p, Array.from({ length: users }, (_, i): LoadUser => ({ bank: p, i }))])) as Record<PartyId, LoadUser[]>;
+    const units = new Map<string, number>();
+    for (const p of parties) for (const u of pools[p]) units.set(key(u), units0);
+    const running = new Set(parties); // parties still sending
+    let inflight = 0, failed = 0, lastProgress = t0, ended = false, closed = false;
+    const signal = this.signal = { aborted: this.stopped };
+    let endWith!: (r: StopReason) => void;
+    const endP = new Promise<void>((resolve) => {
+      endWith = (r) => { st.stop ??= r; ended = true; signal.aborted = true; resolve(); };
+    });
+    void this.stopP.then(() => endWith('stopped'));
+
+    // another sending party, each equally likely, then any of its users
+    const pickTo = (u: LoadUser): LoadUser => {
+      const others = parties.filter((p) => p !== u.bank);
+      return { bank: others[Math.floor(this.rand() * others.length)], i: Math.floor(this.rand() * users) };
+    };
+    // As send() in runModel: funds booked before, given back when cancelled (and then not counted as sent).
+    const send = async (u: LoadUser, to: LoadUser, issuedAt: number) => {
+      const k = key(u);
+      units.set(k, units.get(k)! - 1);
+      sent[u.bank]!++;
+      inflight++;
+      try {
+        const s = await withDeadline(adapter.transferForLoad(u, to, LOAD_AMOUNT, signal), OUTER_GUARD_MS, 'Transaksi');
+        if (!closed) st.recs.push({ bank: u.bank, to: to.bank, toUser: key(to), issuedAt, submittedAt: s.submittedAt, doneAt: now() - (s.reportMs ?? 0), ok: true, ...(s.reportMs !== undefined ? { reportMs: s.reportMs } : {}), ...(s.overheadMs !== undefined ? { overheadMs: s.overheadMs } : {}) });
+        if (adapter.loadCirculates) units.set(key(to), units.get(key(to))! + 1);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg === CANCELLED) { units.set(k, units.get(k)! + 1); if (!closed) sent[u.bank]!--; } // after close it stays in unfinished
+        else if (!closed) { st.recs.push({ bank: u.bank, to: to.bank, toUser: key(to), issuedAt, submittedAt: issuedAt, doneAt: now(), ok: false }); failed++; st.firstError ??= msg; }
+      } finally { inflight--; lastProgress = now(); }
+      if (!closed && st.recs.length >= 10 && failed / st.recs.length > MAX_FAIL) endWith('errors');
+      if (!closed) this.tick();
+    };
+    // index of a pool user with funds, from `from` round-robin; waits while a transfer can still bring funds back, -1 once the run ended
+    const funded = async (pool: LoadUser[], from: number): Promise<number> => {
+      while (!ended) {
+        for (let j = 0; j < pool.length; j++) { const i = (from + j) % pool.length; if (units.get(key(pool[i]))! >= 1) return i; }
+        if (inflight === 0 && [...running].every((p) => pools[p].every((u) => units.get(key(u))! < 1))) endWith(failed / st.recs.length > MAX_FAIL ? 'errors' : 'funds');
+        else await Promise.race([this.sleep(IDLE_MS), endP]);
+      }
+      return -1;
+    };
+    const sends: Promise<void>[] = [];
+    const party = async (p: PartyId) => {
+      let rr = 0;
+      for (let n = 0; n < count && !ended; n++) {
+        const at = rate ? t0 + (n * 1000) / rate : now();
+        if (at > now()) await Promise.race([this.sleep(at - now()), endP]);
+        const i = await funded(pools[p], rr);
+        if (i < 0) break;
+        rr = (i + 1) % users;
+        const s = send(pools[p][i], pickTo(pools[p][i]), at);
+        if (rate) sends.push(s); else await s;
+      }
+      running.delete(p);
+    };
+
+    void (async () => { // stall watchdog
+      while (!ended) {
+        await this.sleep(1000);
+        if (!ended && inflight > 0 && now() - lastProgress > STALL_MS) endWith('stalled');
+      }
+    })();
+    const limitTimer = setTimeout(() => endWith('limit'), limitMin * 60_000);
+    const loops = parties.map(party);
+    await Promise.race([Promise.all(loops).then(() => Promise.all(sends)), endP]);
+    endWith('done'); // keeps an earlier reason
+    st.stages.push({ ...this.summ(st, t0, now(), users, 0), complete: st.stop === 'done' });
+    st.current = undefined;
+
+    // wait for in-flight calls at most DRAIN_MS; they count in the totals, not in the stage
+    await Promise.race([Promise.all([...loops, ...sends]), this.sleep(DRAIN_MS)]);
     clearTimeout(limitTimer);
     closed = true;
     st.unfinished = inflight;
