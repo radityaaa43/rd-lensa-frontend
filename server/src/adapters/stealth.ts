@@ -645,7 +645,7 @@ export function createStealthAdapter(state: StealthState, rpcUrl = gwUrl(process
     // The recipient bank derives the key of the address it was paid at (its own view + spend key, as a real receiver would), so
     // the payment goes back into the pool and can be spent again.
     async transferForLoad(fromU: LoadUser, toU: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
-      const from = fromU.bank, to = toU.bank;
+      const from = fromU.bank as BankId, to = toU.bank as BankId; // BI does not send here yet
       if (amount > LOAD_AMOUNT) throw new Error('Nominal beban melebihi isi alamat stealth');
       const entry = unusedOf(from)[0];
       if (!entry) throw new Error('Alamat stealth beban habis, jalankan prepareLoad');

@@ -20,7 +20,7 @@ test('stage summary: warm-up excluded, e2e vs service latency, per bank', () => 
   expect(s.p50Ms).toBe(2000);
   expect(s.p95Ms).toBe(4000);
   expect(s.svcP95Ms).toBe(2000);
-  expect(s.byBank).toEqual({ A: { ok: 1, failed: 0, received: 1 }, B: { ok: 1, failed: 0, received: 1 }, C: { ok: 0, failed: 1, received: 0 } });
+  expect(s.byBank).toEqual({ BI: { ok: 0, failed: 0, received: 0 }, A: { ok: 1, failed: 0, received: 1 }, B: { ok: 1, failed: 0, received: 1 }, C: { ok: 0, failed: 1, received: 0 } });
   expect(s.recipients).toBe(2);
 });
 
@@ -38,8 +38,8 @@ test('csv: one row per stage, stop reason on the last', () => {
   const lines = toCsv([{ model: 'Zeto', stages: [s, s], stop: 'saturated' }]).split('\n');
   expect(lines[0]).toBe(CSV_HEAD);
   expect(lines).toHaveLength(3);
-  expect(lines[1].endsWith(',,0.00,0,2.00,2.00,1800.00,0.00,0.00')).toBe(true); // no stop, no mode; closed loop: offered 0, dropped 0; one in flight = 1800 tx/h at 2 s
-  expect(lines[2]).toBe('Zeto,2,1,3,0.50,2.00,2.00,2.00,2.00,1,0,0.00,2.0,1,0,0,0,1,0,1,saturated,,0.00,0,2.00,2.00,1800.00,0.00,0.00');
+  expect(lines[1].endsWith(',,0.00,0,2.00,2.00,1800.00,0.00,0.00,0,0')).toBe(true); // no stop, no mode; closed loop: offered 0, dropped 0; one in flight = 1800 tx/h at 2 s
+  expect(lines[2]).toBe('Zeto,2,1,3,0.50,2.00,2.00,2.00,2.00,1,0,0.00,2.0,1,0,0,0,1,0,1,saturated,,0.00,0,2.00,2.00,1800.00,0.00,0.00,0,0');
 });
 
 test('stage summary: min / max, one-in-flight rate, report and gateway overhead medians, open-loop offered and dropped', () => {
@@ -50,4 +50,19 @@ test('stage summary: min / max, one-in-flight rate, report and gateway overhead 
   expect(s.perHour).toBeCloseTo(3_600_000 / s.cycleMs);
   expect([s.reportP50Ms, s.overheadP50Ms]).toEqual([500, 100]);
   expect([s.offered, s.dropped]).toEqual([2, 4]);
+});
+
+test('byBank counts BI as sender and receiver', () => {
+  const s = stageSummary([rec('BI', 0, 0, 1000, true, 'A'), rec('B', 0, 0, 1000, true, 'BI')], 0, 0, 2000, 0, 1, 4);
+  expect(s.byBank.BI).toEqual({ ok: 1, failed: 0, received: 1 });
+  expect(s.byBank.A.received).toBe(1);
+  expect(s.byBank.B.ok).toBe(1);
+});
+
+test('csv ends with ok_BI,recv_BI', () => {
+  expect(CSV_HEAD.endsWith(',ok_BI,recv_BI')).toBe(true);
+  const s = stageSummary([rec('BI', 0, 0, 2000, true, 'A')], 0, 0, 3000, 1000, 1, 4);
+  const [head, row] = toCsv([{ model: 'Zeto', stages: [s], stop: 'x' }]).split('\n');
+  expect(row.split(',')).toHaveLength(head.split(',').length);
+  expect(row.endsWith(',1,0')).toBe(true);
 });

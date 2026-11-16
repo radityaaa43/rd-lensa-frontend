@@ -559,7 +559,7 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
         if (short <= 0) continue;
         const x = loadParty(u);
         for (const s of await exclusive(['BI'], () => mintUtxos(P.BI, zeto('RD', P.BI), x, short, LOAD_AMOUNT))) {
-          await reportTo(state.groups[u.bank], x, 'RD', address.RD, s.receipt);
+          await reportTo(state.groups[u.bank as BankId], x, 'RD', address.RD, s.receipt);
         }
         await bookKey(x.lookup); // minted just now, so the key exists
       }
@@ -580,7 +580,7 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
         const submittedAt = Date.now();
         const tx = await transfer(x, zeto('RD', x), loadParty(to), Number(amount));
         const confirmedAt = Date.now(); // finality = the chain receipt; the BI report (async, spec 7a.2) is timed apart so it does not inflate the settlement latency
-        await reportTo(state.groups[from.bank], x, 'RD', address.RD, tx.receipt);
+        await reportTo(state.groups[from.bank as BankId], x, 'RD', address.RD, tx.receipt);
         return { submittedAt, confirmedAt, reportMs: Date.now() - confirmedAt };
       }));
     },

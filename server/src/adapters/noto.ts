@@ -236,7 +236,7 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     const lookup = loadLookup(u);
     let x = loadUsers.get(lookup);
     if (!x) {
-      const b = bank(p, u.bank);
+      const b = bank(p, u.bank as BankId); // BI does not send here yet
       loadUsers.set(lookup, x = { name: lookup, node: b.node, client: b.client, verifier: b.client.getVerifiers(lookup)[0]! });
     }
     return x;

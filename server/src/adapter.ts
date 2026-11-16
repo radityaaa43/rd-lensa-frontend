@@ -75,9 +75,10 @@ export interface ModelAdapter {
   trace(tx: string, party: PartyId): Promise<Trace>;
   // Stress test (stress.ts). A load user is one sender of a bank, sending from that bank's own node.
   // loadCapacity: transfers of LOAD_AMOUNT each of `users` users per bank can make now (the minimum over the 3 x users users).
-  loadCapacity(users: number): Promise<number>;
-  // Tops every one of `users` users per bank up to `units` transfers.
-  prepareLoad(users: number, units: number): Promise<void>;
+  // parties: who sends load (default BANKS); BI sends only when the adapter lists it in loadParties.
+  loadCapacity(users: number, parties?: PartyId[]): Promise<number>;
+  // Tops every one of `users` users per sending party up to `units` transfers.
+  prepareLoad(users: number, units: number, parties?: PartyId[]): Promise<void>;
   // signal.aborted is checked after the adapter's own lock/slot is acquired and before anything is submitted: then it throws CANCELLED.
   // Sample.submittedAt is taken after that lock/slot: the orchestrator measures queue time itself.
   transferForLoad(from: LoadUser, to: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample>;
@@ -90,13 +91,16 @@ export interface ModelAdapter {
   // 'none': no load transfer yet; loadLimit says why.
   loadMode?: 'capacity' | 'latency' | 'none';
   loadLimit?: string;
+  // Parties that send load in batch mode; absent = BANKS. biReason: why BI does not (shown in the UI).
+  loadParties?: PartyId[];
+  biReason?: string;
 }
 
 // i: 0-based index of the user within its bank
-export interface LoadUser { bank: BankId; i: number }
+export interface LoadUser { bank: PartyId; i: number }
 // The Paladin node of each bank (node1 = BI) and the identity of a load user on it, e.g. stress-n2-00@node2.
 // besu/opa bank.ident compares identities by node part, so these pass the gateway like the bank's own identity.
-export const BANK_NODE: Record<BankId, number> = { A: 2, B: 3, C: 4 };
+export const BANK_NODE: Record<PartyId, number> = { BI: 1, A: 2, B: 3, C: 4 };
 export const loadLookup = (u: LoadUser) => `stress-n${BANK_NODE[u.bank]}-${String(u.i).padStart(2, '0')}@node${BANK_NODE[u.bank]}`;
 
 export const LOAD_AMOUNT = 1000n;
