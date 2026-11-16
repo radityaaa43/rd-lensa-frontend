@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { ModelId } from '../../../server/src/domain.ts';
 import { BATCH_COUNT_MAX as SERVER_COUNT_MAX, BATCH_DEFAULT as SERVER_DEFAULT, BATCH_LIMITS_MIN as SERVER_LIMITS, RATES as SERVER_RATES } from '../../../server/src/stress.ts';
 import type { Meta } from '../api.ts';
-import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, RATES, STOP_TEXT_BATCH, batchMaxMinutes, batchReady, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
+import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, RATES, STOP_TEXT_BATCH, batchBody, batchMaxMinutes, batchReady, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
 
 const row = (model: ModelId, tps: number, users = 4, p95Ms = 2000) => ({ model, stage: { tps, users, p95Ms } });
 
@@ -108,4 +108,10 @@ test('batchReady: a model capped at fewer senders needs the larger share; a bad 
   expect(batchReady(['noto'], { noto: 99 }, 0, 1)).toBe(false);
   expect(batchReady(['noto'], { noto: 999 }, BATCH_COUNT_MAX + 1, 1)).toBe(false);
   expect(batchReady(['noto'], { noto: 99 }, 1.5, 1)).toBe(false);
+});
+
+test('batchBody has no stageS and a rate only when sending at a rate', () => {
+  const f = { models: ['zeto'] as ModelId[], users: 8 as const, stageS: 60 as const, mode: 'batch' as const, count: 50, modelLimitMin: 15 as const, rate: 2 as const };
+  expect(batchBody({ ...f, pace: 'serial' })).toEqual({ models: ['zeto'], users: 1, mode: 'batch', count: 50, pace: 'serial', modelLimitMin: 15 });
+  expect(batchBody({ ...f, pace: 'rate' })).toEqual({ models: ['zeto'], users: 8, mode: 'batch', count: 50, pace: 'rate', modelLimitMin: 15, rate: 2 });
 });

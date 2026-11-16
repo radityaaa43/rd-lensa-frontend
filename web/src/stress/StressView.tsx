@@ -52,7 +52,7 @@ export function StressView({ meta, hidden, onRun }: { meta: Meta; hidden: boolea
     });
     return () => unwatch.current?.();
   }, [loadCapacity, follow]);
-  useEffect(() => () => { alive.current = false; }, []);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []); // set true again on mount: StrictMode runs mount, cleanup, mount
 
   // back on this tab: capacity may have moved while it was hidden
   useEffect(() => { if (!hidden && !running) void loadCapacity(); }, [hidden]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -81,6 +81,7 @@ export function StressView({ meta, hidden, onRun }: { meta: Meta; hidden: boolea
     let r: Awaited<ReturnType<typeof getPrepare>> = await prepareStress({ models: form.models, users, count: form.count });
     while (r.ok && r.body?.state === 'running' && alive.current) {
       await new Promise((res) => setTimeout(res, 2000));
+      if (!alive.current) return;
       r = await getPrepare();
       if (r.ok && !r.body) r = { ok: false, reason: 'Status siapkan saldo hilang' };
     }

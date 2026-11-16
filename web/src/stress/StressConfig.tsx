@@ -59,7 +59,7 @@ export function StressConfig(p: ConfigProps) {
         <h3><span className="n">3</span>Beban bertahap</h3>
         <label className="f" id="tmode-label">Cara kirim</label>
         <div className="seg" role="group" aria-labelledby="tmode-label">
-          <button aria-pressed={!open} disabled={locked} onClick={() => p.onChange({ mode: 'closed', rate: undefined, ...classic })}>User bergantian</button>
+          <button aria-pressed={!open && !batch} disabled={locked} onClick={() => p.onChange({ mode: 'closed', rate: undefined, ...classic })}>User bergantian</button>
           <button aria-pressed={open} disabled={locked || !canOpen} title={canOpen ? undefined : 'Hanya untuk platform yang benar-benar paralel (Kapasitas)'} onClick={() => p.onChange({ mode: 'open', rate: form.rate ?? 2, ...classic })}>Laju tetap</button>
           <button aria-pressed={batch} disabled={locked} onClick={() => p.onChange({ mode: 'batch', rate: undefined, ...BATCH_DEFAULT })}>Batch (4 pihak bersamaan)</button>
         </div>
