@@ -1,4 +1,4 @@
-import { FLOWS, PLATFORMS, PLATFORM_OF, type FlowId } from '../../../server/src/domain.ts';
+import { FLOWS, PLATFORMS, PLATFORM_OF, type FlowId, type PlatformId } from '../../../server/src/domain.ts';
 import type { Meta } from '../api.ts';
 import { AWARD_SCREEN } from '../demo/copy.ts';
 import { linkTo } from './useRoute.ts';
@@ -42,6 +42,9 @@ const TOOLS: Screen[] = ['lensa', 'kebijakan', 'laporan', 'tps'];
 const SWAP = 'M4 8h13l-3-3M20 16H7l3 3';
 const svg = (d: string) => <svg className="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={d} /></svg>;
 
+export const toolsFor = (route: ModelRoute, platform: PlatformId): Screen[] =>
+  TOOLS.filter((s) => !(s === 'laporan' && (platform === 'iroha3' || platform === 'fabricx-adapter')) && !(s === 'tps' && route.party !== 'BI'));
+
 // DESIGN.md §7.1 (Ref X2): logo, main group, muted "Alat" group, "Ganti platform" at the bottom.
 export function Sidebar({ meta, route }: { meta: Meta; route: ModelRoute }) {
   const platform = PLATFORM_OF[route.model];
@@ -66,7 +69,7 @@ export function Sidebar({ meta, route }: { meta: Meta; route: ModelRoute }) {
         <div className="navgroup">{MAIN.map(item)}</div>
         <div className="navgroup">
           <p className="grouplabel">Alat</p>
-          {TOOLS.filter((s) => !(s === 'laporan' && (platform === 'iroha3' || platform === 'fabricx-adapter'))).map(item)}
+          {toolsFor(route, platform).map(item)}
         </div>
       </nav>
       <div className="sidefoot">

@@ -19,7 +19,8 @@ export function parse(pathname: string, search: string): Route | null {
   const [screen = 'dasbor', tx, ...extra] = rest;
   if (!isScreen(screen) || extra.length || (tx !== undefined && screen !== 'lensa')) return null;
   const pihak = new URLSearchParams(search).get('pihak');
-  const r: Route = { page: 'model', model: model as ModelId, screen, party: isParty(pihak) ? pihak : 'BI' };
+  // the stress test is BI only
+  const r: Route = { page: 'model', model: model as ModelId, screen, party: screen !== 'tps' && isParty(pihak) ? pihak : 'BI' };
   return tx === undefined ? r : { ...r, tx };
 }
 
