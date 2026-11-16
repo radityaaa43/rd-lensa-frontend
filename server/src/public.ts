@@ -14,8 +14,13 @@ export function assertPublicEnv(env: Record<string, string | undefined>): void {
 
 // routes the public host never serves (the kubelet probes livez/readyz stay: the entry hides readyz)
 export const HIDDEN = /^\/api\/(?:policy|stress|preflight-capacity)(?:\/|$)/;
-// with LENSA_PUBLIC_TX nothing is hidden: the Kebijakan reads and the stress test (PoC, user decision 2026-11-16) are open. The only writes that pass: a transaction, a stress start / stop / prepare, and approve / republish (the freeze answers 403).
-export const TX_WRITES = /^\/api\/(?:tx|stress(?:\/(?:stop|prepare))?|policy\/(?:bi|bank-a|bank-b|bank-c)\/(?:approve|republish))$/;
+// with LENSA_PUBLIC_TX nothing is hidden: the Kebijakan reads and the stress test (PoC, user decision 2026-11-16) are open. The only writes that pass: a transaction, a stress start / stop / prepare, and the Kebijakan writes of PUBLIC_POLICY_MODELS (POLICY_WRITE).
+export const TX_WRITES = /^\/api\/(?:tx|stress(?:\/(?:stop|prepare))?|policy\/(?:bi|bank-a|bank-b|bank-c)\/(?:drafts|approve|reject|cancel|republish))$/;
+// Kebijakan writes on the public host: Fabric-X (token v2) only (user decision 2026-11-16, its own OPA and the only family outside the freeze);
+// every other platform stays read-only there. Checked on the parsed body (app.ts preHandler), so a write naming another model gets 403.
+export const POLICY_WRITE = /^\/api\/policy\/(?:bi|bank-a|bank-b|bank-c)\/(?:drafts|approve|reject|cancel|republish)$/;
+export const PUBLIC_POLICY_MODELS = ['fabricx-adapter'];
+export const PUBLIC_POLICY_ONLY = 'Di situs publik kebijakan hanya bisa diubah untuk Fabric-X (token v2)';
 
 // What must never reach a public client: IPs, URLs, cluster hosts, namespaces, node / gateway names.
 const PATTERNS: RegExp[] = [

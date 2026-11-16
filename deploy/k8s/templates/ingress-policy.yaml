@@ -1,0 +1,48 @@
+# Kebijakan writes on the public host (user decision 2026-11-16): the Fabric-X (token v2) documents only. The app answers 403 for any other platform
+# (server/src/public.ts POLICY_WRITE + PUBLIC_POLICY_MODELS); this Ingress opens exactly the 20 write paths (4 owners x drafts|approve|reject|cancel|republish),
+# Exact, with tx-like limits. Same host and TLS Secret as lensa-public, NO cert-manager annotation. Not part of the render without LENSA_PUBLIC_TX=1.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lensa-public-policy
+  namespace: rd-lensa
+  labels: {part-of: rd-lensa}
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "16k"
+    nginx.ingress.kubernetes.io/limit-rps: "1"
+    nginx.ingress.kubernetes.io/limit-connections: "2"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "3"
+    # an approve waits for the gateways to report the new bundle (up to the publisher's 180 s)
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "240"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "240"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [${HOST}]
+      secretName: lensa-public-tls
+  rules:
+    - host: ${HOST}
+      http:
+        paths:
+          - {path: /api/policy/bi/drafts, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bi/approve, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bi/reject, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bi/cancel, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bi/republish, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-a/drafts, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-a/approve, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-a/reject, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-a/cancel, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-a/republish, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-b/drafts, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-b/approve, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-b/reject, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-b/cancel, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-b/republish, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-c/drafts, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-c/approve, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-c/reject, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-c/cancel, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
+          - {path: /api/policy/bank-c/republish, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}

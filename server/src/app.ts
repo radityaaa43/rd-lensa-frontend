@@ -12,7 +12,7 @@ import { probeNodes, type Probe } from './health.ts';
 import { BATCH_COUNT_MAX, BATCH_LIMITS_MIN, HEALTH_MS, RATES, STAGE_S, StressRun, USERS, batchUsers, effectiveUsers, senders, validateStress, type StressConfig } from './stress.ts';
 import { toCsv } from './stats.ts';
 import { REGISTRY, familyOf, isPlatform } from './policy/platforms.ts';
-import { HIDDEN, SECURITY_HEADERS, TX_WRITES, corrId, generic, scrubPublic } from './public.ts';
+import { HIDDEN, POLICY_WRITE, PUBLIC_POLICY_MODELS, PUBLIC_POLICY_ONLY, SECURITY_HEADERS, TX_WRITES, corrId, generic, scrubPublic } from './public.ts';
 import { registerPolicyRoutes, registerPolicyUnavailable, type PolicyDeps } from './policy/routes.ts';
 
 type Adapters = Partial<Record<ModelId, ModelAdapter>>;
@@ -133,6 +133,12 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       const path = req.url.split('?')[0]!;
       if (req.method !== 'GET' && req.method !== 'HEAD' && !(opts.publicTx && req.method === 'POST' && TX_WRITES.test(path))) return reply.code(405).header('allow', 'GET, HEAD').send({ reason: 'Hanya baca (publik)' });
       if (!opts.publicTx && HIDDEN.test(path)) return reply.code(404).send({ reason: 'Tidak ditemukan' });
+    });
+    // the body is parsed only after onRequest: a public Kebijakan write naming a platform other than PUBLIC_POLICY_MODELS stops here (before the schema)
+    app.addHook('preValidation', async (req, reply) => {
+      if (req.method !== 'POST' || !POLICY_WRITE.test(req.url.split('?')[0]!)) return;
+      const model = (req.body as { model?: unknown } | undefined)?.model;
+      if (!PUBLIC_POLICY_MODELS.includes(model as string)) return reply.code(403).send({ reason: PUBLIC_POLICY_ONLY });
     });
     app.addHook('onSend', async (req, reply, payload) => {
       for (const [k, v] of Object.entries(SECURITY_HEADERS)) reply.header(k, v);

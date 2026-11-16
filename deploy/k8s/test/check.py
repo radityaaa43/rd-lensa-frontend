@@ -469,7 +469,15 @@ wst = name(ingw, "Ingress", "lensa-public-stress")
 check(paths(ingw, "lensa-public-stress") == ["/api/stress:Prefix", "/api/preflight-capacity:Exact"], f"lensa-public-stress routes exactly the stress API and the capacity probe: {paths(ingw, 'lensa-public-stress')}")
 check(wst["spec"]["tls"] == name(ingw, "Ingress", "lensa-public")["spec"]["tls"] and wst["spec"]["rules"][0]["host"] == "x.example.com" and not any(k.startswith("cert-manager.io/") for k in wst["metadata"]["annotations"]), "lensa-public-stress: same host and TLS secret, no cert-manager annotation")
 check(not [d for d in ing0 if d["kind"] == "Ingress" and d["metadata"]["name"] == "lensa-public-stress"], "without W there is no lensa-public-stress Ingress")
-check(sorted((d["kind"], d["metadata"]["name"]) for d in ingw) == sorted([(d["kind"], d["metadata"]["name"]) for d in ing0] + [("Ingress", "lensa-public-tx"), ("Ingress", "lensa-public-stress")]), "W ingress render = the read-only render + exactly the tx and stress Ingresses")
+check(sorted((d["kind"], d["metadata"]["name"]) for d in ingw) == sorted([(d["kind"], d["metadata"]["name"]) for d in ing0] + [("Ingress", "lensa-public-tx"), ("Ingress", "lensa-public-stress"), ("Ingress", "lensa-public-policy")]), "W ingress render = the read-only render + exactly the tx, stress and policy Ingresses")
+# Kebijakan writes (Fabric-X (token v2) only, the app enforces the platform): exactly the 20 Exact write paths, tx-like limits, same host/TLS, no cert-manager
+wpo = name(ingw, "Ingress", "lensa-public-policy")
+want = sorted(f"/api/policy/{o}/{a}:Exact" for o in ("bi", "bank-a", "bank-b", "bank-c") for a in ("drafts", "approve", "reject", "cancel", "republish"))
+check(sorted(paths(ingw, "lensa-public-policy")) == want, f"lensa-public-policy routes exactly the 20 Kebijakan write paths: {paths(ingw, 'lensa-public-policy')}")
+pa = wpo["metadata"]["annotations"]
+check(pa.get("nginx.ingress.kubernetes.io/limit-rps") == "1" and pa.get("nginx.ingress.kubernetes.io/limit-connections") == "2" and pa.get("nginx.ingress.kubernetes.io/proxy-body-size") == "16k"
+      and not any(k.startswith("cert-manager.io/") for k in pa) and wpo["spec"]["tls"] == name(ingw, "Ingress", "lensa-public")["spec"]["tls"], f"lensa-public-policy limits/TLS {pa}")
+check(not [d for d in ing0 if d["kind"] == "Ingress" and d["metadata"]["name"] == "lensa-public-policy"], "without W there is no lensa-public-policy Ingress")
 check(not of(ingw, "Secret"), "W ingress render: no Secret")
 check(not any(k.startswith("cert-manager.io/") for k in wa), "lensa-public-tx carries no cert-manager annotation at all (incl. the key policy)")
 
