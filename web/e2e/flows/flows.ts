@@ -19,6 +19,8 @@ const CASES: Case[] = [
 ];
 const RETRIES = 5; // "Coba lagi" presses on a busy node, 15 s apart
 const PRICE_PER_UNIT = 1_000_000n; // server/src/domain.ts: 1 DFABI unit costs this many RD
+// server/src/domain.ts DFABI_TO_BI_MODELS: DFABI is issued BI -> BI only (user decision 2026-11-15); banks get it by the award
+const DFABI_TO_BI: Model[] = ['zeto', 'noto', 'stealth', 'iroha3'];
 
 // What a bank outside the transaction reads, per model (the model's privacy claim; parties and BI always read it).
 const OUTSIDER: Record<Model, (flow: Flow) => Seen> = {
@@ -61,7 +63,8 @@ export function defineFlows(model: Model) {
   // checks assume nobody else moves BI's balance meanwhile (playwright.flows.config.ts: workers: 1, fullyParallel: false)
   test.describe.configure({ mode: 'serial' });
 
-  for (const c of CASES) {
+  for (const c0 of CASES) {
+    const c: Case = c0.flow === 'dfabi-issue' && DFABI_TO_BI.includes(model) ? { ...c0, to: 'BI' } : c0;
     test(`${model} ${c.flow}`, async ({ page, request }, info) => {
       const meta = await (await request.get('/api/meta')).json();
       test.skip(!meta.models[model]?.available, `${model} tidak tersedia di server ini`);
@@ -102,7 +105,7 @@ export function defineFlows(model: Model) {
       // 1. compose, like a user: the sender is the route party, the asset is a tab, recipient and amount are form fields
       await page.goto(route(model, c.dvp ? 'dvp' : 'transfer', c.from));
       if (!c.dvp) await page.getByRole('tablist', { name: 'Aset' }).getByRole('tab', { name: c.asset === 'RD' ? 'Rupiah Digital (RD)' : 'Obligasi DFABI' }).click();
-      await page.locator('#to').selectOption(c.to);
+      if (await page.locator('#to').isEnabled()) await page.locator('#to').selectOption(c.to); // dfabi-issue BI -> BI: the recipient select is fixed to BI
       await page.locator('#amount').fill(c.amount);
       const go = page.getByRole('button', { name: c.button, exact: true });
       await expect(go).toBeEnabled();
