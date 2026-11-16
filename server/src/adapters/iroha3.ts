@@ -252,11 +252,20 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
 
   // NEW chain (analyst Q7, Q16): writes through the parties' own drivers, reads keyless. The CLI is not used at all. Reads that needed an operator key (balance
   // pre-check, tx detail, lens) are not available in window A: the chain's own refusal reaches the user (502 reason), the R1 lens rows are NOT-RUN.
+  // Torii rate-limits status reads per client (torii.query_rate_per_authority_per_sec 25/s, burst 50; one party's gateway is one
+  // client), so the reads right after a run can get 429: busy, waited out per Retry-After (max 2 s, 3 retries), not a failure.
   async function keylessStatus(party: PartyId, hash: string): Promise<Status> {
     if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error(`Hash transaksi tidak valid: ${hash.slice(0, 80)}`);
-    const r = await (read?.fetch ?? irohaFetch)(new URL(`v1/pipeline/transactions/status?hash=${hash}`, s.torii[party]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
-    if (!r.ok) throw new Error(`Torii ${PARTIES[party].name} menjawab HTTP ${r.status}`);
-    return (await r.json()) as Status;
+    for (let attempt = 1; ; attempt++) {
+      const r = await (read?.fetch ?? irohaFetch)(new URL(`v1/pipeline/transactions/status?hash=${hash}`, s.torii[party]), { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(10_000) });
+      if (r.status === 429 && attempt <= 3) {
+        const wait = Number(r.headers.get('retry-after') ?? 1);
+        await sleep(Math.min(Number.isFinite(wait) ? wait : 1, 2) * 1000);
+        continue;
+      }
+      if (!r.ok) throw new Error(`Torii ${PARTIES[party].name} menjawab HTTP ${r.status}`);
+      return (await r.json()) as Status;
+    }
   }
   // A hash the chain does not know (an APS bundle_id from an old history row, whose carrier tx is not kept) is "unknown", not a failure.
   const statusOrNull = (party: PartyId, hash: string) => keylessStatus(party, hash).catch((e) => { if (/HTTP 404/.test(errMsg(e))) return null; throw e; });

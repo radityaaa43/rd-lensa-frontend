@@ -136,6 +136,21 @@ describe('iroha3 on the new chain: writes through the drivers', () => {
     expect(r.calls).toEqual([]);
   });
 
+  it('a Torii 429 on the status read (rate limit) is waited out, not reported as a failure', async () => {
+    const r = readCli(); const d = fakeDriver();
+    let n = 0;
+    const fetch = (async (url: URL | string) => {
+      r.fetched.push(String(url));
+      if (++n <= 2) return new Response('rate limited', { status: 429, headers: { 'retry-after': '0' } });
+      return new Response(JSON.stringify({ status: { kind: 'Applied', block_height: 9 } }), { status: 200 });
+    }) as typeof globalThis.fetch;
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const out = await createIroha3Adapter(state, r.cli, { ...withRead(r), fetch }, undefined, d.driver).run(req('rd-issue', 'BI', 'A', '1'), 1n, () => {});
+    expect(out.block).toBe(9);
+    expect(r.fetched.filter((u) => u.includes('pipeline/transactions/status'))).toHaveLength(3);
+    expect(log).not.toHaveBeenCalled();
+  });
+
   it('transfers are not available on the new chain: capability off, run refuses before any call', async () => {
     const r = readCli(); const d = fakeDriver();
     const a = createIroha3Adapter(state, r.cli, withRead(r), undefined, d.driver);
