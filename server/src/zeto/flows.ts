@@ -118,19 +118,31 @@ async function leg(zeto: ZetoInstance, owner: Party, to: Party, amount: bigint):
   return { lockId: l.lockId, call: p.call, states: p.states, lockRcpt: l.receipt };
 }
 
+// Both promises run to the end before the first failure is thrown, so no tx of one leg is still in flight when the
+// caller releases its sender locks (Promise.all would reject while the other leg keeps going).
+async function both<A, B>(a: Promise<A>, b: Promise<B>): Promise<[A, B]> {
+  const [x, y] = await Promise.allSettled([a, b]);
+  if (x.status === "rejected") throw x.reason;
+  if (y.status === "rejected") throw y.reason;
+  return [x.value, y.value];
+}
+
+async function approve(z: ZetoInstance, p: Party, l: Leg, atom: string) {
+  const r = await within(delegateLock(z, p, l.lockId, atom), LONG_POLL_TIMEOUT, `delegateLock ${p.lookup}`);
+  if (r?.success !== true) throw new Error(`delegateLock ${p.lookup} gagal: ${r?.failureMessage ?? "tanpa receipt"}`);
+}
+
 // Seller delivers `units` of `bond`; buyer pays units * price of `cash`. The Atom is created by the
 // seller and executed by the buyer (public txs to the Atom contracts and delegateLock on the pools).
+// The legs are independent (each owner on its own node and pool), so they are locked and prepared at once, and both
+// approvals go out together: Paladin docs architecture/atomic_interop.md, "parallelism is possible for the approval transactions".
 export async function swap(f: AtomFactory, seller: Party, buyer: Party, bond: ZetoInstance, cash: ZetoInstance, units: number, price: number) {
-  const bondLeg = await leg(bond, seller, buyer, BigInt(units));
-  const cashLeg = await leg(cash, buyer, seller, BigInt(units) * BigInt(price));
+  const [bondLeg, cashLeg] = await both(leg(bond, seller, buyer, BigInt(units)), leg(cash, buyer, seller, BigInt(units) * BigInt(price)));
   const atom = must(await within(f.using(seller.c).create(seller.v, [
     { contractAddress: bond.address, callData: bondLeg.call },
     { contractAddress: cash.address, callData: cashLeg.call },
   ]), LONG_POLL_TIMEOUT, "Atom create"), "Atom");
-  for (const [z, p, l] of [[bond, seller, bondLeg], [cash, buyer, cashLeg]] as const) {
-    const r = await within(delegateLock(z, p, l.lockId, atom.address), LONG_POLL_TIMEOUT, `delegateLock ${p.lookup}`);
-    if (r?.success !== true) throw new Error(`delegateLock ${p.lookup} gagal: ${r?.failureMessage ?? "tanpa receipt"}`);
-  }
+  await both(approve(bond, seller, bondLeg, atom.address), approve(cash, buyer, cashLeg, atom.address));
   const execAt = Date.now();
   const receipt = must(await within(atom.using(buyer.c).execute(buyer.v), LONG_POLL_TIMEOUT, "Atom execute"), "Atom receipt");
   if (receipt.success !== true) throw new Error(`Atom execute gagal: ${receipt.failureMessage ?? "tanpa pesan"}`);
