@@ -178,6 +178,57 @@ export class StressRun extends EventEmitter {
 
   private sleep(ms: number) { return new Promise<void>((r) => setTimeout(r, ms)); }
 
+  // One model's run, the same for every mode: the end signal (stop button, stop rule, `limitMs` timer), the load transfer with
+  // its funds booking, the stall watchdog and the drain. hooks (batch): every recorded result, and a cancel before close.
+  private session(st: ModelState, adapter: ModelAdapter, units: Map<string, number>, limitMs: number | undefined, hooks: { onResult?: (ok: boolean) => void; onCancel?: (u: LoadUser) => void } = {}) {
+    const now = () => this.clock.now();
+    // Set when the run ends (stop, stop rule, last stage): calls still queued behind an adapter lock then never submit.
+    const signal = this.signal = { aborted: this.stopped };
+    let resolveEnd!: () => void;
+    const ses = {
+      ended: false, closed: false, inflight: 0, lastProgress: now(),
+      endP: new Promise<void>((r) => { resolveEnd = r; }),
+      endWith: (r: StopReason): void => { st.stop ??= r; ses.ended = true; signal.aborted = true; resolveEnd(); },
+      // One load transfer. The funds are booked before it starts and given back when it was cancelled (nothing submitted).
+      // doneAt is finality: a report that follows it (Zeto) is timed apart, so it does not inflate the settlement latency.
+      send: async (u: LoadUser, to: LoadUser, issuedAt: number): Promise<void> => {
+        const k = key(u);
+        units.set(k, units.get(k)! - 1);
+        ses.inflight++;
+        let ok: boolean | undefined;
+        try {
+          const s = await withDeadline(adapter.transferForLoad(u, to, LOAD_AMOUNT, signal), OUTER_GUARD_MS, 'Transaksi');
+          if (!ses.closed) { st.recs.push({ bank: u.bank, to: to.bank, toUser: key(to), issuedAt, submittedAt: s.submittedAt, doneAt: now() - (s.reportMs ?? 0), ok: true, ...(s.reportMs !== undefined ? { reportMs: s.reportMs } : {}), ...(s.overheadMs !== undefined ? { overheadMs: s.overheadMs } : {}) }); ok = true; }
+          if (adapter.loadCirculates) units.set(key(to), units.get(key(to))! + 1);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (msg === CANCELLED) { units.set(k, units.get(k)! + 1); if (!ses.closed) hooks.onCancel?.(u); } // nothing was submitted; after close it stays in unfinished
+          else if (!ses.closed) { st.recs.push({ bank: u.bank, to: to.bank, toUser: key(to), issuedAt, submittedAt: issuedAt, doneAt: now(), ok: false }); ok = false; st.firstError ??= msg; }
+        } finally { ses.inflight--; ses.lastProgress = now(); }
+        if (ok !== undefined) hooks.onResult?.(ok);
+        if (!ses.closed) this.tick();
+      },
+      // wait for in-flight calls at most DRAIN_MS; they count in the totals, not in any stage
+      finish: async (pending: Promise<void>[]): Promise<void> => {
+        await Promise.race([Promise.all(pending), this.sleep(DRAIN_MS)]);
+        clearTimeout(limitTimer);
+        ses.closed = true;
+        st.unfinished = ses.inflight;
+        st.endedAt = now();
+        st.status = st.stop === 'stopped' ? 'stopped' : 'done';
+      },
+    };
+    void this.stopP.then(() => ses.endWith('stopped'));
+    void (async () => { // stall watchdog
+      while (!ses.ended) {
+        await this.sleep(1000);
+        if (!ses.ended && ses.inflight > 0 && now() - ses.lastProgress > STALL_MS) ses.endWith('stalled');
+      }
+    })();
+    const limitTimer = limitMs === undefined ? undefined : setTimeout(() => ses.endWith('limit'), limitMs);
+    return ses;
+  }
+
   private async runModel(m: ModelId): Promise<void> {
     const st = this.states[m]!;
     const adapter = this.adapters[m];
@@ -203,19 +254,13 @@ export class StressRun extends EventEmitter {
     const now = () => this.clock.now();
     st.plan = open ? RATES.filter((r) => r <= this.cfg.rate!) : stagePlan(this.cfg.users, adapter.maxLoadUsers);
     st.status = 'running';
-    const t0 = st.t0 = now();
+    st.t0 = now();
     // Funds each VU can spend, as the orchestrator books them: a VU never sends what it does not hold, so a run never fails on funds.
     const units = new Map<string, number>();
     for (let i = 0; i < users; i++) for (const bank of BANKS) units.set(key({ bank, i }), units0);
     const active: LoadUser[] = [];
-    let inflight = 0, lastProgress = t0, ended = false, closed = false;
-    // Set when the run ends (stop, stop rule, last stage): calls still queued behind an adapter lock then never submit.
-    const signal = this.signal = { aborted: this.stopped };
-    let endWith!: (r: StopReason) => void;
-    const endP = new Promise<void>((resolve) => {
-      endWith = (r) => { st.stop ??= r; ended = true; signal.aborted = true; resolve(); };
-    });
-    void this.stopP.then(() => endWith('stopped'));
+    const ses = this.session(st, adapter, units, this.deadline === Infinity ? undefined : Math.max(0, this.deadline - now()));
+    const { endWith, endP, send } = ses;
 
     // funds ran out because transfers failed (a failed transfer still uses the funds it was booked)
     const failing = () => { const rs = st.recs.filter((r) => r.doneAt >= st.current!.start); return rs.length > 0 && rs.filter((r) => !r.ok).length / rs.length > MAX_FAIL; };
@@ -226,28 +271,11 @@ export class StressRun extends EventEmitter {
       const peers = active.filter((v) => v.bank === toBank);
       return peers[Math.floor(this.rand() * peers.length)];
     };
-    // One load transfer. The funds are booked before it starts and given back when it was cancelled (nothing submitted).
-    // doneAt is finality: a report that follows it (Zeto) is timed apart, so it does not inflate the settlement latency.
-    const send = async (u: LoadUser, to: LoadUser, issuedAt: number) => {
-      const k = key(u);
-      units.set(k, units.get(k)! - 1);
-      inflight++;
-      try {
-        const s = await withDeadline(adapter.transferForLoad(u, to, LOAD_AMOUNT, signal), OUTER_GUARD_MS, 'Transaksi');
-        if (!closed) st.recs.push({ bank: u.bank, to: to.bank, toUser: key(to), issuedAt, submittedAt: s.submittedAt, doneAt: now() - (s.reportMs ?? 0), ok: true, ...(s.reportMs !== undefined ? { reportMs: s.reportMs } : {}), ...(s.overheadMs !== undefined ? { overheadMs: s.overheadMs } : {}) });
-        if (adapter.loadCirculates) units.set(key(to), units.get(key(to))! + 1);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (msg === CANCELLED) units.set(k, units.get(k)! + 1); // nothing was submitted
-        else if (!closed) { st.recs.push({ bank: u.bank, to: to.bank, toUser: key(to), issuedAt, submittedAt: issuedAt, doneAt: now(), ok: false }); st.firstError ??= msg; }
-      } finally { inflight--; lastProgress = now(); }
-      if (!closed) this.tick();
-    };
     const worker = async (u: LoadUser) => {
       const k = key(u);
-      while (!ended) {
+      while (!ses.ended) {
         if (units.get(k)! < 1) {
-          if (inflight === 0 && active.every((v) => units.get(key(v))! < 1)) return endWith(failing() ? 'errors' : 'funds');
+          if (ses.inflight === 0 && active.every((v) => units.get(key(v))! < 1)) return endWith(failing() ? 'errors' : 'funds');
           await this.sleep(IDLE_MS);
           continue;
         }
@@ -259,35 +287,27 @@ export class StressRun extends EventEmitter {
     const arrivals = async (bank: BankId, rate: number, stageEnd: number) => {
       const gap = 1000 / rate;
       let at = now(), rr = 0;
-      while (!ended && at < stageEnd) {
+      while (!ses.ended && at < stageEnd) {
         const wait = at - now();
         if (wait > 0) await Promise.race([this.sleep(wait), endP]);
-        if (ended) break;
+        if (ses.ended) break;
         const pool = active.filter((v) => v.bank === bank);
         let u: LoadUser | undefined;
         for (let i = 0; i < pool.length && !u; i++) { const c = pool[(rr + i) % pool.length]; if (units.get(key(c))! >= 1) { u = c; rr = (rr + i + 1) % pool.length; } }
-        if (!u && inflight === 0) { endWith(failing() ? 'errors' : 'funds'); break; }
-        if (!u || inflight >= MAX_INFLIGHT) st.drops.push(now());
+        if (!u && ses.inflight === 0) { endWith(failing() ? 'errors' : 'funds'); break; }
+        if (!u || ses.inflight >= MAX_INFLIGHT) st.drops.push(now());
         else sent.push(send(u, pickTo(u), at));
         at += gap;
       }
     };
 
-    void (async () => { // stall watchdog
-      while (!ended) {
-        await this.sleep(1000);
-        if (!ended && inflight > 0 && now() - lastProgress > STALL_MS) endWith('stalled');
-      }
-    })();
-
-    const limitTimer = this.deadline === Infinity ? undefined : setTimeout(() => endWith('limit'), Math.max(0, this.deadline - now()));
     const workers: Promise<void>[] = [];
     let flat = 0, bestTps = -1;
     if (open) { // the whole sender pool is there from the first stage; only the offered rate steps up
       for (let i = 0; i < users; i++) for (const bank of BANKS) active.push({ bank, i });
     }
     for (const u of st.plan) {
-      if (ended) break;
+      if (ses.ended) break;
       const start = now();
       if (open) {
         st.current = { start, users, offered: u };
@@ -300,7 +320,7 @@ export class StressRun extends EventEmitter {
         st.current = { start, users: u, offered: 0 };
         await Promise.race([this.sleep(this.cfg.stageS! * 1000), endP]);
       }
-      const complete = !ended;
+      const complete = !ses.ended;
       const s: Stage = { ...this.summ(st, start, now(), open ? users : u, open ? u : 0), complete };
       st.stages.push(s);
       st.current = undefined;
@@ -310,14 +330,7 @@ export class StressRun extends EventEmitter {
       else if (s.tps > bestTps * BETTER) { bestTps = s.tps; flat = 0; } else if (++flat >= 2) { endWith('saturated'); break; }
     }
     endWith('done'); // keeps an earlier reason
-
-    // wait for in-flight calls at most DRAIN_MS; they count in the totals, not in any stage
-    await Promise.race([Promise.all([...workers, ...sent]), this.sleep(DRAIN_MS)]);
-    clearTimeout(limitTimer);
-    closed = true;
-    st.unfinished = inflight;
-    st.endedAt = now();
-    st.status = st.stop === 'stopped' ? 'stopped' : 'done';
+    await ses.finish([...workers, ...sent]);
   }
 
   // Batch: every sender party starts at t0 and sends exactly `count` transfers, one after another (serial) or on a schedule of
@@ -339,42 +352,25 @@ export class StressRun extends EventEmitter {
     const units = new Map<string, number>();
     for (const p of parties) for (const u of pools[p]) units.set(key(u), units0);
     const running = new Set(parties); // parties still sending
-    let inflight = 0, failed = 0, lastProgress = t0, ended = false, closed = false;
-    const signal = this.signal = { aborted: this.stopped };
-    let endWith!: (r: StopReason) => void;
-    const endP = new Promise<void>((resolve) => {
-      endWith = (r) => { st.stop ??= r; ended = true; signal.aborted = true; resolve(); };
+    let failed = 0;
+    // errors: checked on every result; a cancelled send was not sent
+    const ses = this.session(st, adapter, units, limitMin * 60_000, {
+      onResult: (ok) => { if (!ok) failed++; if (st.recs.length >= 10 && failed / st.recs.length > MAX_FAIL) ses.endWith('errors'); },
+      onCancel: (u) => { sent[u.bank]!--; },
     });
-    void this.stopP.then(() => endWith('stopped'));
+    const { endWith, endP } = ses;
+    const send = (u: LoadUser, to: LoadUser, issuedAt: number) => { sent[u.bank]!++; return ses.send(u, to, issuedAt); };
 
     // another sending party, each equally likely, then any of its users
     const pickTo = (u: LoadUser): LoadUser => {
       const others = parties.filter((p) => p !== u.bank);
       return { bank: others[Math.floor(this.rand() * others.length)], i: Math.floor(this.rand() * users) };
     };
-    // As send() in runModel: funds booked before, given back when cancelled (and then not counted as sent).
-    const send = async (u: LoadUser, to: LoadUser, issuedAt: number) => {
-      const k = key(u);
-      units.set(k, units.get(k)! - 1);
-      sent[u.bank]!++;
-      inflight++;
-      try {
-        const s = await withDeadline(adapter.transferForLoad(u, to, LOAD_AMOUNT, signal), OUTER_GUARD_MS, 'Transaksi');
-        if (!closed) st.recs.push({ bank: u.bank, to: to.bank, toUser: key(to), issuedAt, submittedAt: s.submittedAt, doneAt: now() - (s.reportMs ?? 0), ok: true, ...(s.reportMs !== undefined ? { reportMs: s.reportMs } : {}), ...(s.overheadMs !== undefined ? { overheadMs: s.overheadMs } : {}) });
-        if (adapter.loadCirculates) units.set(key(to), units.get(key(to))! + 1);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (msg === CANCELLED) { units.set(k, units.get(k)! + 1); if (!closed) sent[u.bank]!--; } // after close it stays in unfinished
-        else if (!closed) { st.recs.push({ bank: u.bank, to: to.bank, toUser: key(to), issuedAt, submittedAt: issuedAt, doneAt: now(), ok: false }); failed++; st.firstError ??= msg; }
-      } finally { inflight--; lastProgress = now(); }
-      if (!closed && st.recs.length >= 10 && failed / st.recs.length > MAX_FAIL) endWith('errors');
-      if (!closed) this.tick();
-    };
     // index of a pool user with funds, from `from` round-robin; waits while a transfer can still bring funds back, -1 once the run ended
     const funded = async (pool: LoadUser[], from: number): Promise<number> => {
-      while (!ended) {
+      while (!ses.ended) {
         for (let j = 0; j < pool.length; j++) { const i = (from + j) % pool.length; if (units.get(key(pool[i]))! >= 1) return i; }
-        if (inflight === 0 && [...running].every((p) => pools[p].every((u) => units.get(key(u))! < 1))) endWith(failed / st.recs.length > MAX_FAIL ? 'errors' : 'funds');
+        if (ses.inflight === 0 && [...running].every((p) => pools[p].every((u) => units.get(key(u))! < 1))) endWith(failed / st.recs.length > MAX_FAIL ? 'errors' : 'funds');
         else await Promise.race([this.sleep(IDLE_MS), endP]);
       }
       return -1;
@@ -382,7 +378,7 @@ export class StressRun extends EventEmitter {
     const sends: Promise<void>[] = [];
     const party = async (p: PartyId) => {
       let rr = 0;
-      for (let n = 0; n < count && !ended; n++) {
+      for (let n = 0; n < count && !ses.ended; n++) {
         const at = rate ? t0 + (n * 1000) / rate : now();
         if (at > now()) await Promise.race([this.sleep(at - now()), endP]);
         const i = await funded(pools[p], rr);
@@ -394,25 +390,11 @@ export class StressRun extends EventEmitter {
       running.delete(p);
     };
 
-    void (async () => { // stall watchdog
-      while (!ended) {
-        await this.sleep(1000);
-        if (!ended && inflight > 0 && now() - lastProgress > STALL_MS) endWith('stalled');
-      }
-    })();
-    const limitTimer = setTimeout(() => endWith('limit'), limitMin * 60_000);
     const loops = parties.map(party);
     await Promise.race([Promise.all(loops).then(() => Promise.all(sends)), endP]);
     endWith('done'); // keeps an earlier reason
     st.stages.push({ ...this.summ(st, t0, now(), users, 0), complete: st.stop === 'done' });
     st.current = undefined;
-
-    // wait for in-flight calls at most DRAIN_MS; they count in the totals, not in the stage
-    await Promise.race([Promise.all([...loops, ...sends]), this.sleep(DRAIN_MS)]);
-    clearTimeout(limitTimer);
-    closed = true;
-    st.unfinished = inflight;
-    st.endedAt = now();
-    st.status = st.stop === 'stopped' ? 'stopped' : 'done';
+    await ses.finish([...loops, ...sends]);
   }
 }
