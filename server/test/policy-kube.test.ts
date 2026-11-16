@@ -50,6 +50,6 @@ test('names outside <platform>-gw-1..4 are refused before kubectl runs', async (
   await expect(kube.deploymentExists('bank-gw-2-bundles')).rejects.toThrow(/ditolak/);
   await expect(kube.deploymentExists('paladin-node1')).rejects.toThrow(/ditolak/);
   await expect(kube.deploymentExists('bundle-server')).rejects.toThrow(/ditolak/);
-  await expect(kube.getConfigMap('fabricx-gw-1')).rejects.toThrow(/ditolak/); // a ConfigMap name must end in -bundles
+  await expect(kube.getConfigMap('bank-gw-1')).rejects.toThrow(/ditolak/); // a ConfigMap name must end in -bundles
   expect(existsSync(join(dir, 'kubectl.args'))).toBe(false);
 });

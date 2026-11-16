@@ -22,8 +22,8 @@ test('parse(href(r)) equals r for every valid route', () => {
 test.each([
   ['/besu/zeto/riwayat', '?pihak=C', { page: 'model', model: 'zeto', screen: 'riwayat', party: 'C' }],
   ['/besu/zeto/kebijakan', '?pihak=A', { page: 'model', model: 'zeto', screen: 'kebijakan', party: 'A' }],
-  ['/fabricx/dasbor', '?pihak=A', { page: 'model', model: 'fabricx', screen: 'dasbor', party: 'A' }],
-  ['/fabricx/kebijakan', '?pihak=BI', { page: 'model', model: 'fabricx', screen: 'kebijakan', party: 'BI' }],
+  ['/fabricx-adapter/dasbor', '?pihak=A', { page: 'model', model: 'fabricx-adapter', screen: 'dasbor', party: 'A' }],
+  ['/fabricx-adapter/kebijakan', '?pihak=BI', { page: 'model', model: 'fabricx-adapter', screen: 'kebijakan', party: 'BI' }],
   ['/iroha3/kebijakan', '?pihak=C', { page: 'model', model: 'iroha3', screen: 'kebijakan', party: 'C' }],
   ['/iroha3/lensa/0xff', '?pihak=B', { page: 'model', model: 'iroha3', screen: 'lensa', party: 'B', tx: '0xff' }],
 ])('parse %s%s', (path, search, want) => {
@@ -34,7 +34,7 @@ test.each([
   ['missing pihak', '/besu/noto/transfer', '', '/besu/noto/transfer?pihak=BI'],
   ['invalid pihak', '/besu/noto/transfer', '?pihak=X', '/besu/noto/transfer?pihak=BI'],
   ['besu without model', '/besu', '?pihak=A', '/besu/zeto/dasbor?pihak=A'],
-  ['model without screen', '/fabricx', '?pihak=C', '/fabricx/dasbor?pihak=C'],
+  ['model without screen', '/fabricx-adapter', '?pihak=C', '/fabricx-adapter/dasbor?pihak=C'],
 ])('normalises %s', (_name, path, search, canonical) => {
   const r = parse(path, search);
   expect(r).not.toBeNull();
@@ -43,10 +43,11 @@ test.each([
 
 test.each([
   ['unknown platform', '/solana/dasbor'],
-  ['model of another platform', '/besu/fabricx/dasbor'],
+  ['model of another platform', '/besu/iroha3/dasbor'],
+  ['the removed old Fabric-X platform', '/fabricx/dasbor'],
   ['unknown besu model', '/besu/nope/dasbor'],
   ['unknown screen', '/iroha3/nope'],
-  ['tx on a screen other than lensa', '/fabricx/riwayat/0xab'],
+  ['tx on a screen other than lensa', '/fabricx-adapter/riwayat/0xab'],
   ['extra segments', '/besu/zeto/lensa/0xab/more'],
 ])('rejects %s', (_name, path) => {
   expect(parse(path, '?pihak=A')).toBeNull();

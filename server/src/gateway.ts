@@ -9,11 +9,9 @@ import { readState } from './state.ts';
 // client presents the cert. Unset: plain http as before. Set but unreadable: the server does not start (no silent downgrade).
 // Per party (final-design zeto S19): if <dir>/<BI|A|B|C>/ exists, that party's calls present the cert in it and nothing else; a party
 // without a subfolder uses the flat files in <dir>. A subfolder with a missing file is an error, never a fallback to the flat cert.
-// In per-party mode the gateway certificate carries no IP SAN, only its service name (bank-gw-<N>, fx-gw-<N>): the caller passes that name as
+// In per-party mode the gateway certificate carries no IP SAN, only its service name (bank-gw-<N>): the caller passes that name as
 // `servername`, which the TLS client then verifies instead of the URL's host. The flat mode (one shared cert, IP SAN) never sets it.
 const agents = new Map<string, https.Agent>();
-// LENSA_GW_MTLS_DIR_FABRICX (optional, until fabricx S19; analyst Q15): the cert directory for Fabric-X gateway targets (TLS servername fx-gw-N). At the
-// zeto cutover the host moves to the per-party certs, but the OLD fx-gw trust the flat Lensa CA only. Unset = LENSA_GW_MTLS_DIR for every gateway as before.
 // mTLS itself stays on/off by LENSA_GW_MTLS_DIR; a set but unreadable directory is an error, never a fallback.
 // Iroha 3 (iroha S14.C): every request to a party's Iroha (driver routes and Torii reads) goes through that party's mTLS gateway, reached through a Lensa loopback
 // forward of svc/gateway:8443. LENSA_GW_IROHA_<P>=https://127.0.0.1:<port> (unset = today's plain loopback mode). The gateway certificate has a DNS SAN only
@@ -66,9 +64,8 @@ export const irohaFetch: typeof fetch = async (input, init) => {
 };
 export function gwAgent(party?: PartyId, servername?: string): https.Agent | undefined {
   if (servername && IROHA_SN.test(servername)) return irohaAgent(party, servername);
-  const main = process.env.LENSA_GW_MTLS_DIR;
-  if (!main) return undefined;
-  const root = (servername?.startsWith('fx-gw-') && process.env.LENSA_GW_MTLS_DIR_FABRICX) || main;
+  const root = process.env.LENSA_GW_MTLS_DIR;
+  if (!root) return undefined;
   const perParty = !!party && existsSync(join(root, party));
   const dir = perParty ? join(root, party) : root;
   const sn = perParty ? servername : undefined;
@@ -83,7 +80,7 @@ export function gwAgent(party?: PartyId, servername?: string): https.Agent | und
 }
 // Which party a gateway URL belongs to, and the service name its certificate carries, by host:port: the configured endpoints below,
 // LENSA_BESU_RPC (BI's Besu door) and LENSA_BESU_RPC_BANKS (one door per bank). Lets every existing call site pick the right cert without
-// passing the party along. Paladin and Besu doors are both served by bank-gw-<N>; Fabric-X by fx-gw-<N> [name unverified until fabricx S16].
+// passing the party along. Paladin and Besu doors are both served by bank-gw-<N>.
 const bankDoors = () => (process.env.LENSA_BESU_RPC_BANKS ?? '').split(',').filter(Boolean);
 export interface GwTarget { party: PartyId; servername: string }
 export function gwTarget(u: string): GwTarget | undefined {
@@ -92,11 +89,7 @@ export function gwTarget(u: string): GwTarget | undefined {
   if (!key) return undefined;
   const bank = (party: PartyId): GwTarget => ({ party, servername: `bank-gw-${PARTIES[party].node}` });
   for (const p of Object.keys(PARTIES) as PartyId[]) {
-    for (const kind of ['paladin', 'fabricx'] as const) {
-      if (host(process.env[`LENSA_GW_${kind.toUpperCase()}_${p}`] || `http://127.0.0.1:${gwDefault(kind, p)}`) === key) {
-        return kind === 'paladin' ? bank(p) : { party: p, servername: `fx-gw-${PARTIES[p].node}` };
-      }
-    }
+    if (host(process.env[gwVar('paladin', p)] || `http://127.0.0.1:${gwDefault('paladin', p)}`) === key) return bank(p);
   }
   for (const p of Object.keys(PARTIES) as PartyId[]) {
     if (host(process.env[`LENSA_GW_IROHA_${p}`]) === key) return { party: p, servername: irohaServername(p) };
@@ -122,10 +115,10 @@ export const besuDoor = (p: PartyId): string | undefined => {
   return u ? gwUrl(u, p) : undefined;
 };
 
-// A party's gateway: LENSA_GW_<PALADIN|FABRICX>_<BI|A|B|C>=https://<ip>:<port> (NodePort or LoadBalancer, mTLS), no kubectl port-forward and no
+// A party's gateway: LENSA_GW_PALADIN_<BI|A|B|C>=https://<ip>:<port> (NodePort or LoadBalancer, mTLS), no kubectl port-forward and no
 // kubeconfig. Unset: today's loopback forward (lensa-pf@*). A set value that is not an http(s) URL is an error, not a default.
-export type GwKind = 'paladin' | 'fabricx';
-const gwDefault = (kind: GwKind, p: PartyId) => (kind === 'paladin' ? 31548 + 100 * (PARTIES[p].node - 1) : 39440 + PARTIES[p].node);
+export type GwKind = 'paladin';
+const gwDefault = (_kind: GwKind, p: PartyId) => 31548 + 100 * (PARTIES[p].node - 1);
 const gwVar = (kind: GwKind, p: PartyId) => `LENSA_GW_${kind.toUpperCase()}_${p}`;
 // The configured value of a gateway variable as a URL, or undefined when unset. A set value that is not an http(s) URL throws, naming the variable only.
 function gwConfigured(kind: GwKind, p: PartyId): URL | undefined {
@@ -169,10 +162,8 @@ export function assertGatewayEnv(): void {
     seen.set(host, label);
   };
   for (const p of Object.keys(PARTIES) as PartyId[]) {
-    for (const kind of ['paladin', 'fabricx'] as const) {
-      const u = gwConfigured(kind, p);
-      add(u ? gwVar(kind, p) : `default ${gwVar(kind, p)}`, u ? u.host : `127.0.0.1:${gwDefault(kind, p)}`);
-    }
+    const u = gwConfigured('paladin', p);
+    add(u ? gwVar('paladin', p) : `default ${gwVar('paladin', p)}`, u ? u.host : `127.0.0.1:${gwDefault('paladin', p)}`);
   }
   for (const p of Object.keys(PARTIES) as PartyId[]) {
     const g = irohaGateway(p);

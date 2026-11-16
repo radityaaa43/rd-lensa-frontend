@@ -5,17 +5,15 @@ import type { Meta } from '../api.ts';
 
 export const KIND: Record<NodeKind, string> = {
   'besu-validator': 'Validator Besu', paladin: 'Node Paladin', 'fsc-node': 'Node token FSC',
-  'fabricx-committer': 'Committer Fabric-X', 'fabricx-orderer': 'Orderer Fabric-X', 'iroha-peer': 'Peer Iroha',
+  'iroha-peer': 'Peer Iroha',
 };
 export const STATUS: Record<NetworkNode['status'], string> = { up: 'Aktif', down: 'Mati', unknown: 'Tidak diketahui' };
 
 // consensus/ordering nodes sit on the inner ring (hexagon); a party's own access node on the outer ring (circle)
-const CORE = new Set<NodeKind>(['besu-validator', 'iroha-peer', 'fabricx-orderer', 'fabricx-committer']);
+const CORE = new Set<NodeKind>(['besu-validator', 'iroha-peer']);
 const ICON: Record<NodeKind, string> = {
   'besu-validator': 'M12 3 20 6v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6zM9 12l2 2 4-4',
   'iroha-peer': 'M12 3 20 7.5v9L12 21 4 16.5v-9zM4 7.5 12 12l8-4.5M12 12v9',
-  'fabricx-orderer': 'M12 3 21 8l-9 5-9-5zM3 13l9 5 9-5',
-  'fabricx-committer': 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
   paladin: 'M4 5h16v6H4zM4 13h16v6H4zM8 8h.01M8 16h.01',
   'fsc-node': 'M15 4a5 5 0 1 1-4.6 7L4 17.5V20h3l1-1h2v-2h2l1.4-1.4A5 5 0 0 1 15 4zM16 8h.01',
 };

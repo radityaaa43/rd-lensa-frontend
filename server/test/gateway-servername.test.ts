@@ -1,5 +1,5 @@
 // Per-party mTLS client (final-design zeto S19, G1 facts from besu): the gateway server certificate carries NO IP SAN, only the service names
-// (DNS:bank-gw-<N>, fx-gw-<N> for Fabric-X). So in per-party mode (<dir>/<BI|A|B|C>/ exists) Lensa must set the TLS servername to the gateway's
+// (DNS:bank-gw-<N>). So in per-party mode (<dir>/<BI|A|B|C>/ exists) Lensa must set the TLS servername to the gateway's
 // service name of that party; the old flat mode (one shared cert, IP SAN) is untouched.
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -58,11 +58,9 @@ describe('servername in per-party mode', () => {
 });
 
 describe('gwTarget', () => {
-  it('maps a configured gateway URL to its party and the gateway service name (Paladin door bank-gw-N, Fabric-X fx-gw-N)', () => {
+  it('maps a configured gateway URL to its party and the gateway service name (Paladin door bank-gw-N)', () => {
     vi.stubEnv('LENSA_GW_PALADIN_A', 'https://10.1.1.2:31548');
-    vi.stubEnv('LENSA_GW_FABRICX_B', 'https://10.1.1.3:8443');
     expect(gwTarget('https://10.1.1.2:31548/x')).toEqual({ party: 'A', servername: 'bank-gw-2' });
-    expect(gwTarget('https://10.1.1.3:8443')).toEqual({ party: 'B', servername: 'fx-gw-3' });
     expect(gwTarget('https://203.0.113.9:1')).toBeUndefined();
   });
 

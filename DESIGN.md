@@ -59,11 +59,11 @@ Defined on `:root`; dark values under `@media (prefers-color-scheme: dark)` guar
 
 | Token | Light | Dark | Used by | Source |
 |---|---|---|---|---|
-| `--tint-blue` | `#E5EFFB` | `#172236` | Stat card "Saldo RD", Fabric-X tile | X1 blue cards |
+| `--tint-blue` | `#E5EFFB` | `#172236` | Stat card "Saldo RD" | X1 blue cards |
 | `--tint-green` | `#E6F5E9` | `#15271B` | Stat card "Saldo DFABI", Besu tile | X1 green card |
 | `--tint-peach` | `#FCEBDD` | `#2B2018` | Iroha 3 tile, the Iroha notice | v1 (kept: a third platform needs a third tint) |
 
-Text on tints is `--ink`; secondary text `--muted` (≥ 5.27). Aliases for the platform tiles: `--tint-besu` = green, `--tint-fabricx` = blue, `--tint-iroha` = peach.
+Text on tints is `--ink`; secondary text `--muted` (≥ 5.27). Aliases for the platform tiles: `--tint-besu` = green, `--tint-iroha` = peach (the Fabric-X token v2 tile has no tint).
 
 ### 2.4 Semantic (verdict and status)
 
@@ -149,7 +149,7 @@ There is no sheet radius: the app fills the window (X1 has no outer frame). `--r
 - **768–1279px**: the sidebar collapses to a 72px icon rail; each icon keeps `aria-label` and a tooltip. Group label and platform line are hidden; the dividers stay.
 - **< 768px**: full-bleed. The sidebar becomes a horizontal icon row above the header (one tap per screen). One column. History becomes a tile list (§7.6). No horizontal page scroll; wide tables scroll inside their own container.
 
-State lives in the URL (History API): `/besu/zeto/dasbor?pihak=A`, `/fabricx/dasbor?pihak=BI`, `/iroha3/riwayat?pihak=C`.
+State lives in the URL (History API): `/besu/zeto/dasbor?pihak=A`, `/fabricx-adapter/dasbor?pihak=BI`, `/iroha3/riwayat?pihak=C`.
 
 ---
 
@@ -163,7 +163,7 @@ State lives in the URL (History API): `/besu/zeto/dasbor?pihak=A`, `/fabricx/das
 | **Empty** | Nothing exists | No fill, 1px dashed `--control` outline, centred text | "Belum ada transaksi" + next action |
 | **Not applicable** | The field does not apply | Plain `—` in `--muted` | — |
 
-Rules: fixed chip width per field type (amount 112, party 96, flow 120) so width never leaks the hidden length. A row with nothing readable shows ONE chip across the content columns ("Transaksi tersegel · ada di chain, tidak terbaca oleh {pihak}"). Per-field chips only for a partly readable row. A sealed field is never computed, guessed or copied from another lens. The chip is a disclosure "Kenapa tersegel?" with the per-model line from `copy.ts` and "Buka di lensa"; Esc closes it and focus returns to the chip. Fabric-X, party BI: a sealed row carries "Belum dilaporkan bank" in `--partial`.
+Rules: fixed chip width per field type (amount 112, party 96, flow 120) so width never leaks the hidden length. A row with nothing readable shows ONE chip across the content columns ("Transaksi tersegel · ada di chain, tidak terbaca oleh {pihak}"). Per-field chips only for a partly readable row. A sealed field is never computed, guessed or copied from another lens. The chip is a disclosure "Kenapa tersegel?" with the per-model line from `copy.ts` and "Buka di lensa"; Esc closes it and focus returns to the chip.
 
 ### 6.2 Iroha 3 transparency (unchanged)
 
@@ -186,7 +186,7 @@ Pill, icon + text, `--r-pill`, 26px high. `clear` family: `--clear` on `--clear-
 
 ### 7.2 Platform picker (landing)  · X1 stat cards · Flow
 
-Three tiles in a row (stack below 1280), `--r-card`, tint background (`--tint-besu|fabricx|iroha`), no border, hover shows a `--control` outline. A 44px `--ink` circle with the platform letter (B, F, I), the platform name `--t-h2`, tagline, the "Siapa melihat isi transaksi" row (three chips: BI / Pihak transaksi / Bank lain, each eye "Lihat" or lock "Tidak"), and a footer with a status dot. Headline `--t-display`: "Satu transaksi, empat sudut pandang"; sub "Pilih platform, lalu lihat transaksi yang sama dari sisi BI dan tiga bank." Copy unchanged.
+Three tiles in a row (stack below 1280), `--r-card`, tint background (`--tint-besu|iroha`), no border, hover shows a `--control` outline. A 44px `--ink` circle with the platform letter (B, T, I), the platform name `--t-h2`, tagline, the "Siapa melihat isi transaksi" row (three chips: BI / Pihak transaksi / Bank lain, each eye "Lihat" or lock "Tidak"), and a footer with a status dot. Headline `--t-display`: "Satu transaksi, empat sudut pandang"; sub "Pilih platform, lalu lihat transaksi yang sama dari sisi BI dan tiga bank." Copy unchanged.
 
 ### 7.3 Model selector (Besu only) and party switcher  · X1 header · Flow
 
@@ -231,10 +231,10 @@ Mobile: each row becomes a `--line`-outlined tile, `--r-tile`: icon, flow, large
 The "Jaringan" panel holds the large visual, where X1 has "Earnings". It is the one card on Dasbor with an outline (`1px --line`, `--r-card`) and a faint 20px dot grid behind it, so the network reads as a field of connected nodes.
 
 - **Layout: a radial constellation, not lanes.** Deterministic, no layout library. Each party owns a direction (BI top, Bank Mandala right, Bank Nusantara bottom, Bank Sejahtera left). Two dashed elliptical rails:
-  - inner rail: consensus and ordering nodes (`besu-validator`, `iroha-peer`, `fabricx-orderer`, `fabricx-committer`), drawn as **hexagons**;
+  - inner rail: consensus and ordering nodes (`besu-validator`, `iroha-peer`), drawn as **hexagons**;
   - outer rail: each party's access node (`paladin`, `fsc-node`), drawn as **circles**.
   - With no access nodes (Iroha 3) the consensus nodes take the outer rail. Shared nodes (`owner: null`) spread evenly between the party directions, with "Bersama" in the centre.
-- **Links are only what the adapter reports** (ARCHITECTURE.md §1). The real topology is already a mesh: Besu validators full mesh + Paladin N → validator N, Iroha 3 full mesh, Fabric-X FSC nodes → every orderer + BI → committer. Nothing is drawn that the adapter did not return. Links 1.25px `--control` at 35%; links that touch the viewing party's nodes `--ink` at 50%; a link with a down end is dashed `--down`.
+- **Links are only what the adapter reports** (ARCHITECTURE.md §1). The real topology is already a mesh: Besu validators full mesh + Paladin N → validator N, Iroha 3 full mesh. Nothing is drawn that the adapter did not return. Links 1.25px `--control` at 35%; links that touch the viewing party's nodes `--ink` at 50%; a link with a down end is dashed `--down`.
 - **Node**: kind glyph inside, status dot on the upper right (filled `--up`, ring `--down`, dashed ring `--faint`). The viewing party's nodes are filled `--ink` with a `--sheet` glyph, and the party name is set in `--ink` 600 with "Node Anda" under it. Other party names in `--muted`. Names sit outward from the centre (above the top node, below the others) with a `--sheet` text halo, so they never sit on a link.
 - **Tooltip**: hover/focus shows `{label} · {detail}` in a dark pill (`--ink-panel`), X1's chart tooltip.
 - A11y: every node is focusable, `role="img"`, full `aria-label`; a visually hidden `<table>` repeats the nodes. Mobile (< 768px): the table is shown instead of the drawing.
@@ -270,7 +270,7 @@ Under the four lens columns, after a hairline: **"Receipt dari jaringan"**.
   block, time, short hash, the step total right-aligned in tabular figures. Under it a 10px track on the flow's shared time axis with one
   segment per component span (min 3px), then "Paladin 0,18 s · Susun, bukti/endorse…" lines, the event names as mono pills, and a
   "Request dan response" disclosure with summary tiles and "Lihat JSON" (pre, max 320px, scrolls).
-- A step without a span shows "tanpa durasi" and a 3px tick at its time point; the panel's note says why (Fabric-X, Iroha 3, outsider).
+- A step without a span shows "tanpa durasi" and a 3px tick at its time point; the panel's note says why (Iroha 3, outsider).
 - Seconds are id-ID with two decimals ("1,83 s"). No motion.
 
 ### 7.11 BI report  · X1 table, light
@@ -295,9 +295,9 @@ Native `<dialog>` "Mulai stress test?" (`--r-card`, `--lift`), buttons "Mulai" (
 
 ### 7.14 Kebijakan  · Flow (2026-11-05)
 
-Routes `/besu/zeto/kebijakan`, `/besu/noto/kebijakan`, `/fabricx/kebijakan` and `/iroha3/kebijakan` (every platform in the server registry; `/api/meta` `models[m].policy` says which), Alat group, shield icon. The screen shows and edits the documents of the platform in the URL only: each platform has its own versions, pending change and history (the card reads "Versi berlaku {model name}"; the gateway card counts the gateways on that platform's version). Built from the existing tokens and components; no new colour.
+Routes `/besu/zeto/kebijakan`, `/besu/noto/kebijakan`, `/fabricx-adapter/kebijakan` and `/iroha3/kebijakan` (every platform in the server registry; `/api/meta` `models[m].policy` says which), Alat group, shield icon. The screen shows and edits the documents of the platform in the URL only: each platform has its own versions, pending change and history (the card reads "Versi berlaku {model name}"; the gateway card counts the gateways on that platform's version). Built from the existing tokens and components; no new colour.
 - **Top**: three `StatCard`s: "Versi berlaku" (blue, `v{n}`, "Terbit {WIB}"), "Gateway memakai versi ini" (green, "{x} dari {y}", or the error-coloured "Belum diterapkan: gateway belum terpasang"), "Menunggu persetujuan" (peach, "1 perubahan" or "Tidak ada").
-- **Not enforced**: a platform registered but not enforced by a gateway yet (Fabric-X, Iroha 3) shows a one-line hint (`.hint`) above "Masuk sebagai": "Belum ditegakkan gateway: dokumen dapat disusun, tetapi belum memengaruhi transaksi". Where the platform has no daily-usage source the "Terpakai hari ini" cell reads "Pemakaian harian belum tersedia untuk platform ini".
+- **Not enforced**: a platform registered but not enforced by a gateway yet (Iroha 3) shows a one-line hint (`.hint`) above "Masuk sebagai": "Belum ditegakkan gateway: dokumen dapat disusun, tetapi belum memengaruhi transaksi". Where the platform has no daily-usage source the "Terpakai hari ini" cell reads "Pemakaian harian belum tersedia untuk platform ini".
 - **"Masuk sebagai"**: a text input (max 60) with the hint "Nama yang dicatat pada setiap pengajuan dan persetujuan. Penyetuju harus orang yang berbeda dari pembuat." The name is kept per browser.
 - **Tabs** (`.utabs`, underline): "Kebijakan berlaku", "Ubah kebijakan", "Persetujuan" (a count chip while a change waits), "Riwayat versi". Failures show in one `role="alert"` block under the tabs (`.polalert`), with the server's `errors` as a list; the tab does not move.
 - **Kebijakan berlaku**: sections (`.polsec`: `h3`, owner in `--muted` such as "Diatur BI · hanya-baca"), plain tables (`.poltbl`, §7.6 style), hours tiles with a week strip and an "Buka"/"Tutup" badge, a "Terpakai hari ini" bar with `{used} · {pct}%`, "dibekukan BI" and "Dibekukan" badges (`off`), "Aktif" (`clear`). BI also sees every bank's document read-only, and a dashed "Belum tersedia di Zeto (off-chain)" block for rules that need on-chain data (on Noto, the "Saldo dan suplai" section instead).
@@ -350,7 +350,7 @@ Target WCAG 2.2 AA.
 ```
 /  Pilih platform (7.2)
 ├─ /besu ──► /besu/zeto | /besu/noto | /besu/stealth
-├─ /fabricx
+├─ /fabricx-adapter
 └─ /iroha3  (+ transparency notice on every screen, 6.2)
 
 Per platform/model, ?pihak=BI|A|B|C on every URL:
@@ -359,8 +359,8 @@ Per platform/model, ?pihak=BI|A|B|C on every URL:
   /transfer   Transfer: form (7.9) → progress → lens
   /dvp        DvP (bank) or Penjualan perdana (BI)
   /lensa/:tx  Lensa (7.10)
-  /kebijakan  Kebijakan (7.14), every platform with a policy document (Zeto, Noto, Fabric-X, Iroha 3)
-  /laporan    Laporan ke BI (7.11), Zeto + Fabric-X
+  /kebijakan  Kebijakan (7.14), every platform with a policy document (Zeto, Noto, Stealth, Fabric-X token v2, Iroha 3)
+  /laporan    Laporan ke BI (7.11), the Besu models (not Iroha 3, not Fabric-X token v2)
   /tps        Stress test TPS: config · live line chart · bar chart (7.8)
 ```
 

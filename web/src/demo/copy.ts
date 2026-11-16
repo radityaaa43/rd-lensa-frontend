@@ -33,10 +33,6 @@ export const MODEL_COPY: Record<ModelId, { tag: string; story: string }> = {
     tag: 'Alamat sekali pakai. Identitas bank tersembunyi, nominal tetap publik.',
     story: 'Penerima memakai alamat sekali pakai dan identitas pengirim dienkripsi di memo. BI memegang view key semua bank sehingga bisa memetakan setiap transaksi. Nominal tetap terlihat publik di chain.',
   },
-  fabricx: {
-    tag: 'Bukti ZK dan pseudonim Idemix. Endorsement 3 dari 4 institusi, tanpa auditor.',
-    story: 'Ledger hanya menyimpan commitment Pedersen dan bukti ZK, jadi nominal, jenis token, dan pemilik tersembunyi. Transaksi butuh endorsement 3 dari 4 institusi (BI dan tiga bank), sehingga bank tetap bisa bertransaksi saat BI atau satu bank offline. Setelah final, bank pengirim melaporkan transaksi lengkap ke BI; BI mencocokkannya dengan commitment di ledger lalu menyimpannya. Bank penerima membaca dompetnya sendiri, bank lain hanya melihat entri ledger yang buram.',
-  },
   'fabricx-adapter': {
     tag: 'Token v2 di Fabric-X. Tiap pihak membaca riwayat dompetnya sendiri; BI memegang node penerbit; pembacaan auditor BI belum tersambung ke Lensa.',
     story: 'Aplikasi token v2 berjalan per pihak (BI, Bank A, B, C). Pengirim dan penerima membaca riwayat dari node token miliknya; bank di luar transaksi tidak melihat apa pun. BI menerbitkan Rupiah Digital, tetapi node penerbitnya hanya menampilkan transaksi yang melibatkan dompet BI, dan pembacaan auditor BI belum tersambung ke Lensa. Aset kedua di sini adalah SBN, bukan DFABI. Detail privasi ledger belum diverifikasi di Lensa.',
@@ -50,7 +46,6 @@ export const MODEL_COPY: Record<ModelId, { tag: string; story: string }> = {
 // Landing tiles (DESIGN.md §7.1, UX H3): the model's claim of who reads a transaction's content; Lensa is the proof.
 export const PLATFORM_COPY: Record<PlatformId, { tagline: string; sees: [boolean, boolean, boolean]; note?: string }> = {
   besu: { tagline: 'Tiga model privasi: Zeto, Noto, Stealth', sees: [true, true, false] },
-  fabricx: { tagline: 'Bukti ZK dan pseudonim Idemix, endorsement 3 dari 4', sees: [true, true, false] },
   'fabricx-adapter': { tagline: 'Token v2: tiap pihak hanya membaca dompetnya sendiri', sees: [false, true, false] },
   iroha3: { tagline: 'DvP privat (APS), transfer terbuka', sees: [true, true, false], note: 'transfer terbuka' },
 };
@@ -61,7 +56,6 @@ export const SEAL_WHY: Record<ModelId, string> = {
   zeto: 'Chain hanya menyimpan commitment dan bukti ZK. Node {pihak} tidak memegang kunci untuk membukanya.',
   noto: 'Bank di luar transaksi hanya melihat hash state. Isinya hanya dibagikan ke pihak transaksi dan notary BI.',
   stealth: 'Alamat penerima sekali pakai dan identitas pengirim terenkripsi. Tanpa view key, {pihak} tidak bisa memetakannya.',
-  fabricx: 'Ledger hanya menyimpan commitment Pedersen dan bukti ZK. {pihak} tidak memegang kunci untuk membukanya.',
   'fabricx-adapter': 'Node token {pihak} hanya membaca riwayat dompetnya sendiri. Transaksi yang tidak masuk atau keluar dari dompet itu tidak terlihat di sini: penerbitan RD tidak tercatat di dompet BI (barisnya tanpa pengirim), dan BI belum membaca transfer antar bank lewat auditor.',
   iroha3: 'Validator {pihak} hanya menyimpan bundle, commitment note dan bukti STARK. Kapsul audit berisi nominal dan pihak hanya bisa dibuka BI.',
 };
@@ -71,17 +65,17 @@ export const NO_TRACE: Partial<Record<ModelId, string>> = {
   'fabricx-adapter': 'Jejak langkah on-chain belum tersedia untuk token v2: API /test/* tidak menyediakannya',
 };
 
-// Typical duration of one demo transaction, ONLY from measured live runs (T7, 2026-11-02): fabricx DvP 4,8 s,
+// Typical duration of one demo transaction, ONLY from measured live runs (T7, 2026-11-02):
 // iroha3 private DvP via APS 168 s and award 132 s via the Lensa API (2026-11-10; was 45 s for the public DvpIsi),
 // noto DvP 15,4 s, stealth DvP 11,4 s (2026-11-03), zeto DvP via UI 12,4 s (2026-11-03). Shown as a typical figure, never as a promise.
-export const TYPICAL_SECONDS: Partial<Record<ModelId, number>> = { iroha3: 150, fabricx: 5, noto: 15, stealth: 11, zeto: 12 };
+export const TYPICAL_SECONDS: Partial<Record<ModelId, number>> = { iroha3: 150, noto: 15, stealth: 11, zeto: 12 };
 
 // Dasbor stat card "Model privasi" (DESIGN.md §7.4)
 export const MODEL_STYLE: Record<ModelId, string> = {
-  zeto: 'Bukti ZK', noto: 'Notary BI', stealth: 'Alamat sekali pakai', fabricx: 'Bukti ZK + Idemix', 'fabricx-adapter': 'Dompet per pihak', iroha3: 'APS (DvP privat)',
+  zeto: 'Bukti ZK', noto: 'Notary BI', stealth: 'Alamat sekali pakai', 'fabricx-adapter': 'Dompet per pihak', iroha3: 'APS (DvP privat)',
 };
 
-export const nodeLabel =(model: ModelId, node: number) => (model === 'stealth' ? 'Akun Besu' : model === 'fabricx' || model === 'fabricx-adapter' ? `Node Fabric-X ${node}` : model === 'iroha3' ? `Validator Iroha ${node}` : `Paladin node ${node}`);
+export const nodeLabel =(model: ModelId, node: number) => (model === 'stealth' ? 'Akun Besu' : model === 'fabricx-adapter' ? `Node Fabric-X ${node}` : model === 'iroha3' ? `Validator Iroha ${node}` : `Paladin node ${node}`);
 export const roleHelp = (issuer: boolean, dvp: boolean) =>
   issuer ? 'Penerbitan hanya dijalankan BI.' : dvp ? 'Pilih bank penjual DFABI.' : 'Pilih bank pengirim.';
 

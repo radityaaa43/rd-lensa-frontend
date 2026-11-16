@@ -13,7 +13,7 @@ Dari folder `frontend/`:
 ```bash
 npm run demo -- --list                       # daftar skenario dan pasangan bank
 npm run demo:mock -- --all --speed fast      # latihan penuh tanpa chain (±2 menit)
-npm run demo -- --scenario S1 --platform fabricx --headed   # tur read-only di layanan nyata :8790
+npm run demo -- --scenario S1 --platform noto --headed      # tur read-only di layanan nyata :8790
 ```
 
 Mode **mock** (`demo:mock`) memakai server tiruan di `:8791` dengan buku besar di memori: saldo bergerak, transaksi baru
@@ -33,7 +33,7 @@ npm run demo -- --flow <alur> [--flow <alur> ...] [--platform <model> ...] [opsi
 
 | Opsi | Arti |
 |---|---|
-| `--platform zeto\|noto\|stealth\|fabricx\|iroha3` | batasi platform (bisa diulang); tanpa ini semua lima |
+| `--platform zeto\|noto\|stealth\|iroha3` | batasi platform (bisa diulang); tanpa ini semua empat |
 | `--flow rd-issue\|rd-transfer\|dfabi-issue\|dfabi-transfer\|dvp\|award` | hanya alur itu (bisa diulang). Tanpa `--scenario`: skenario tulis yang memuat alur itu, lalu S7 (dibuka lagi dari Riwayat) |
 | `--headed` | tampilkan browser (untuk ditonton) |
 | `--speed slow\|normal\|fast` | jeda untuk penonton: 2x, 1x, hampir nol. Env: `DEMO_SPEED` |
@@ -68,10 +68,9 @@ Pasangan bank di live (X kirim, Y beli; penerbitan ke X, penjualan perdana ke Y)
 | zeto | A -> B | |
 | noto | B -> C | |
 | stealth | C -> A | |
-| fabricx | A -> B | C hanya punya RD 2.010, tidak cukup untuk membayar DvP/penjualan |
 | iroha3 | B -> A | |
 
-Satu run live penuh (S3-S6) = 6 transaksi per platform, 30 total, berurutan.
+Satu run live penuh (S3-S6) = 6 transaksi per platform, 24 total, berurutan.
 
 ## Satu alur saja (`--flow`)
 
@@ -88,20 +87,20 @@ S0 menghitung saldo hanya untuk alur yang dipilih. Latihan tanpa chain: `npm run
 
 ## Dua alur siap pakai
 
-**5 menit, satu platform (Fabric-X, tercepat, ±25 detik waktu transaksi):**
+**5 menit, satu platform (Noto, 3 sampai 16 detik per transaksi):**
 
 ```bash
 npm run demo -- --scenario S1 --scenario S3 --scenario S4 --scenario S5 --scenario S6 --scenario S7 \
-  --platform fabricx --headed --allow-writes
+  --platform noto --headed --allow-writes
 ```
 
-**20 menit, lima platform, ditonton:**
+**20 menit, empat platform, ditonton:**
 
 ```bash
 npm run demo -- --all --headed --allow-writes
 ```
 
-Waktu transaksi satu run penuh ±6-7 menit (Zeto ±175 detik, Noto 45-60, Iroha 3 puluhan detik, Stealth dan Fabric-X lebih
+Waktu transaksi satu run penuh ±6-7 menit (Zeto ±175 detik, Noto 45-60, Iroha 3 puluhan detik, Stealth lebih
 singkat); sisanya jeda untuk penonton dan pembacaan read-only. Angka dari studi blockhain 2026-11-03. Ganti dengan angka
 `report.md` setelah beberapa run.
 
@@ -166,4 +165,4 @@ Restart node perlu persetujuan; setelah itu hapus `demo/out/tally.json`.
 | `ada penanda henti` | CLI menolak mulai karena `demo/out/ABORT` ada. Alasannya tertulis di berkas itu. |
 | `BLOCKED: ... --allow-writes` | Run live bertransaksi butuh `--allow-writes` dan izin lead. |
 | `Riwayat ... HTTP 503` lama | Node sedang pemanasan pertama; demo menunggu sampai 3 menit. |
-| `masih menahan tx` | Node menahan transaksi baru ±10 detik (Noto, Fabric-X, Iroha 3); demo menunggu 45 detik lalu berhenti. Jalankan lagi bagian read-only (S7). |
+| `masih menahan tx` | Node menahan transaksi baru ±10 detik (Noto, Iroha 3); demo menunggu 45 detik lalu berhenti. Jalankan lagi bagian read-only (S7). |

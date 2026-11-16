@@ -51,10 +51,6 @@ test.each(['zeto', 'noto', 'stealth', 'iroha3'] as const)('%s: dfabi-issue is BI
   expect(r({ from: 'A', to: 'BI' })).toEqual({ ok: false, reason: 'Penerbitan hanya dijalankan BI' });
   expect(validateRequest(t({ model, flow: 'rd-issue', from: 'BI', to: 'BI' }))).toEqual({ ok: false, reason: 'Pengirim dan penerima harus berbeda' });
 });
-test('fabricx keeps dfabi-issue BI -> bank', () => {
-  expect(validateRequest(t({ model: 'fabricx', flow: 'dfabi-issue', from: 'BI', to: 'A' }))).toEqual({ ok: true, amount: 1000n });
-  expect(validateRequest(t({ model: 'fabricx', flow: 'dfabi-issue', from: 'BI', to: 'BI' }))).toEqual({ ok: false, reason: 'Pengirim dan penerima harus berbeda' });
-});
 // the public host redacts any reason that looks like an IPv4 (dotted 000.000.000.000 groups did): a validation reason must survive it
 test.each([{ amount: '' }, { amount: '0' }, { amount: '12a' }, { amount: '1000000000000001' }, { to: 'A' }] as Partial<FlowRequest>[])('reason of %o is not redacted on the public host', (o) => {
   const r = validateRequest(t(o)); expect(r.ok).toBe(false); expect(hasInternal((r as { reason: string }).reason)).toBe(false);

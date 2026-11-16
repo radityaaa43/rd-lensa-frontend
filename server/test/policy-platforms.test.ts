@@ -19,7 +19,7 @@ test('registry: platforms in order, zeto and noto enforced on the four bank gate
   expect(PLATFORMS.map((p) => [p, REGISTRY[p].label, REGISTRY[p].enforced, REGISTRY[p].gateways, !!REGISTRY[p].usage])).toEqual([
     ['zeto', 'Zeto', true, ['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4'], true],
     ['noto', 'Noto', true, ['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4'], true],
-    ['fabricx', 'Fabric-X', true, ['fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4'], false], // usage only with LENSA_FABRICX_GW=1
+    ['fabricx', 'Fabric-X', true, ['fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4'], false], // the old Fabric-X model is gone: kept only for the besu bundles/revisions, no usage source
     ['iroha3', 'Iroha 3', false, [], false],
     ['stealth', 'Stealth', true, [], false], // the st-gw-N doors load the same bundle as bank-gw-N; usage (signer /outflow) only in the pod with the four doors
     ['fabricx-adapter', 'Fabric-X (token v2)', true, ['fxa-gw-1', 'fxa-gw-2', 'fxa-gw-3', 'fxa-gw-4'], false], // its own OPA; usage only with the four LENSA_FXA_GW_*
@@ -31,14 +31,13 @@ test('registry: platforms in order, zeto and noto enforced on the four bank gate
   expect(PLATFORMS.map((p) => familyOf(p).gw)).toEqual(['bank-gw', 'bank-gw', 'bank-gw', 'bank-gw', 'bank-gw', 'fxa-gw']);
 });
 
-test('/api/meta says per model whether it has a policy document and whether a gateway enforces it', async () => {
+test('/api/meta says per model whether it has a policy document and whether a gateway enforces it (never lists the old fabricx)', async () => {
   const app = buildApp({});
   const models = (await app.inject('/api/meta')).json().models;
   await app.close();
   expect(Object.fromEntries(Object.entries(models).map(([m, v]) => [m, (v as { policy: unknown }).policy]))).toEqual({
     zeto: { registered: true, enforced: true, gateway: 'bank-gw' },
     noto: { registered: true, enforced: true, gateway: 'bank-gw' },
-    fabricx: { registered: true, enforced: true, gateway: 'bank-gw' },
     iroha3: { registered: true, enforced: false, gateway: 'bank-gw' },
     stealth: { registered: true, enforced: true, gateway: 'bank-gw' },
     'fabricx-adapter': { registered: true, enforced: true, gateway: 'fxa-gw' },

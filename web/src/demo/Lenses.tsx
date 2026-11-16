@@ -2,7 +2,7 @@ import type { HistoryItem } from '../../../server/src/adapter.ts';
 import { isDvpFlow, type ModelId, type PartyId } from '../../../server/src/domain.ts';
 import type { Meta } from '../api.ts';
 import { shortHash, splitCode } from '../format.ts';
-import { NOT_REPORTED, Verdict, cells, notReported, type Cell } from '../ui/HistoryTable.tsx';
+import { Verdict, cells, type Cell } from '../ui/HistoryTable.tsx';
 import { Sealed } from '../ui/Sealed.tsx';
 import { nodeLabel, roleLabel } from './copy.ts';
 
@@ -59,7 +59,6 @@ export function Lenses({ meta, model, cols, active, txHash }: { meta: Meta; mode
           <section key={col.party} className={`lens2${mine ? ' mine' : ''}`} aria-label={viewer}>
             {head}
             {!nothing && <Verdict v={col.item.verdict} />}
-            {notReported(model, col.party, col.item) && <p className="pending">{NOT_REPORTED}</p>}
             {nothing ? <Sealed field="row" model={model} viewer={viewer} /> : (
               <>
                 {col.showFlow && <p className="lflow">{show(c.flow, 'flow')}</p>}

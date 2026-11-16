@@ -6,7 +6,6 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import type { ModelAdapter } from '../src/adapter.ts';
 import { assertPublicEnv } from '../src/public.ts';
-import { loadPod } from '../src/adapters/fabricx.ts';
 import { PolicyStore } from '../src/policy/store.ts';
 import { PolicyWorkflow } from '../src/policy/workflow.ts';
 import type { BankPolicy, BiPolicy, GatewayStatus } from '../src/policy/types.ts';
@@ -38,7 +37,7 @@ function policyDeps() {
   const workflow = new PolicyWorkflow(store, opa as unknown as Opa, publish, 'Terbit kebijakan dibekukan di pod (hanya uji coba)');
   return { policy: { store, workflow, status: async () => gw, usage: async () => ({ RD: { used: 0, limit: null }, DFABI: { used: 0, limit: null } }) } as never, store, publish };
 }
-const make = (adapters: Partial<Record<'zeto' | 'noto' | 'fabricx', ModelAdapter>> = { zeto: fakeAdapter('zeto'), noto: fakeAdapter('noto') }, over: Record<string, unknown> = {}) =>
+const make = (adapters: Partial<Record<'zeto' | 'noto', ModelAdapter>> = { zeto: fakeAdapter('zeto'), noto: fakeAdapter('noto') }, over: Record<string, unknown> = {}) =>
   (app = buildApp(adapters, { probe, public: true, publicTx: true, ...over }));
 const tx = (a: FastifyInstance, model: string, flow: string, from = 'A', to = 'B') =>
   a.inject({ method: 'POST', url: '/api/tx', payload: { model, flow, from, to, amount: '100' } });
@@ -64,10 +63,8 @@ describe('W on: transactions', () => {
     expect(meta.publicTx).toBe(true);
     for (const flow of ['dvp', 'award', 'rd-transfer']) expect(meta.models.zeto.capabilities[flow].enabled).toBe(true);
   });
-  it('Fabric-X in pod mode without LENSA_FLOWS (all flows disabled) and Iroha 3 / Stealth (not loaded) never start a tx', async () => {
-    const a = make({ zeto: fakeAdapter('zeto'), fabricx: loadPod(async () => ({ amount: '1' })) });
-    const fx = await tx(a, 'fabricx', 'rd-transfer');
-    expect(fx.statusCode).toBe(409);
+  it('Iroha 3 / Stealth (not loaded) never start a tx', async () => {
+    const a = make({ zeto: fakeAdapter('zeto') });
     for (const model of ['iroha3', 'stealth']) expect((await tx(a, model, 'rd-transfer')).statusCode).toBe(503);
   });
   it('one tx in flight: a second POST while one runs is 409', async () => {

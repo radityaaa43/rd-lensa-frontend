@@ -148,9 +148,9 @@ export function Results({ meta, snap }: { meta: Meta; snap: StressSnapshot }) {
         Platform Kapasitas: TPS dan titik jenuh dibaca dari beberapa pengirim yang benar-benar paralel. Platform Latensi 1 transaksi: satu transaksi berjalan sekaligus, jadi hasilnya sampel latensi (min, median, maks, p95 hanya dari 100 sampel) dan "tx per jam" = 3600 detik dibagi rata-rata satu transaksi; itu bukan batas chain. Konfirmasi = transaksi final di chain; laporan ke BI dan panggilan gateway dihitung terpisah. Mode laju tetap: latensi dihitung dari waktu kirim yang dijadwalkan.
         TPS = transaksi terkonfirmasi per detik setelah pemanasan {WARMUP_S} detik tiap tahap. TPS maksimum berkelanjutan = tahap penuh dengan TPS tertinggi, kegagalan paling banyak 20%, dan latensi p95 paling lama 3× p95 tahap pertama (beban ringan).
         Latensi p50/p95/p99 dihitung dari user meminta kirim sampai konfirmasi, termasuk antre di lock; p95 layanan dihitung sejak transaksi benar-benar dikirim.
-        Kirim / terima = transaksi berhasil yang dikirim dari dan diterima di node tiap bank. Tiap transaksi memilih node tujuan secara acak (dua bank lain, peluang sama), lalu user acak di node itu; penerima unik = user berbeda yang menerima. Konfirmasi Zeto termasuk laporan ke BI diterima node, Fabric-X termasuk laporan BI, Noto receipt notary, Stealth receipt Besu, Iroha 3 transaksi diterapkan.
+        Kirim / terima = transaksi berhasil yang dikirim dari dan diterima di node tiap bank. Tiap transaksi memilih node tujuan secara acak (dua bank lain, peluang sama), lalu user acak di node itu; penerima unik = user berbeda yang menerima. Konfirmasi Zeto termasuk laporan ke BI diterima node, Noto receipt notary, Stealth receipt Besu, Iroha 3 transaksi diterapkan.
         User Zeto dan Noto adalah identitas sendiri di node bank (stress-nN-ii); Stealth memakai alamat stealth sendiri dan dikirim lewat node bank; Iroha 3 berbagi akun bank; Zeto mengirim satu transaksi beban sekaligus (bukti ZK paralel lintas node merusak pohon SMT node);
-        Fabric-X satu wallet per node, jadi satu user per bank. Diukur di cluster demo, bukan kapasitas produksi.
+        Fabric-X (token v2) satu wallet per node token, jadi satu user per bank. Diukur di cluster demo, bukan kapasitas produksi.
       </div>
     </section>
   );
