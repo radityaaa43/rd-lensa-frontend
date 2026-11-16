@@ -16,8 +16,8 @@ const award = (dfabi: bigint): Want => ({ rd: AMOUNT.award * PRICE_PER_UNIT, dfa
 export const BI_WANT: Record<Model, Record<Flow, Want>> = {
   // BI is not a party except for issues (mint; dfabi-issue goes BI -> BI, so BI DFABI +amount) and award (sale from BI's DFABI inventory, zeto.ts topUpFor)
   zeto: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': { rd: 0n, dfabi: AMOUNT['dfabi-issue'] }, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-AMOUNT.award) },
-  // DFABI issue is a transfer from BI's custodian (noto.ts:92), so BI DFABI -amount (3); award sells from the custodian (noto.ts sellerFor)
-  noto: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': { rd: 0n, dfabi: -AMOUNT['dfabi-issue'] }, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-AMOUNT.award) },
+  // DFABI issue is BI -> BI: a new tranche minted to BI's custodian (noto.ts reissue / besu reissueBond), so BI DFABI +amount (3); award sells from the custodian (noto.ts sellerFor)
+  noto: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': { rd: 0n, dfabi: AMOUNT['dfabi-issue'] }, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-AMOUNT.award) },
   // stealth.ts: issues mint straight to the receiver (mintStealth / issueByPartitionStealth); award sells from BI inventory (planInventory)
   stealth: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': ZERO, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-AMOUNT.award) },
   // fabricx.ts:140/227: BI's DFABI leg of an award is an issue (BI holds no DFABI stock), so BI DFABI stays 0
@@ -31,7 +31,7 @@ export const BI_WANT: Record<Model, Record<Flow, Want>> = {
 };
 
 // BI's DFABI stock BEFORE the flow that a platform needs, else the test is skipped up front (flows.ts, `short`):
-//  - noto: award / dfabi-issue are REJECTED before any lock when the custodian holds less than the amount
+//  - noto: award is REJECTED before any lock when the custodian holds less than the amount (dfabi-issue mints a new tranche, needs nothing)
 //    (besu noto+pente/bond/src/lib/outright.ts:143-144, TradeRejected "Persediaan DFABI BI tidak cukup"); no top-up exists.
 //  - iroha3: shared-pool mode mints no batch (iroha3.ts:223-228 runPay/runDvpShared; the batch top-up at iroha3.ts:251-253 is the
 //    public path only), so low BI DFABI makes the flow fail with "Saldo ... tidak cukup di satu note privat". The driver needs ONE

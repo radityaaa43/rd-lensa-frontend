@@ -32,16 +32,15 @@ describe('biVerdicts', () => {
     expect(v[1]).toEqual({ cell: 'DFABI', status: 'SKIP', note: 'SKIP: precondition (stock=0)' });
     expect(v[0].status).toBe('PASS');
   });
-  it('noto dfabi-issue: -3 needs stock 3; stock 2 is SKIP, stock 3 and delta -3 is PASS', () => {
-    expect(biVerdicts('noto', 'dfabi-issue', bal(0n, 2n), bal(0n, 2n))[1].status).toBe('SKIP');
-    expect(biVerdicts('noto', 'dfabi-issue', bal(0n, 3n), bal(0n, 0n))[1].status).toBe('PASS');
-    expect(biVerdicts('noto', 'dfabi-issue', bal(0n, 3n), bal(0n, 1n))[1].status).toBe('FAIL');
+  it('noto dfabi-issue: a new tranche into BI custodian, delta +3 is PASS with any stock, -3 is FAIL', () => {
+    expect(biVerdicts('noto', 'dfabi-issue', bal(0n, 0n), bal(0n, 3n))[1].status).toBe('PASS');
+    expect(biVerdicts('noto', 'dfabi-issue', bal(0n, 3n), bal(0n, 0n))[1].status).toBe('FAIL');
   });
-  it('need: noto and iroha3 award / dfabi-issue need the amount; zeto, stealth and other flows 0', () => {
-    expect([need('noto', 'award'), need('noto', 'dfabi-issue'), need('iroha3', 'dfabi-issue'), need('iroha3', 'award'), need('noto', 'dvp'), need('zeto', 'award')]).toEqual([1n, 3n, 3n, 1n, 0n, 0n]);
+  it('need: noto and iroha3 award, iroha3 dfabi-issue need the amount; noto dfabi-issue, zeto, stealth and other flows 0', () => {
+    expect([need('noto', 'award'), need('noto', 'dfabi-issue'), need('iroha3', 'dfabi-issue'), need('iroha3', 'award'), need('noto', 'dvp'), need('zeto', 'award')]).toEqual([1n, 0n, 3n, 1n, 0n, 0n]);
   });
   it('short: noto skips when stock < need, iroha3 when stock <= need (one note strictly > amount)', () => {
-    expect([short('noto', 'dfabi-issue', 2n), short('noto', 'dfabi-issue', 3n), short('iroha3', 'dfabi-issue', 3n), short('iroha3', 'dfabi-issue', 4n), short('zeto', 'award', 0n)]).toEqual([true, false, true, false, false]);
+    expect([short('noto', 'award', 0n), short('noto', 'award', 1n), short('noto', 'dfabi-issue', 0n), short('iroha3', 'dfabi-issue', 3n), short('iroha3', 'dfabi-issue', 4n), short('zeto', 'award', 0n)]).toEqual([true, false, false, true, false, false]);
   });
   it('fabricx award: DFABI 0 is asserted even with zero stock (no precondition)', () => {
     expect(biVerdicts('fabricx', 'award', bal(0n, 0n), bal(1_000_000n, 0n)).map((x) => x.status)).toEqual(['PASS', 'PASS']);
