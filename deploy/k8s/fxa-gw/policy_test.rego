@@ -91,3 +91,9 @@ test_route_refusal_is_plain_forbidden if {
 	r := authz.result with input as call("POST", "/sink/status", "{}") with data.fxa_party as owner_a
 	json.unmarshal(r.body) == {"error": "forbidden"}
 }
+
+
+test_the_bundle_check_reads_only_allow if {
+	authz.bundles_loaded with data.bi.fxa as {"allow": true} with data.bank.fxa as {"allow": true}
+	not authz.bundles_loaded with data.bi.fxa as {"allow": true}
+}

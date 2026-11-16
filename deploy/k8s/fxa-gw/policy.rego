@@ -43,9 +43,11 @@ policy_ok if {
 	data.bank.fxa.allow == true
 }
 
+# Only `allow` (a default rule: defined once the bundle is loaded). Referencing the whole package (data.bank.fxa) evaluates every rule in it,
+# including bank.fxa.history (an http.send to the token history): on BI that read takes ~5 s and Envoy's 3 s ext_authz timeout refused every write.
 bundles_loaded if {
-	data.bi.fxa
-	data.bank.fxa
+	is_boolean(data.bi.fxa.allow)
+	is_boolean(data.bank.fxa.allow)
 }
 
 reasons contains "Kebijakan Fabric-X (token v2) belum diterbitkan ke gateway ini" if {
