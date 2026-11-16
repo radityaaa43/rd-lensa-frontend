@@ -348,6 +348,11 @@ describe('keyless adapter, scenario against fake signers', () => {
     expect(await rd('A')).toBe(a0 - 2000n);
   });
 
+  it('batch stress: BI does not send (the gateway allows rd-transfer bank to bank only), with the reason', () => {
+    expect(adapter.loadParties).toBeUndefined();
+    expect(adapter.biReason).toMatch(/rd-transfer/);
+  });
+
   const cachedAdapter = () => createSignerStealthAdapter({
     urls, record: { sent: {}, escrowed: [] }, save: noop, cacheMs: 60_000,
     chain: { waitReceipt: async (_p, h) => ({ block: world.txBlock.get(h)! }), blockOf: async (h) => world.txBlock.get(h)!, blockTime: async () => '2023-11-14T22:13:20.000Z', head: async () => world.block },

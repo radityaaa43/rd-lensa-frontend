@@ -2,7 +2,7 @@ import type { ModelId } from '../../../server/src/domain.ts';
 import type { ModelRunStatus, StressSnapshot } from '../../../server/src/stress.ts';
 import type { Meta } from '../api.ts';
 import { formatDecimal } from '../format.ts';
-import { LOAD_LABEL, STOP_TEXT, smallSample } from './stressForm.ts';
+import { LOAD_LABEL, STOP_TEXT, STOP_TEXT_BATCH, batchPlanned, smallSample } from './stressForm.ts';
 
 // DESIGN.md §7.8 (Ref A bars): ink and aqua alternate by model order; every bar and line is also labelled with its model name
 export const COLOR: Record<ModelId, string> = { zeto: 'var(--ink)', noto: 'var(--aqua-edge)', stealth: 'var(--ink)', fabricx: 'var(--aqua-edge)', 'fabricx-adapter': 'var(--ink)', iroha3: 'var(--ink)' };
@@ -29,20 +29,20 @@ export function RunRows({ meta, snap }: { meta: Meta; snap: StressSnapshot }) {
       {snap.config.models.map((m) => {
         const r = snap.models[m]!;
         const cur = r.stages.at(-1);
-        const planS = r.plan.length * stageS || 1;
+        const planS = r.batch ? r.batch.limitMin * 60 : r.plan.length * stageS! || 1; // batch: bar fills toward the per-model limit
         const pct = r.status === 'running' ? Math.min(100, (r.elapsedS / planS) * 100) : r.status === 'waiting' || r.status === 'skipped' ? 0 : 100;
-        const note = r.reason ?? (r.stop && r.stop !== 'done' ? STOP_TEXT[r.stop] : undefined);
+        const note = r.reason ?? (r.stop && r.stop !== 'done' ? (r.batch && STOP_TEXT_BATCH[r.stop]) || STOP_TEXT[r.stop] : undefined);
         return (
           <div key={m} className={`runrow ${r.status === 'running' ? 'run' : r.status}`}>
             <div>
               <h5><i className="swatch" style={{ background: COLOR[m], margin: 0 }} />{meta.models[m].name}</h5>
-              <div className="state">{LABEL[r.status]} · {r.load === 'latency' ? LOAD_LABEL.latency : r.load === 'open' ? 'Laju tetap' : LOAD_LABEL.capacity}</div>
+              <div className="state">{LABEL[r.status]} · {r.load === 'latency' ? LOAD_LABEL.latency : r.load === 'batch' ? 'Batch' : r.load === 'open' ? 'Laju tetap' : LOAD_LABEL.capacity}</div>
             </div>
             <div>
               <Spark series={r.series} color={COLOR[m]} />
               <div className="bar"><i style={{ width: `${pct}%`, background: COLOR[m] }} /></div>
               <div className="prog">
-                <span>{cur ? `Tahap ${r.stages.length}/${r.plan.length} · ${r.load === 'open' ? `${formatDecimal(cur.offered)} tx/detik per bank` : `${cur.users} user/bank`}` : 'Belum mulai'}</span>
+                <span>{r.batch ? `${num(r.batch.total.ok + r.batch.total.failed)} dari ${num(batchPlanned(r.batch))} selesai` : cur ? `Tahap ${r.stages.length}/${r.plan.length} · ${r.load === 'open' ? `${formatDecimal(cur.offered)} tx/detik per bank` : `${cur.users} user/bank`}` : 'Belum mulai'}</span>
                 <span>{num(r.ok)} ok{r.failed ? ` · ${num(r.failed)} gagal` : ''} · {r.elapsedS} s</span>
               </div>
               {note && <div className="prog" style={{ color: 'var(--sealed)' }}><span>{note}</span></div>}

@@ -12,7 +12,7 @@ import { STATE_DIR, readState, writeState } from '../state.ts';
 import { JsonRpcProvider, announcements as chainAnnouncements } from '../../vendor/besu/stealth-address/ts/chain.ts';
 import { parseBondMetadata } from '../../vendor/besu/stealth-address/ts/bond.ts';
 import { parseTokenMetadata } from '../../vendor/besu/stealth-address/ts/token.ts';
-import { LABELS, STEALTH_HISTORY_BLOCKS, besuRequest, flowLabel, outsiderVerdict, planInventory } from './stealth.ts';
+import { BI_LOAD_REASON, LABELS, STEALTH_HISTORY_BLOCKS, besuRequest, flowLabel, outsiderVerdict, planInventory } from './stealth.ts';
 
 // S17: the Lensa stealth adapter WITHOUT keys. Every secret (spend, view and issuer keys) lives in the signer of its own party (besu stealth-address/signer);
 // Lensa only orchestrates: it asks each party's signer, through that party's st-gw-N door (mTLS + OPA), for the party's meta-address, holdings and history,
@@ -505,6 +505,7 @@ export function createSignerStealthAdapter(deps: SignerDeps): ModelAdapter & { s
     maxLoadUsers: 1, // one intent at a time per bank signer: more users would only queue
     loadMode: 'latency',
     loadLimit: 'Satu intent sekaligus per signer bank (saldo satu alamat stealth belum bisa dicadangkan): batas jalur signer, bukan batas chain',
+    biReason: BI_LOAD_REASON,
     async loadCapacity(users) {
       return Math.min(...(await Promise.all(LOAD_BANKS.map(async (b) => Number((await rdOf(b, true)) / (LOAD_AMOUNT * BigInt(users)))))));
     },

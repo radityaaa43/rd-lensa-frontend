@@ -1,12 +1,12 @@
 import { CANCELLED, type Capability, type HistoryItem, type LensView, type ModelAdapter, type Network, type Receipt, type Trace, type TraceStep } from '../src/adapter.ts';
-import { FLOWS, PRICE_PER_UNIT, isDvpFlow, roleOf, type FlowId, type FlowRequest, type ModelId } from '../src/domain.ts';
+import { FLOWS, PRICE_PER_UNIT, isDvpFlow, roleOf, type FlowId, type FlowRequest, type ModelId, type PartyId } from '../src/domain.ts';
 
 const FLOW_IDS: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp', 'award'];
 
 // Deterministic adapter for tests: no chain access, fixed results.
 export function fakeAdapter(
   id: ModelId,
-  opts: { ready?: boolean; readyFor?: (req: FlowRequest) => { ready: boolean; detail: string }; capacity?: number; loadMode?: 'capacity' | 'latency' | 'none'; loadLimit?: string; reportMs?: number; overheadMs?: number; circulates?: boolean; maxUsers?: number; tps?: number; failEvery?: number; serial?: boolean; onSubmit?: () => void; disabled?: Partial<Record<FlowId, string>>; transparent?: boolean; biVerdict?: 'reported' | 'notarised' | 'viewkey' | 'sealed' } = {}, // transparent: every party reads everything (Iroha 3); biVerdict: what BI's read of a bank-to-bank tx is called (default 'clear')
+  opts: { ready?: boolean; readyFor?: (req: FlowRequest) => { ready: boolean; detail: string }; capacity?: number; loadMode?: 'capacity' | 'latency' | 'none'; loadLimit?: string; reportMs?: number; overheadMs?: number; circulates?: boolean; maxUsers?: number; tps?: number; failEvery?: number; serial?: boolean; onSubmit?: () => void; disabled?: Partial<Record<FlowId, string>>; loadParties?: PartyId[]; biReason?: string; transparent?: boolean; biVerdict?: 'reported' | 'notarised' | 'viewkey' | 'sealed' } = {}, // transparent: every party reads everything (Iroha 3); biVerdict: what BI's read of a bank-to-bank tx is called (default 'clear')
 ): ModelAdapter {
   let calls = 0;
   let lockTail: Promise<unknown> = Promise.resolve(); // opts.serial: one transfer at a time, like a per-sender lock
@@ -92,6 +92,7 @@ export function fakeAdapter(
     prepareLoad: async () => {},
     loadCirculates: opts.circulates ?? true,
     maxLoadUsers: opts.maxUsers,
+    ...(opts.loadParties ? { loadParties: opts.loadParties } : {}), ...(opts.biReason ? { biReason: opts.biReason } : {}),
     ...(opts.loadMode ? { loadMode: opts.loadMode } : {}), ...(opts.loadLimit ? { loadLimit: opts.loadLimit } : {}),
     async transferForLoad(_from, _to, _amount, signal) {
       const work = async () => {

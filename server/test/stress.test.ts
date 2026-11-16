@@ -249,6 +249,20 @@ test('validate: open loop needs a rate and only runs on platforms that are reall
   expect(validateStress(cfg({ models: ['zeto'] }), { zeto: 5 }, modes)).toEqual({ ok: true });
 });
 
+test('validate: batch needs count 1..200 and a pace, allows latency platforms, and checks the balance per sender share', () => {
+  const batch = (o: Partial<StressConfig> = {}): StressConfig => ({ models: ['zeto'], users: 2, mode: 'batch', count: 50, pace: 'serial', modelLimitMin: 15, ...o });
+  const modes = { zeto: { loadMode: 'latency' as const, loadLimit: 'satu sekaligus' }, noto: { maxLoadUsers: 2 } };
+  expect(validateStress(batch({ count: 0 }), { zeto: 50 }, modes)).toEqual({ ok: false, reason: 'Jumlah transaksi per pihak harus 1 sampai 200' });
+  expect(validateStress(batch({ count: 201 }), { zeto: 50 }, modes)).toMatchObject({ ok: false });
+  expect(validateStress(batch({ count: undefined }), { zeto: 50 }, modes)).toMatchObject({ ok: false });
+  expect(validateStress(batch({ pace: undefined }), { zeto: 50 }, modes)).toEqual({ ok: false, reason: 'Pilih cara kirim' });
+  expect(validateStress(batch({ pace: 'rate' }), { zeto: 50 }, modes)).toEqual({ ok: false, reason: 'Pilih laju kirim per pihak' });
+  expect(validateStress(batch(), { zeto: 50 }, modes)).toEqual({ ok: true }); // latency platform is fine in batch
+  expect(validateStress(batch(), { zeto: 10 }, modes)).toEqual({ ok: false, reason: 'Saldo user beban Zeto kurang untuk 50 transaksi per pihak, siapkan saldo dulu' });
+  expect(validateStress(batch({ models: ['noto'], pace: 'rate', rate: 1 }), { noto: 25 }, modes)).toEqual({ ok: true }); // 2 users -> share 25
+  expect(validateStress(batch({ models: ['noto'], pace: 'rate', rate: 1 }), { noto: 24 }, modes)).toMatchObject({ ok: false });
+});
+
 test('latency platform: one stage, report delay and gateway overhead are timed apart from the finality latency', async () => {
   const z = fakeAdapter('zeto', { tps: 0.5, maxUsers: 1, loadMode: 'latency', loadLimit: 'satu sekaligus', reportMs: 500, overheadMs: 40 });
   const snap = await finish(new StressRun(cfg({ users: 8 }), { zeto: z }));
@@ -270,4 +284,102 @@ test('a run longer than the limit ends with "limit", and the models after it are
   expect(snap.models.zeto!.stop).toBe('limit');
   expect(snap.models.noto!.status).toBe('skipped');
   expect(snap.models.noto!.reason).toMatch(/Batas waktu/);
+});
+
+const batch = (o: Partial<StressConfig> = {}): StressConfig => cfg({ mode: 'batch', count: 5, pace: 'serial', modelLimitMin: 15, ...o });
+const PARTIES = ['BI', 'A', 'B', 'C'] as const;
+const four = { loadParties: [...PARTIES] };
+
+test('batch: a model without balance is skipped with the Siapkan saldo text, not the preflight one', async () => {
+  const z = fakeAdapter('zeto', { capacity: 0, ...four });
+  const snap = await finish(new StressRun(batch(), { zeto: z }));
+  expect(snap.models.zeto!.status).toBe('skipped');
+  expect(snap.models.zeto!.reason).toBe('Saldo user beban belum cukup untuk 5 transaksi per pihak, tekan Siapkan saldo dulu');
+});
+
+test('batch serial: every party sends exactly count, all at once from t0', async () => {
+  const z = fakeAdapter('zeto', { tps: 1, ...four });
+  const s = spy(z);
+  const t0 = Date.now();
+  const snap = await finish(new StressRun(batch(), { zeto: z }));
+  const m = snap.models.zeto!;
+  for (const p of PARTIES) {
+    expect(s.calls.filter((c) => c.from.bank === p)).toHaveLength(5);
+    expect(s.calls.some((c) => c.from.bank === p && c.at === t0)).toBe(true);
+  }
+  expect(s.st.maxInflight).toBe(4); // one at a time per party
+  expect(s.calls.every((c) => c.from.bank !== c.to.bank)).toBe(true);
+  expect(m.load).toBe('batch');
+  expect(m.stop).toBe('done');
+  expect(m.batch!.byParty.BI!.ok).toBe(5);
+  expect(m.batch!.total.ok).toBe(20);
+  expect(m.stages).toHaveLength(1);
+  expect(m.stages[0]).toMatchObject({ users: 1, vus: 4, ok: 20, complete: true });
+  expect(m.best).toBe(-1);
+});
+
+test('batch rate: schedule at rate per party, exactly count, latency from scheduled time', async () => {
+  const z = fakeAdapter('zeto', { tps: 1, serial: true, ...four });
+  const s = spy(z);
+  const t0 = Date.now();
+  const snap = await finish(new StressRun(batch({ pace: 'rate', rate: 0.5, count: 3 }), { zeto: z }));
+  const m = snap.models.zeto!;
+  for (const p of PARTIES) expect(s.calls.filter((c) => c.from.bank === p)).toHaveLength(3);
+  const bi = s.calls.filter((c) => c.from.bank === 'BI');
+  expect(bi.map((c) => c.at - t0)).toEqual([0, 2000, 4000]);
+  expect(bi.map((c) => c.from.i)).toEqual([0, 1, 0]); // round-robin over the pool of 2
+  expect(m.batch!.sent.A).toBe(3);
+  expect(m.stop).toBe('done');
+  expect(m.batch!.total.maxMs).toBeGreaterThanOrEqual(4000); // C's first send queued 3 s behind the lock, then 1 s service
+});
+
+test('batch stop mid-run returns funds and does not count cancelled as failed', async () => {
+  const z = fakeAdapter('zeto', { tps: 1, serial: true, ...four });
+  const run = new StressRun(batch({ pace: 'rate', rate: 8, count: 50 }), { zeto: z });
+  const p = run.start();
+  await vi.advanceTimersByTimeAsync(1000);
+  run.stop();
+  await vi.runAllTimersAsync();
+  const snap = await p;
+  const m = snap.models.zeto!;
+  expect(snap.state).toBe('stopped');
+  expect(m.stop).toBe('stopped');
+  expect(m.failed).toBe(0);
+  // cancelled sends were never submitted: they are not counted as sent (their funds went back)
+  const sent = Object.values(m.batch!.sent).reduce((a, b) => a + b, 0);
+  expect(sent).toBe(m.ok + m.failed + m.unfinished);
+  expect(sent).toBeLessThan(10);
+});
+
+test('batch without BI support runs three parties and says why', async () => {
+  const z = fakeAdapter('zeto', { tps: 1, loadParties: ['A', 'B', 'C'], biReason: 'x' });
+  const s = spy(z);
+  const snap = await finish(new StressRun(batch(), { zeto: z }));
+  const m = snap.models.zeto!;
+  expect(m.batch!.parties).toEqual(['A', 'B', 'C']);
+  expect(m.batch!.skipped.BI).toBe('x');
+  expect(s.calls.some((c) => c.from.bank === 'BI' || c.to.bank === 'BI')).toBe(false);
+  expect(s.calls).toHaveLength(15);
+  expect(m.stages[0].vus).toBe(3);
+});
+
+test('batch per-model limit: first model ends limit, next model still runs', async () => {
+  const z = fakeAdapter('zeto', { tps: 0.01, ...four }), n = fakeAdapter('noto', { tps: 1, ...four });
+  const snap = await finish(new StressRun(batch({ models: ['zeto', 'noto'], modelLimitMin: 1 }), { zeto: z, noto: n }));
+  expect(snap.models.zeto!.stop).toBe('limit');
+  expect(snap.models.zeto!.status).toBe('done');
+  expect(snap.models.noto!.status).toBe('done');
+  expect(snap.models.noto!.stop).toBe('done');
+  expect(snap.models.noto!.ok).toBe(20);
+  expect(snap.state).toBe('done');
+});
+
+test('batch errors: >20% failed after 10 results stops with errors', async () => {
+  const z = fakeAdapter('zeto', { tps: 1, failEvery: 2, ...four });
+  const s = spy(z);
+  const snap = await finish(new StressRun(batch({ count: 50 }), { zeto: z }));
+  const m = snap.models.zeto!;
+  expect(m.stop).toBe('errors');
+  expect(m.firstError).toBe('gagal simulasi');
+  expect(s.calls.length).toBeLessThan(200);
 });

@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import type { Meta } from '../api.ts';
 import type { Route } from './route.ts';
-import { reasonOf } from './Sidebar.tsx';
+import { reasonOf, toolsFor } from './Sidebar.tsx';
 
 type ModelRoute = Extract<Route, { page: 'model' }>;
 // Kebijakan availability comes from the server (/api/meta): the reasons do not read capabilities
@@ -26,4 +26,14 @@ test('kebijakan on a model the server did not register shows the server reason',
 test('kebijakan on an unregistered model without a reason still says it is unavailable', () => {
   const bare = { models: { stealth: { policy: policy(false, false) } } } as unknown as Meta;
   expect(reasonOf(bare, r('stealth'), 'kebijakan')).toBe('Kebijakan belum tersedia');
+});
+
+test('tps is in the tools for BI only', () => {
+  expect(toolsFor(r('zeto'), 'besu')).toContain('tps');
+  expect(toolsFor({ ...r('zeto'), party: 'A' }, 'besu')).not.toContain('tps');
+});
+test('iroha3 and fabricx-adapter still have no laporan', () => {
+  expect(toolsFor(r('iroha3'), 'iroha3')).toEqual(['lensa', 'kebijakan', 'tps']);
+  expect(toolsFor(r('fabricx'), 'fabricx-adapter')).not.toContain('laporan');
+  expect(toolsFor(r('zeto'), 'besu')).toContain('laporan');
 });

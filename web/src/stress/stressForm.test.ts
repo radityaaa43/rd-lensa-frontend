@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import type { ModelId } from '../../../server/src/domain.ts';
-import { RATES as SERVER_RATES } from '../../../server/src/stress.ts';
+import { BATCH_COUNT_MAX as SERVER_COUNT_MAX, BATCH_DEFAULT as SERVER_DEFAULT, BATCH_LIMITS_MIN as SERVER_LIMITS, RATES as SERVER_RATES } from '../../../server/src/stress.ts';
 import type { Meta } from '../api.ts';
-import { RATES, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
+import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, RATES, STOP_TEXT_BATCH, batchBody, batchCountOk, batchMaxMinutes, batchPlanned, batchReady, batchRows, batchStatus, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
 
 const row = (model: ModelId, tps: number, users = 4, p95Ms = 2000) => ({ model, stage: { tps, users, p95Ms } });
 
@@ -77,3 +77,70 @@ test('bestRows leaves out a latency model: it has no TPS to compare', () => {
 });
 
 test('the offered rates are the server list', () => { expect([...RATES]).toEqual([...SERVER_RATES]); });
+
+test('the batch constants are the server ones', () => {
+  expect([...BATCH_LIMITS_MIN]).toEqual([...SERVER_LIMITS]);
+  expect(BATCH_COUNT_MAX).toBe(SERVER_COUNT_MAX);
+  expect(BATCH_DEFAULT).toEqual(SERVER_DEFAULT);
+});
+
+test('batch run is at most the per-model limit times the models', () => {
+  expect(batchMaxMinutes(3, 15)).toBe(45);
+  expect(batchMaxMinutes(1, 1)).toBe(1);
+});
+
+test('batch stop reasons read in batch terms', () => {
+  expect(STOP_TEXT_BATCH.limit).toBe('Berhenti di batas waktu per model');
+  expect(STOP_TEXT_BATCH.done).toBe('Semua transaksi selesai');
+  expect(STOP_TEXT_BATCH.errors).toBe('Lebih dari 20% transaksi gagal');
+});
+
+test('batchCountOk: only an integer 1..BATCH_COUNT_MAX', () => {
+  expect(batchCountOk(1)).toBe(true);
+  expect(batchCountOk(BATCH_COUNT_MAX)).toBe(true);
+  for (const n of [undefined, 0, -1, 1.5, BATCH_COUNT_MAX + 1, NaN]) expect(batchCountOk(n)).toBe(false);
+});
+
+test('batchReady: every model holds ceil(count / users) transfers per load user', () => {
+  expect(batchReady(['zeto', 'noto'], { zeto: 50, noto: 13 }, 50, 4)).toBe(true); // ceil(50/4) = 13
+  expect(batchReady(['zeto', 'noto'], { zeto: 50, noto: 12 }, 50, 4)).toBe(false);
+  expect(batchReady(['zeto'], {}, 50, 1)).toBe(false);
+  expect(batchReady([], { zeto: 50 }, 50, 1)).toBe(false);
+});
+
+test('batchReady: a model capped at fewer senders needs the larger share; a bad count is never ready', () => {
+  expect(batchReady(['zeto'], { zeto: 13 }, 50, 4, meta)).toBe(false); // zeto sends with 1 user: needs 50
+  expect(batchReady(['zeto'], { zeto: 50 }, 50, 4, meta)).toBe(true);
+  expect(batchReady(['noto'], { noto: 99 }, 0, 1)).toBe(false);
+  expect(batchReady(['noto'], { noto: 999 }, BATCH_COUNT_MAX + 1, 1)).toBe(false);
+  expect(batchReady(['noto'], { noto: 99 }, 1.5, 1)).toBe(false);
+});
+
+test('batchBody has no stageS and a rate only when sending at a rate', () => {
+  const f = { models: ['zeto'] as ModelId[], users: 8 as const, stageS: 60 as const, mode: 'batch' as const, count: 50, modelLimitMin: 15 as const, rate: 2 as const };
+  expect(batchBody({ ...f, pace: 'serial' })).toEqual({ models: ['zeto'], users: 1, mode: 'batch', count: 50, pace: 'serial', modelLimitMin: 15 });
+  expect(batchBody({ ...f, pace: 'rate' })).toEqual({ models: ['zeto'], users: 8, mode: 'batch', count: 50, pace: 'rate', modelLimitMin: 15, rate: 2 });
+});
+
+test('batchRows: BI, A, B, C in order; a skipped party reads "Tidak ikut"; times in seconds', () => {
+  const pb = (ok: number, failed: number) => ({ ok, failed, tps: 1.234, p50Ms: 2500, p95Ms: 9876, maxMs: 12000, durationMs: 40000 });
+  const m = { load: 'batch', batch: { parties: ['A', 'B', 'C'], skipped: { BI: 'x' }, sent: { A: 50, B: 50, C: 49 }, byParty: { A: pb(48, 2), B: pb(50, 0), C: pb(49, 0) } } };
+  const rows = batchRows(m as never);
+  expect(rows.map((r) => [r.party, r.label])).toEqual([['BI', 'BI'], ['A', 'Bank A'], ['B', 'Bank B'], ['C', 'Bank C']]);
+  expect(rows[0].cells).toEqual(['Tidak ikut: x']);
+  expect(rows[1].cells).toEqual(['50', '48', '2', '1,23', '2,50 s', '9,88 s', '12,00 s']);
+  expect(batchRows(m as never, { A: 'Bank Alfa' })[1].label).toBe('Bank Alfa');
+});
+
+test('batch caption: a live model is not "done"; the stop text only once it is over', () => {
+  expect(batchStatus({ status: 'running' })).toBe('Berjalan');
+  expect(batchStatus({ status: 'waiting' })).toBe('Menunggu giliran');
+  expect(batchStatus({ status: 'done' })).toBe('Semua transaksi selesai');
+  expect(batchStatus({ status: 'stopped', stop: 'limit' })).toBe('Berhenti di batas waktu per model');
+  expect(batchStatus({ status: 'stopped', stop: 'stopped' })).toBe('Dihentikan');
+});
+
+test('batch planned total is count x participating parties, not what was sent so far', () => {
+  expect(batchPlanned({ count: 50, parties: ['A', 'B', 'C'] })).toBe(150);
+  expect(batchPlanned({ count: 20, parties: ['BI', 'A', 'B', 'C'] })).toBe(80);
+});

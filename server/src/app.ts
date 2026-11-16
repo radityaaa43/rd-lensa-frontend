@@ -9,7 +9,7 @@ import {
   type FlowId, type FlowRequest, type ModelId, type PartyId,
 } from './domain.ts';
 import { probeNodes, type Probe } from './health.ts';
-import { HEALTH_MS, RATES, STAGE_S, StressRun, USERS, effectiveUsers, validateStress, type StressConfig } from './stress.ts';
+import { BATCH_COUNT_MAX, BATCH_LIMITS_MIN, HEALTH_MS, RATES, STAGE_S, StressRun, USERS, batchUsers, effectiveUsers, senders, validateStress, type StressConfig } from './stress.ts';
 import { toCsv } from './stats.ts';
 import { REGISTRY, isPlatform } from './policy/platforms.ts';
 import { HIDDEN, SECURITY_HEADERS, TX_WRITES, corrId, generic, scrubPublic } from './public.ts';
@@ -43,19 +43,22 @@ const txBody = {
 } as const;
 const stressBody = {
   type: 'object', additionalProperties: false,
-  required: ['models', 'users', 'stageS'],
+  required: ['models', 'users'], // stageS is required for closed / open: the handler checks it
   properties: {
     models: { type: 'array', uniqueItems: true, items: { enum: MODELS } },
     users: { enum: USERS },
     stageS: { enum: STAGE_S },
-    mode: { enum: ['closed', 'open'] },
+    mode: { enum: ['closed', 'open', 'batch'] },
     rate: { enum: RATES },
+    count: { type: 'integer', minimum: 1, maximum: BATCH_COUNT_MAX },
+    pace: { enum: ['serial', 'rate'] },
+    modelLimitMin: { enum: BATCH_LIMITS_MIN },
   },
 } as const;
 const prepareBody = {
   type: 'object', additionalProperties: false,
   required: ['models', 'users'],
-  properties: { models: stressBody.properties.models, users: stressBody.properties.users },
+  properties: { models: stressBody.properties.models, users: stressBody.properties.users, count: stressBody.properties.count },
 } as const;
 // Public pod: nobody can run `preflight --prepare` there, so the load users are topped up in the pod (units per user: modest, a Zeto mint is a ZK proof).
 const PREPARE_UNITS = 50;
@@ -63,7 +66,7 @@ const PREPARE_UNITS = 50;
 const PUBLIC_COOLDOWN_MS = Number(process.env.LENSA_STRESS_COOLDOWN_S ?? 1800) * 1000;
 const PUBLIC_MAX_RUN_MS = 15 * 60_000;
 const PUBLIC_MAX_USERS = 16;
-const usersQuery = { type: 'object', properties: { users: { enum: USERS.map(String) } } } as const;
+const usersQuery = { type: 'object', properties: { users: { enum: USERS.map(String) }, batch: { enum: ['1'] } } } as const; // batch=1: capacity over the parties that send in batch mode
 // coerceTypes is off, so limit stays a string and the handler checks its range
 const modelQuery = { type: 'object', required: ['model'], properties: { model: { enum: MODELS } } } as const;
 const partyQuery = {
@@ -192,8 +195,8 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
         const a = adapters[m];
         // Kebijakan: a model with a policy document (the registry in policy/platforms.ts) and whether a gateway enforces it
         const policy = isPlatform(m) ? { registered: true, enforced: REGISTRY[m].enforced } : { registered: false, enforced: false, reason: `Kebijakan belum tersedia untuk ${MODEL_NAMES[m]}` };
-        // load: how the stress test reads the platform (capacity | latency | none), the bottleneck or reason, and the most senders per bank
-        const load = a ? { mode: a.loadMode ?? 'capacity', limit: a.loadLimit ?? null, maxUsers: a.maxLoadUsers ?? null } : null;
+        // load: how the stress test reads the platform (capacity | latency | none), the bottleneck or reason, the most senders per bank, who sends in batch mode and why BI does not
+        const load = a ? { mode: a.loadMode ?? 'capacity', limit: a.loadLimit ?? null, maxUsers: a.maxLoadUsers ?? null, parties: senders(a), biReason: a.biReason ?? null } : null;
         return [m, { name: MODEL_NAMES[m], available: !!a, stepLabels: a?.stepLabels ?? [], capabilities: a ? capsOf(a) : unavailable, policy, load }];
       })),
     };
@@ -390,13 +393,13 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
   });
 
   // ready transfers per load user, per model, for `users` users per bank (default 1); a model that is missing or cannot answer is left out
-  app.get<{ Querystring: { users?: string } }>('/api/preflight-capacity', { schema: { querystring: usersQuery } }, async (request) => {
+  app.get<{ Querystring: { users?: string; batch?: '1' } }>('/api/preflight-capacity', { schema: { querystring: usersQuery } }, async (request) => {
     const users = Number(request.query.users ?? 1);
     const entries = await Promise.all(MODELS.map(async (m): Promise<[ModelId, number][]> => {
       const a = adapters[m];
       if (!a) return [];
       if (a.loadMode === 'none') return [[m, 0]]; // listed with 0: it has no load transfer yet (the reason is in /api/meta)
-      try { return [[m, await withDeadline(a.loadCapacity(effectiveUsers(users, a)), HEALTH_MS, 'Cek kapasitas')]]; } catch { return []; }
+      try { return [[m, await withDeadline(request.query.batch ? a.loadCapacity(effectiveUsers(users, a), senders(a)) : a.loadCapacity(effectiveUsers(users, a)), HEALTH_MS, 'Cek kapasitas')]]; } catch { return []; }
     }));
     return Object.fromEntries(entries.flat());
   });
@@ -404,8 +407,11 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
   // ---- stress ----
   app.post<{ Body: StressConfig }>('/api/stress', { schema: { body: stressBody } }, async (request, reply) => {
     const cfg = request.body;
+    const batch = cfg.mode === 'batch';
+    if (!batch && cfg.stageS === undefined) return reply.code(400).send({ reason: 'Pilih durasi per tahap' });
     for (const m of cfg.models) if (!adapters[m]) return reply.code(503).send(modelUnavailable(m));
     if (opts.publicTx && cfg.users > PUBLIC_MAX_USERS) return reply.code(400).send({ reason: `Di URL publik paling banyak ${PUBLIC_MAX_USERS} user per bank` });
+    if (opts.publicTx && batch && cfg.modelLimitMin! > PUBLIC_MAX_RUN_MS / 60_000) return reply.code(400).send({ reason: `Di URL publik batas per model paling lama ${PUBLIC_MAX_RUN_MS / 60_000} menit` });
     if (busy) return reply.code(409).send({ reason: BUSY_REASON });
     const wait = opts.publicTx ? stressEndedAt + PUBLIC_COOLDOWN_MS - Date.now() : 0;
     if (wait > 0) return reply.code(429).header('retry-after', String(Math.ceil(wait / 1000))).send({ reason: `Stress test di URL publik dibatasi satu run per ${Math.round(PUBLIC_COOLDOWN_MS / 60_000)} menit; coba lagi dalam ${Math.ceil(wait / 60_000)} menit` });
@@ -415,13 +421,14 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
     try {
       const capacity: Partial<Record<ModelId, number>> = {};
       for (const m of cfg.models) {
-        try { capacity[m] = await withDeadline(adapters[m]!.loadCapacity(effectiveUsers(cfg.users, adapters[m]!)), HEALTH_MS, 'Cek kapasitas'); }
+        const a = adapters[m]!;
+        try { capacity[m] = await withDeadline(batch ? a.loadCapacity(batchUsers(cfg, a), senders(a)) : a.loadCapacity(effectiveUsers(cfg.users, a)), HEALTH_MS, 'Cek kapasitas'); }
         catch (e) { return reply.code(503).send({ reason: `${MODEL_NAMES[m]} belum siap: ${msg(e)}` }); }
       }
       const v = validateStress(cfg, capacity, adapters);
       if (!v.ok) return reply.code(400).send({ reason: v.reason });
 
-      const run = new StressRun(cfg, adapters, undefined, undefined, opts.publicTx ? { maxMs: PUBLIC_MAX_RUN_MS } : {});
+      const run = new StressRun(cfg, adapters, undefined, undefined, opts.publicTx && !batch ? { maxMs: PUBLIC_MAX_RUN_MS } : {}); // a batch has its own per-model limit
       lastStress = run;
       started = true;
       run.start().catch(() => { /* surfaced through the snapshot */ }).finally(() => {
@@ -436,8 +443,8 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
 
   // Tops the load users up to PREPARE_UNITS transfers each, in the background under the same lock as a run (minutes on Zeto / Noto). Poll GET /api/stress/prepare, then start the run.
   let prep: { state: 'running' | 'done' | 'error'; model?: ModelId; reason?: string } | null = null;
-  app.post<{ Body: { models: ModelId[]; users: number } }>('/api/stress/prepare', { schema: { body: prepareBody } }, async (request, reply) => {
-    const { models, users } = request.body;
+  app.post<{ Body: { models: ModelId[]; users: number; count?: number } }>('/api/stress/prepare', { schema: { body: prepareBody } }, async (request, reply) => {
+    const { models, users, count } = request.body;
     for (const m of models) if (!adapters[m]) return reply.code(503).send(modelUnavailable(m));
     if (opts.publicTx && users > PUBLIC_MAX_USERS) return reply.code(400).send({ reason: `Di URL publik paling banyak ${PUBLIC_MAX_USERS} user per bank` });
     if (busy) return reply.code(409).send({ reason: BUSY_REASON });
@@ -450,8 +457,10 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
           model = m;
           const a = adapters[m]!, u = effectiveUsers(users, a);
           prep = { state: 'running', model: m };
-          if (await withDeadline(a.loadCapacity(u), HEALTH_MS, 'Cek kapasitas') >= PREPARE_UNITS) continue;
-          await a.prepareLoad(u, PREPARE_UNITS);
+          // count: a batch of `count` per sending party, shared by the `u` users of each (BI included where the adapter lists it)
+          const units = count ? Math.ceil(count / u) : PREPARE_UNITS, parties = count ? senders(a) : undefined;
+          if (await withDeadline(a.loadCapacity(u, parties), HEALTH_MS, 'Cek kapasitas') >= units) continue;
+          await a.prepareLoad(u, units, parties);
         }
         prep = { state: 'done' };
       } catch (e) { prep = { state: 'error', ...(model ? { model } : {}), reason: msg(e) }; } finally { busy = null; }

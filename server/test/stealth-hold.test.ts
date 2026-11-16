@@ -90,3 +90,15 @@ describe('a confirm timeout holds the source address', () => {
     } finally { vi.useRealTimers(); }
   });
 });
+
+describe('batch stress', () => {
+  it('BI does not send, with the reason; a BI load user is refused before anything is sent', async () => {
+    chain.sends = 0;
+    const a = createStealthAdapter(state);
+    expect(a.loadParties).toBeUndefined();
+    expect(a.biReason).toMatch(/rd-transfer/);
+    await expect(a.transferForLoad({ bank: 'BI', i: 0 }, { bank: 'A', i: 0 }, 1000n)).rejects.toThrow(a.biReason!);
+    await expect(a.transferForLoad({ bank: 'A', i: 0 }, { bank: 'BI', i: 0 }, 1000n)).rejects.toThrow(a.biReason!);
+    expect(chain.sends).toBe(0);
+  });
+});

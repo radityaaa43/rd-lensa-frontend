@@ -767,3 +767,62 @@ test('WarmingUpError becomes 503 + Retry-After (history and network), not a 502 
   expect(n.statusCode).toBe(503);
   expect(n.headers['retry-after']).toBe('5');
 });
+
+const batchCfg = { models: ['zeto'], users: 1, mode: 'batch', count: 2, pace: 'serial', modelLimitMin: 15 };
+
+test('stress batch: no stageS needed; bad count 400; closed without stageS 400', async () => {
+  const a = make({ zeto: quick() });
+  expect((await post(a, '/api/stress', { models: ['zeto'], users: 1 })).json()).toEqual({ reason: 'Pilih durasi per tahap' });
+  expect((await post(a, '/api/stress', { ...batchCfg, count: 0 })).statusCode).toBe(400);
+  expect((await post(a, '/api/stress', { ...batchCfg, count: 201 })).statusCode).toBe(400);
+  expect((await post(a, '/api/stress', { ...batchCfg, modelLimitMin: 7 })).statusCode).toBe(400);
+  expect((await post(a, '/api/stress', batchCfg)).statusCode).toBe(202);
+  expect((await stressState(a)).state).toBe('done');
+});
+
+test('stress batch: capacity is checked over the parties that send, against the count', async () => {
+  const z = fakeAdapter('zeto', { loadParties: ['BI', 'A', 'B', 'C'], tps: 100 });
+  const asked: unknown[][] = [];
+  z.loadCapacity = async (...args) => { asked.push(args); return 1; };
+  const r = await post(make({ zeto: z }), '/api/stress', { ...batchCfg, count: 5 });
+  expect(r.statusCode).toBe(400);
+  expect(r.json().reason).toMatch(/kurang untuk 5 transaksi per pihak/);
+  expect(asked).toEqual([[1, ['BI', 'A', 'B', 'C']]]);
+});
+
+test('public pod: batch is not capped by the per-run limit, open to 15 min, closed needs stageS', async () => {
+  const app = buildApp({ zeto: quick() }, { probe, public: true, publicTx: true });
+  expect((await post(app, '/api/stress', { models: ['zeto'], users: 1 })).json()).toEqual({ reason: 'Pilih durasi per tahap' });
+  expect((await post(app, '/api/stress', batchCfg)).statusCode).toBe(202);
+  expect((await stressState(app)).state).toBe('done');
+  await app.close();
+});
+
+test('stress/prepare with count tops up to ceil(count / users) over the sending parties', async () => {
+  const z = fakeAdapter('zeto', { capacity: 10, loadParties: ['BI', 'A', 'B', 'C'] }), n = fakeAdapter('noto', { capacity: 500 });
+  const topped: unknown[][] = [];
+  z.prepareLoad = async (...args) => { topped.push(args); };
+  const app = make({ zeto: z, noto: n });
+  expect((await post(app, '/api/stress/prepare', { models: ['zeto', 'noto'], users: 1, count: 50 })).statusCode).toBe(202);
+  for (let i = 0; i < 50 && (await app.inject('/api/stress/prepare')).json().state === 'running'; i++) await new Promise((x) => setTimeout(x, 10));
+  expect((await app.inject('/api/stress/prepare')).json()).toEqual({ state: 'done' });
+  expect(topped).toEqual([[1, 50, ['BI', 'A', 'B', 'C']]]);
+  expect((await post(app, '/api/stress/prepare', { models: ['zeto'], users: 1, count: 201 })).statusCode).toBe(400);
+});
+
+test('meta load lists the sending parties and why BI is out', async () => {
+  const body = (await make({ zeto: fakeAdapter('zeto', { loadParties: ['BI', 'A', 'B', 'C'] }), noto: fakeAdapter('noto', { biReason: 'BI tidak memegang saldo' }) }).inject('/api/meta')).json();
+  expect(body.models.zeto.load).toMatchObject({ parties: ['BI', 'A', 'B', 'C'], biReason: null });
+  expect(body.models.noto.load).toMatchObject({ parties: ['A', 'B', 'C'], biReason: 'BI tidak memegang saldo' });
+});
+
+test('preflight-capacity?batch=1 counts capacity over the sending parties', async () => {
+  const z = fakeAdapter('zeto', { loadParties: ['BI', 'A', 'B', 'C'] });
+  const asked: unknown[][] = [];
+  z.loadCapacity = async (...args) => { asked.push(args); return 9; };
+  const a = make({ zeto: z });
+  expect((await a.inject('/api/preflight-capacity?users=2&batch=1')).json()).toEqual({ zeto: 9 });
+  expect((await a.inject('/api/preflight-capacity?users=2')).json()).toEqual({ zeto: 9 });
+  expect(asked).toEqual([[2, ['BI', 'A', 'B', 'C']], [2]]);
+  expect((await a.inject('/api/preflight-capacity?batch=2')).statusCode).toBe(400);
+});

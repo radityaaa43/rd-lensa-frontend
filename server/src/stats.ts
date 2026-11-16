@@ -1,11 +1,11 @@
-import type { BankId } from './domain.ts';
+import type { PartyId } from './domain.ts';
 
 // What an adapter returns for one confirmed load transfer: submittedAt is taken once its own lock/slot is held.
 // reportMs: the BI report that follows finality (Zeto), timed apart from it; overheadMs: gateway calls around the transfer (Fabric-X token v2 gate lease), also apart from it.
 export interface Sample { submittedAt: number; confirmedAt: number; reportMs?: number; overheadMs?: number }
 // One finished load transfer as the orchestrator saw it. issuedAt: the virtual user asked (queue time included).
 // bank / to: sending and receiving node; toUser: the receiving load user
-export interface Rec { bank: BankId; to: BankId; toUser: string; issuedAt: number; submittedAt: number; doneAt: number; ok: boolean; reportMs?: number; overheadMs?: number }
+export interface Rec { bank: PartyId; to: PartyId; toUser: string; issuedAt: number; submittedAt: number; doneAt: number; ok: boolean; reportMs?: number; overheadMs?: number }
 
 export interface StageSummary {
   users: number; vus: number; // users per bank, virtual users in total (users x 3 banks)
@@ -13,7 +13,7 @@ export interface StageSummary {
   ok: number; failed: number; failRatio: number; tps: number;
   p50Ms: number; p95Ms: number; p99Ms: number; // end to end: the user asked -> confirmed (lock and queue wait included)
   svcP95Ms: number; // service: submitted -> confirmed
-  byBank: Record<BankId, { ok: number; failed: number; received: number }>; // sent from / confirmed into each node
+  byBank: Record<PartyId, { ok: number; failed: number; received: number }>; // sent from / confirmed into each node
   recipients: number; // distinct users that received a confirmed transfer
   minMs: number; maxMs: number; // end to end, confirmed transfers
   cycleMs: number; perHour: number; // mean (service + report) of one transfer; perHour = 3600 s / cycle: what ONE transfer in flight can do in an hour
@@ -35,7 +35,7 @@ export function stageSummary(recs: Rec[], t0: number, start: number, end: number
   const svc = sortNum(ok.map((r) => r.doneAt - r.submittedAt));
   const cycle = ok.length ? ok.reduce((t, r) => t + (r.doneAt - r.submittedAt) + (r.reportMs ?? 0), 0) / ok.length : 0;
   const med = (xs: (number | undefined)[]) => pct(sortNum(xs.filter((x): x is number => x !== undefined)), 0.5);
-  const byBank = { A: { ok: 0, failed: 0, received: 0 }, B: { ok: 0, failed: 0, received: 0 }, C: { ok: 0, failed: 0, received: 0 } };
+  const byBank: StageSummary['byBank'] = { BI: { ok: 0, failed: 0, received: 0 }, A: { ok: 0, failed: 0, received: 0 }, B: { ok: 0, failed: 0, received: 0 }, C: { ok: 0, failed: 0, received: 0 } };
   for (const r of inWin) byBank[r.bank][r.ok ? 'ok' : 'failed']++;
   for (const r of ok) byBank[r.to].received++;
   return {
@@ -47,6 +47,20 @@ export function stageSummary(recs: Rec[], t0: number, start: number, end: number
   };
 }
 
+// One party's slice of a batch run, or all parties together. durationMs: t0 -> its last result; tps = ok / duration.
+export interface PartyBatch { ok: number; failed: number; tps: number; p50Ms: number; p95Ms: number; maxMs: number; durationMs: number }
+
+// Batch mode: every party sent its transfers at once at t0. Latency (issued -> done) counts successes only.
+export function batchSummary(recs: Rec[], t0: number, end: number, parties: PartyId[]): { total: PartyBatch; parties: Partial<Record<PartyId, PartyBatch>> } {
+  const slice = (rs: Rec[], noneMs: number): PartyBatch => {
+    const ok = rs.filter((r) => r.ok);
+    const lat = sortNum(ok.map((r) => r.doneAt - r.issuedAt));
+    const durationMs = rs.length ? Math.max(...rs.map((r) => r.doneAt)) - t0 : noneMs;
+    return { ok: ok.length, failed: rs.length - ok.length, tps: durationMs ? ok.length / (durationMs / 1000) : 0, p50Ms: pct(lat, 0.5), p95Ms: pct(lat, 0.95), maxMs: lat.at(-1) ?? 0, durationMs };
+  };
+  return { total: slice(recs, end - t0), parties: Object.fromEntries(parties.map((p) => [p, slice(recs.filter((r) => r.bank === p), 0)])) };
+}
+
 // Confirmed transfers per second since t0, for the live chart.
 export function perSecond(recs: Rec[], t0: number, now: number): number[] {
   const out: number[] = new Array(Math.max(0, Math.floor((now - t0) / 1000)) + 1).fill(0);
@@ -54,7 +68,7 @@ export function perSecond(recs: Rec[], t0: number, now: number): number[] {
   return out;
 }
 
-export const CSV_HEAD = 'model,stage,users_per_bank,virtual_users,tps,p50_s,p95_s,p99_s,service_p95_s,ok,failed,fail_ratio,measured_s,ok_A,ok_B,ok_C,recv_A,recv_B,recv_C,recipients,stop,mode,offered_per_bank,dropped,min_s,max_s,per_hour_one_in_flight,report_p50_s,overhead_p50_s';
+export const CSV_HEAD = 'model,stage,users_per_bank,virtual_users,tps,p50_s,p95_s,p99_s,service_p95_s,ok,failed,fail_ratio,measured_s,ok_A,ok_B,ok_C,recv_A,recv_B,recv_C,recipients,stop,mode,offered_per_bank,dropped,min_s,max_s,per_hour_one_in_flight,report_p50_s,overhead_p50_s,ok_BI,recv_BI';
 
 export function toCsv(rows: { model: string; stages: StageSummary[]; stop: string; mode?: string }[]): string {
   const f2 = (n: number) => n.toFixed(2);
@@ -62,6 +76,6 @@ export function toCsv(rows: { model: string; stages: StageSummary[]; stop: strin
     model, i + 1, s.users, s.vus, f2(s.tps), f2(s.p50Ms / 1000), f2(s.p95Ms / 1000), f2(s.p99Ms / 1000), f2(s.svcP95Ms / 1000),
     s.ok, s.failed, f2(s.failRatio), s.measuredS.toFixed(1), s.byBank.A.ok, s.byBank.B.ok, s.byBank.C.ok,
     s.byBank.A.received, s.byBank.B.received, s.byBank.C.received, s.recipients, i === stages.length - 1 ? stop : '',
-    mode ?? '', f2(s.offered), s.dropped, f2(s.minMs / 1000), f2(s.maxMs / 1000), f2(s.perHour), f2(s.reportP50Ms / 1000), f2(s.overheadP50Ms / 1000),
+    mode ?? '', f2(s.offered), s.dropped, f2(s.minMs / 1000), f2(s.maxMs / 1000), f2(s.perHour), f2(s.reportP50Ms / 1000), f2(s.overheadP50Ms / 1000), s.byBank.BI.ok, s.byBank.BI.received,
   ].join(',')))].join('\n');
 }

@@ -7,6 +7,7 @@ const PARTIES: PartyId[] = ['BI', 'A', 'B', 'C'];
 
 const routes: Route[] = [{ page: 'landing' }];
 for (const model of MODELS) for (const screen of SCREENS) for (const party of PARTIES) {
+  if (screen === 'tps' && party !== 'BI') continue; // parse() resolves it to BI
   routes.push({ page: 'model', model, screen, party });
   if (screen === 'lensa') routes.push({ page: 'model', model, screen, party, tx: '0xab12' });
 }
@@ -49,6 +50,11 @@ test.each([
   ['extra segments', '/besu/zeto/lensa/0xab/more'],
 ])('rejects %s', (_name, path) => {
   expect(parse(path, '?pihak=A')).toBeNull();
+});
+
+test('tps is BI only: another party resolves to BI, other screens keep it', () => {
+  expect(parse('/besu/zeto/tps', '?pihak=A')).toMatchObject({ screen: 'tps', party: 'BI' });
+  expect(parse('/besu/zeto/dasbor', '?pihak=A')).toMatchObject({ screen: 'dasbor', party: 'A' });
 });
 
 test('landing ignores the query', () => {

@@ -3,12 +3,57 @@ import type { StressSnapshot } from '../../../server/src/stress.ts';
 import { CSV_URL, type Meta } from '../api.ts';
 import { formatDecimal } from '../format.ts';
 import { COLOR } from './RunRows.tsx';
-import { LOAD_LABEL, STOP_TEXT, WARMUP_S, bestRows, conclusion, limitsOf, smallSample } from './stressForm.ts';
+import { LOAD_LABEL, STOP_TEXT, WARMUP_S, batchRows, batchStatus, bestRows, conclusion, limitsOf, smallSample } from './stressForm.ts';
 
 const sec = (ms: number) => `${formatDecimal(ms / 1000, 2)} s`;
 
+const BATCH_HEAD = ['Pihak', 'Terkirim', 'OK', 'Gagal', 'TPS', 'p50', 'p95', 'Maks'];
+
+// batch: totals and one row per party; renders live too (the snapshot ticks every second)
+function BatchResults({ meta, snap, models }: { meta: Meta; snap: StressSnapshot; models: ModelId[] }) {
+  const names = Object.fromEntries(Object.entries(meta.parties).map(([p, v]) => [p, v.name]));
+  return (
+    <section className="card" aria-label="Hasil">
+      <div className="result-head">
+        <div><h2>Hasil</h2><p>BI dan ketiga bank mengirim transaksinya sekaligus; angka per pihak dan gabungan.</p></div>
+        {snap.state !== 'running' && <a className="ghost" href={CSV_URL} download style={{ textDecoration: 'none', color: 'inherit' }}>Unduh hasil (CSV)</a>}
+      </div>
+      {models.map((model) => {
+        const m = snap.models[model]!, t = m.batch!.total;
+        const tiles: [string, string][] = [['Total waktu', `${formatDecimal(t.durationMs / 1000, 1)} s`], ['TPS gabungan', formatDecimal(t.tps, 2)], ['p95 gabungan', sec(t.p95Ms)], ['Gagal', String(t.failed)]];
+        return (
+          <div key={model}>
+            <div className="kpis" style={{ gridTemplateColumns: 'repeat(4,1fr)', padding: '12px 20px' }}>
+              {tiles.map(([k, v]) => <div key={k}>{k}<b>{v}</b></div>)}
+            </div>
+            <div className="tablewrap">
+              <table className="res" aria-label={`Batch ${meta.models[model].name}`}>
+                <caption style={{ textAlign: 'left', fontWeight: 600, padding: '8px 20px' }}>
+                  {meta.models[model].name} · {batchStatus(m)}{m.unfinished ? ` · ${m.unfinished} transaksi belum selesai saat ditutup` : ''}
+                  {m.limit && <small style={{ display: 'block', fontWeight: 400, color: 'var(--muted)' }}>Batas: {m.limit}.</small>}
+                </caption>
+                <thead><tr>{BATCH_HEAD.map((h) => <th key={h}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {batchRows(m, names).map((r) => (
+                    <tr key={r.party}>
+                      <td>{r.label}</td>
+                      {r.cells.length === 1 ? <td colSpan={BATCH_HEAD.length - 1} style={{ textAlign: 'left', color: 'var(--muted)' }}>{r.cells[0]}</td> : r.cells.map((c, i) => <td key={i}>{c}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
 // null while there is nothing to compare: a run in progress, or a run where no model got to measure anything
 export function Results({ meta, snap }: { meta: Meta; snap: StressSnapshot }) {
+  const batch = (snap.config.models as ModelId[]).filter((m) => snap.models[m]?.load === 'batch' && snap.models[m]?.batch);
+  if (batch.length > 0) return <BatchResults meta={meta} snap={snap} models={batch} />;
   if (snap.state === 'running') return null;
   const rows = bestRows(snap);
   const ran = (snap.config.models as ModelId[]).filter((m) => (snap.models[m]?.stages.length ?? 0) > 0);

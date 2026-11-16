@@ -185,6 +185,20 @@ describe('fabricx capacity, balances, health, load', () => {
     expect(f.calls.filter((c) => c[0] === 'issue')).toEqual([['issue', 'bank3', 'RD', '2000']]); // need 3 x 1000, has 1000
   });
 
+  it('batch stress: BI sends from the issuer node\'s own RD; BI is never issued RD (issue goes to a bank only)', async () => {
+    const f = fake({ balances: { 'issuer/RD': '2500', 'bank2/RD': '9000', 'bank3/RD': '9000', 'bank4/RD': '9000' } });
+    const a = createFabricxAdapter(f.exec);
+    expect(a.loadParties).toEqual(['BI', 'A', 'B', 'C']);
+    expect(await a.loadCapacity(1, ['BI', 'A', 'B', 'C'])).toBe(2); // BI is the poorest
+    expect(await a.loadCapacity(1)).toBe(9); // default: the banks only
+    await a.prepareLoad(1, 2, ['BI']);
+    await expect(a.prepareLoad(1, 3, ['BI'])).rejects.toThrow(/Saldo RD BI kurang untuk uji beban: perlu 3000, punya 2500/);
+    expect(f.calls.some((c) => c[0] === 'issue')).toBe(false);
+    await a.transferForLoad({ bank: 'BI', i: 0 }, { bank: 'A', i: 0 }, 1000n);
+    await a.transferForLoad({ bank: 'C', i: 0 }, { bank: 'BI', i: 0 }, 1000n);
+    expect(f.calls.filter((c) => c[0] === 'transfer')).toEqual([['transfer', 'issuer', 'bank2', 'RD', '1000'], ['transfer', 'bank4', 'issuer', 'RD', '1000']]);
+  });
+
   it('health is ready when a balance call works and not ready when the driver fails', async () => {
     expect(await createFabricxAdapter(fake().exec).health()).toMatchObject({ ready: true });
     const h = await createFabricxAdapter(async () => { throw new Error('pod tidak ditemukan'); }).health();
