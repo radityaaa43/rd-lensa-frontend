@@ -1,5 +1,7 @@
 # Stress test mode Batch Implementation Plan
 
+Status: selesai dan live (Rilis 1-3); lihat status di spec `docs/superpowers/specs/2026-11-16-stress-batch-design.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Mode stress ketiga `batch`: BI, A, B, C mengirim bersamaan, tepat N transfer per pihak, dengan metrik total + per pihak, batas waktu per model yang bisa dipilih, dan menu stress hanya untuk BI.

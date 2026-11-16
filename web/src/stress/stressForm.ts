@@ -27,6 +27,21 @@ export const BATCH_LIMITS_MIN = [1, 5, 10, 15] as const;
 export const BATCH_DEFAULT = { count: 50, pace: 'serial', modelLimitMin: 15 } as const;
 // every model may run up to its limit, one after the other
 export const batchMaxMinutes = (models: number, limitMin: number) => models * limitMin;
+// seconds one load transfer takes end to end, measured live 2026-11-16 (batch N=5 and N=50, serial)
+// ponytail: fixed numbers; read the last run's p50 per model if the chains get faster or slower
+export const BATCH_TX_S: Partial<Record<ModelId, number>> = { zeto: 6, noto: 2, stealth: 2, 'fabricx-adapter': 2 };
+// estimated seconds for one model: the parties send side by side, so one party's time is the model's time.
+// serial = N one after another; rate = the slower of the schedule (N / R) and the chain (N x tx over the pool in flight).
+// Capped at the model's limit; null = no measurement for this model yet.
+export const batchEstimateS = (meta: Meta, m: ModelId, c: Pick<StressConfig, 'count' | 'pace' | 'rate' | 'users' | 'modelLimitMin'>) => {
+  const tx = BATCH_TX_S[m];
+  if (tx === undefined) return null;
+  const n = c.count ?? 0, cap = (c.modelLimitMin ?? BATCH_DEFAULT.modelLimitMin) * 60;
+  const pool = c.pace === 'rate' ? Math.min(c.users, loadOf(meta, m).maxUsers ?? c.users) : 1;
+  const s = c.pace === 'rate' ? Math.max(n / (c.rate ?? 1), (n * tx) / pool) : n * tx;
+  return { s: Math.min(Math.ceil(s), cap), capped: s >= cap };
+};
+export const durationText = (s: number) => (s < 90 ? `${s} detik` : `${Math.round(s / 60)} menit`);
 export const MIN_P95 = 100; // p95 of fewer samples is the max in disguise
 export const smallSample = (n: number) => n < MIN_P95;
 

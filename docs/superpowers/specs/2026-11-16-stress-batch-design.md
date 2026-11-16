@@ -1,6 +1,9 @@
 # Stress test mode Batch: BI, A, B, C bertransaksi bersamaan
 
-Status: disetujui user 2026-11-16; Rilis 1 diimplementasi di branch feat/stress-batch. Tanggal: 2026-11-16.
+Status: SELESAI, live di Lensa. Rilis 1 (PR #134/#136, mesin + API + metrik + UI), Rilis 2 (fix SMT Paladin
+`89e34e2c8` di node1-4 sejak 2026-11-16 12:44Z) dan Rilis 3 (lock Zeto per node, PR #137) sudah di-roll. Estimasi durasi
+per model (5.7) menyusul 2026-11-17. Uji live bagian 6: keempat model batch N=5 dan Zeto N=50 lulus; Noto, Stealth,
+Fabric-X N=50 dan batch `rate` live tidak dijalankan (keputusan user 2026-11-17). Tanggal: 2026-11-16.
 
 ## 1. Maksud
 User ingin satu uji beban yang terasa seperti hari sibuk yang nyata: keempat pihak (BI, Bank A, Bank B, Bank C)
@@ -36,6 +39,7 @@ Anti-tujuan (gagal walau "jalan")
   mode batch memakai batas per MODEL (5.5) supaya tiap model yang dicentang mendapat giliran.
 - Zeto: fix SMT (fork commit `89e34e2c8`, branch `lensa/smt-one-root-per-batch`) belum ada di image node1-4
   (`ghcr.io/radityaaa43/paladin@sha256:6f113f38...`). Tanpa fix, blok berisi beberapa tx Zeto merusak SMT.
+  Sudah di-roll 2026-11-16 (Rilis 2, image `sha256:3c868114...`).
 - Zeto memori: node worker 6.2-7 Gi allocatable, proving puncak ~4.8 Gi; lebih dari 1 bukti per node = risiko OOM.
 - Serialisasi per adapter (dipertahankan, bukan diubah):
   - Stealth signer: satu intent sekaligus per signer bank (`inLane`).
