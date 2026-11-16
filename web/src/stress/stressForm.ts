@@ -17,7 +17,7 @@ export const PUBLIC_MAX_USERS = 16; // the public pod refuses more (server/src/a
 export const loadOf = (meta: Meta, m: ModelId) => meta.models[m].load ?? { mode: 'capacity' as const, limit: null, maxUsers: null };
 export const stagesOf = (meta: Meta, m: ModelId, c: Pick<StressConfig, 'users' | 'mode' | 'rate'>) =>
   c.mode === 'open' ? RATES.filter((r) => r <= (c.rate ?? 0)).length : ramp(Math.min(c.users, loadOf(meta, m).maxUsers ?? c.users)).length;
-export const totalMinutes = (meta: Meta, c: StressConfig) => Math.ceil(c.models.reduce((t, m) => t + stagesOf(meta, m, c) * c.stageS, 0) / 60);
+export const totalMinutes = (meta: Meta, c: StressConfig) => Math.ceil(c.models.reduce((t, m) => t + stagesOf(meta, m, c) * c.stageS!, 0) / 60);
 // a platform is "capacity" (a ramp finds a knee) or "latency" (one transfer in flight: a latency sample, no TPS); the open loop is for capacity platforms only
 export const LOAD_LABEL = { capacity: 'Kapasitas (titik jenuh)', latency: 'Latensi 1 transaksi', none: 'Belum bisa diuji beban' } as const;
 export const openAllowed = (meta: Meta, models: ModelId[]) => models.length > 0 && models.every((m) => loadOf(meta, m).mode === 'capacity');

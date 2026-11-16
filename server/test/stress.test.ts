@@ -249,6 +249,20 @@ test('validate: open loop needs a rate and only runs on platforms that are reall
   expect(validateStress(cfg({ models: ['zeto'] }), { zeto: 5 }, modes)).toEqual({ ok: true });
 });
 
+test('validate: batch needs count 1..200 and a pace, allows latency platforms, and checks the balance per sender share', () => {
+  const batch = (o: Partial<StressConfig> = {}): StressConfig => ({ models: ['zeto'], users: 2, mode: 'batch', count: 50, pace: 'serial', modelLimitMin: 15, ...o });
+  const modes = { zeto: { loadMode: 'latency' as const, loadLimit: 'satu sekaligus' }, noto: { maxLoadUsers: 2 } };
+  expect(validateStress(batch({ count: 0 }), { zeto: 50 }, modes)).toEqual({ ok: false, reason: 'Jumlah transaksi per pihak harus 1 sampai 200' });
+  expect(validateStress(batch({ count: 201 }), { zeto: 50 }, modes)).toMatchObject({ ok: false });
+  expect(validateStress(batch({ count: undefined }), { zeto: 50 }, modes)).toMatchObject({ ok: false });
+  expect(validateStress(batch({ pace: undefined }), { zeto: 50 }, modes)).toEqual({ ok: false, reason: 'Pilih cara kirim' });
+  expect(validateStress(batch({ pace: 'rate' }), { zeto: 50 }, modes)).toEqual({ ok: false, reason: 'Pilih laju kirim per pihak' });
+  expect(validateStress(batch(), { zeto: 50 }, modes)).toEqual({ ok: true }); // latency platform is fine in batch
+  expect(validateStress(batch(), { zeto: 10 }, modes)).toEqual({ ok: false, reason: 'Saldo user beban Zeto kurang untuk 50 transaksi per pihak, siapkan saldo dulu' });
+  expect(validateStress(batch({ models: ['noto'], pace: 'rate', rate: 1 }), { noto: 25 }, modes)).toEqual({ ok: true }); // 2 users -> share 25
+  expect(validateStress(batch({ models: ['noto'], pace: 'rate', rate: 1 }), { noto: 24 }, modes)).toMatchObject({ ok: false });
+});
+
 test('latency platform: one stage, report delay and gateway overhead are timed apart from the finality latency', async () => {
   const z = fakeAdapter('zeto', { tps: 0.5, maxUsers: 1, loadMode: 'latency', loadLimit: 'satu sekaligus', reportMs: 500, overheadMs: 40 });
   const snap = await finish(new StressRun(cfg({ users: 8 }), { zeto: z }));

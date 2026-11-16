@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { CANCELLED, LOAD_AMOUNT, type LoadUser, type ModelAdapter } from './adapter.ts';
-import { BANKS, MODEL_NAMES, type BankId, type ModelId } from './domain.ts';
+import { BANKS, MODEL_NAMES, type BankId, type ModelId, type PartyId } from './domain.ts';
 import { withDeadline } from './deadline.ts';
 import { perSecond, stageSummary, type Rec, type StageSummary } from './stats.ts';
 
@@ -14,7 +14,15 @@ export const STAGE_S = [60, 120, 300] as const;
 // Open loop (mode 'open'): instead of VUs that wait for their last transfer, every bank is offered `rate` new transfers per second at a fixed schedule, whatever the chain answers;
 // stages step through RATES up to `rate`, `users` is the pool of senders per bank. Latency counts from the SCHEDULED send time, so a slow chain shows as the wait it causes (no coordinated omission).
 export const RATES = [0.5, 1, 2, 4, 8] as const;
-export interface StressConfig { models: ModelId[]; users: (typeof USERS)[number]; stageS: (typeof STAGE_S)[number]; mode?: 'closed' | 'open'; rate?: (typeof RATES)[number] }
+// Batch (mode 'batch'): every sender (BI and the banks) sends exactly `count` transfers at once, serially or at `rate` per second per sender;
+// a model's run is cut off after `modelLimitMin` minutes. `users` is the sender pool per party when pace is 'rate', else 1; `stageS` is closed/open only.
+export const BATCH_COUNT_MAX = 200;
+export const BATCH_LIMITS_MIN = [1, 5, 10, 15] as const;
+export const BATCH_DEFAULT = { count: 50, pace: 'serial', modelLimitMin: 15 } as const;
+export interface StressConfig {
+  models: ModelId[]; users: (typeof USERS)[number]; stageS?: (typeof STAGE_S)[number]; mode?: 'closed' | 'open' | 'batch'; rate?: (typeof RATES)[number];
+  count?: number; pace?: 'serial' | 'rate'; modelLimitMin?: (typeof BATCH_LIMITS_MIN)[number];
+}
 export type ModelRunStatus = 'waiting' | 'running' | 'done' | 'stopped' | 'skipped';
 // why a model's run ended: 'done' = every stage of the plan ran
 export type StopReason = 'done' | 'saturated' | 'errors' | 'stalled' | 'funds' | 'stopped' | 'limit';
@@ -47,6 +55,10 @@ export const HEALTH_MS = 10_000;
 
 export const stagePlan = (users: number, maxUsers = Infinity): number[] => [...new Set(USERS.filter((u) => u <= users).map((u) => Math.min(u, maxUsers)))];
 export const effectiveUsers = (users: number, a: Pick<ModelAdapter, 'maxLoadUsers'>) => Math.min(users, a.maxLoadUsers ?? users);
+export const senders = (a: Pick<ModelAdapter, 'loadParties'>): PartyId[] => a.loadParties ?? [...BANKS];
+export const batchUsers = (c: StressConfig, a: Pick<ModelAdapter, 'maxLoadUsers'>) => (c.pace === 'rate' ? effectiveUsers(c.users, a) : 1);
+// minimum balance (ready transfers) per load user: the sender's `count` split over its users
+export const batchShare = (c: StressConfig, a: Pick<ModelAdapter, 'maxLoadUsers'>) => Math.ceil(c.count! / batchUsers(c, a));
 // The sustainable maximum (the knee): the complete stage with the highest TPS that keeps failures within MAX_FAIL and its p95
 // within LATENCY_SLO x the unloaded p95 (stage 1). Past the knee TPS can still creep up while every user waits far longer.
 export const LATENCY_SLO = 3;
@@ -57,14 +69,24 @@ export function bestStage(stages: Stage[]): number {
 }
 
 // capacity: ready transfers per load user (adapter.loadCapacity at the model's effective users)
-export function validateStress(c: StressConfig, capacity: Partial<Record<ModelId, number>>, modes: Partial<Record<ModelId, Pick<ModelAdapter, 'loadMode' | 'loadLimit'>>> = {}): { ok: true } | { ok: false; reason: string } {
+export function validateStress(c: StressConfig, capacity: Partial<Record<ModelId, number>>, modes: Partial<Record<ModelId, Pick<ModelAdapter, 'loadMode' | 'loadLimit' | 'maxLoadUsers' | 'loadParties'>>> = {}): { ok: true } | { ok: false; reason: string } {
   if (c.models.length === 0) return { ok: false, reason: 'Pilih minimal satu model' };
+  const batch = c.mode === 'batch';
+  if (batch) {
+    if (!Number.isInteger(c.count) || c.count! < 1 || c.count! > BATCH_COUNT_MAX) return { ok: false, reason: `Jumlah transaksi per pihak harus 1 sampai ${BATCH_COUNT_MAX}` };
+    if (!c.pace) return { ok: false, reason: 'Pilih cara kirim' };
+    if (c.pace === 'rate' && c.rate === undefined) return { ok: false, reason: 'Pilih laju kirim per pihak' };
+  }
   if (c.mode === 'open' && c.rate === undefined) return { ok: false, reason: 'Pilih laju kedatangan untuk mode laju tetap' };
   for (const m of c.models) {
     const mode = modes[m]?.loadMode ?? 'capacity';
     if (mode === 'none') return { ok: false, reason: `${MODEL_NAMES[m]} belum bisa diuji beban: ${modes[m]?.loadLimit ?? 'belum didukung'}` };
     if (c.mode === 'open' && mode !== 'capacity') return { ok: false, reason: `Mode laju tetap hanya untuk platform yang benar-benar paralel; ${MODEL_NAMES[m]} hanya mengirim satu transaksi sekaligus` };
     if (capacity[m] === undefined) return { ok: false, reason: `${MODEL_NAMES[m]} belum tersedia` };
+    if (batch) {
+      if (capacity[m]! < batchShare(c, modes[m] ?? {})) return { ok: false, reason: `Saldo user beban ${MODEL_NAMES[m]} kurang untuk ${c.count} transaksi per pihak, siapkan saldo dulu` };
+      continue;
+    }
     if (capacity[m]! < 1) return { ok: false, reason: `Saldo user beban ${MODEL_NAMES[m]} belum siap, jalankan preflight --prepare` };
   }
   return { ok: true };
@@ -262,14 +284,14 @@ export class StressRun extends EventEmitter {
       const start = now();
       if (open) {
         st.current = { start, users, offered: u };
-        await Promise.race([Promise.all(BANKS.map((b) => arrivals(b, u, start + this.cfg.stageS * 1000))), endP]);
+        await Promise.race([Promise.all(BANKS.map((b) => arrivals(b, u, start + this.cfg.stageS! * 1000))), endP]);
       } else {
         const added: LoadUser[] = [];
         for (let i = active.length / 3; i < u; i++) for (const bank of BANKS) added.push({ bank, i });
         active.push(...added); // all of them first: a worker picks its recipient among `active` right away
         workers.push(...added.map(worker));
         st.current = { start, users: u, offered: 0 };
-        await Promise.race([this.sleep(this.cfg.stageS * 1000), endP]);
+        await Promise.race([this.sleep(this.cfg.stageS! * 1000), endP]);
       }
       const complete = !ended;
       const s: Stage = { ...this.summ(st, start, now(), open ? users : u, open ? u : 0), complete };

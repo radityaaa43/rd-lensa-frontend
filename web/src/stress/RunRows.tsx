@@ -29,7 +29,7 @@ export function RunRows({ meta, snap }: { meta: Meta; snap: StressSnapshot }) {
       {snap.config.models.map((m) => {
         const r = snap.models[m]!;
         const cur = r.stages.at(-1);
-        const planS = r.plan.length * stageS || 1;
+        const planS = r.plan.length * stageS! || 1;
         const pct = r.status === 'running' ? Math.min(100, (r.elapsedS / planS) * 100) : r.status === 'waiting' || r.status === 'skipped' ? 0 : 100;
         const note = r.reason ?? (r.stop && r.stop !== 'done' ? STOP_TEXT[r.stop] : undefined);
         return (
