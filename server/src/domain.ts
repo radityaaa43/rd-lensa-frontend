@@ -58,6 +58,9 @@ export function roleOf(req: FlowRequest, party: PartyId): Role {
 export const DFABI_TO_BI_MODELS: ModelId[] = ['zeto', 'noto', 'stealth', 'iroha3'];
 export const dfabiIssueToBi = (req: Pick<FlowRequest, 'model' | 'flow'>): boolean => req.flow === 'dfabi-issue' && DFABI_TO_BI_MODELS.includes(req.model);
 
+// Models whose award terms are fixed on the ledger: token v2 sells exactly 1 SBN to Bank A for 1.000.000.000 RD (regulated policy.go ValidateDvP).
+export const FIXED_AWARD: Partial<Record<ModelId, { to: PartyId; amount: bigint; price: bigint }>> = { 'fabricx-adapter': { to: 'A', amount: 1n, price: 1_000_000_000n } };
+
 export function validateRequest(req: FlowRequest): { ok: true; amount: bigint } | { ok: false; reason: string } {
   const fail = (reason: string) => ({ ok: false as const, reason });
   const a = req.amount;
@@ -75,6 +78,10 @@ export function validateRequest(req: FlowRequest): { ok: true; amount: bigint } 
   if (req.to === 'BI') return fail('Penerima harus bank');
   if (FLOWS[req.flow].issuer) { if (req.from !== 'BI') return fail('Penerbitan hanya dijalankan BI'); }
   else if (req.from === 'BI') return fail('Transfer dijalankan oleh bank');
+  const fixed = req.flow === 'award' ? FIXED_AWARD[req.model] : undefined;
+  if (fixed && (req.to !== fixed.to || amount !== fixed.amount)) {
+    return fail(`Penjualan perdana ${MODEL_NAMES[req.model]} hanya ke ${PARTIES[fixed.to].name}, ${fixed.amount} unit (dibayar Rp ${fixed.price.toLocaleString('id-ID')})`);
+  }
   return { ok: true, amount };
 }
 export const MODEL_NAMES: Record<ModelId, string> = { zeto: 'Zeto', noto: 'Noto', stealth: 'Stealth', fabricx: 'Fabric-X', 'fabricx-adapter': 'Fabric-X (token v2)', iroha3: 'Iroha 3' };

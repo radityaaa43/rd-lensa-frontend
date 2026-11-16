@@ -62,8 +62,13 @@ export const SEAL_WHY: Record<ModelId, string> = {
   noto: 'Bank di luar transaksi hanya melihat hash state. Isinya hanya dibagikan ke pihak transaksi dan notary BI.',
   stealth: 'Alamat penerima sekali pakai dan identitas pengirim terenkripsi. Tanpa view key, {pihak} tidak bisa memetakannya.',
   fabricx: 'Ledger hanya menyimpan commitment Pedersen dan bukti ZK. {pihak} tidak memegang kunci untuk membukanya.',
-  'fabricx-adapter': 'Node token {pihak} hanya menampilkan transaksi yang melibatkan dompetnya sendiri.',
+  'fabricx-adapter': 'Node token {pihak} hanya membaca riwayat dompetnya sendiri. Transaksi yang tidak masuk atau keluar dari dompet itu tidak terlihat di sini: penerbitan RD tidak tercatat di dompet BI (barisnya tanpa pengirim), dan BI belum membaca transfer antar bank lewat auditor.',
   iroha3: 'Validator {pihak} hanya menyimpan bundle, commitment note dan bukti STARK. Kapsul audit berisi nominal dan pihak hanya bisa dibuka BI.',
+};
+
+// Models without an on-chain trace read: the panel says why without calling /api/trace (a 501 there is a browser console error).
+export const NO_TRACE: Partial<Record<ModelId, string>> = {
+  'fabricx-adapter': 'Jejak langkah on-chain belum tersedia untuk token v2: API /test/* tidak menyediakannya',
 };
 
 // Typical duration of one demo transaction, ONLY from measured live runs (T7, 2026-11-02): fabricx DvP 4,8 s,

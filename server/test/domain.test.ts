@@ -23,6 +23,13 @@ test('award: BI sells to a bank; a bank as seller or BI as buyer is rejected', (
   expect(validateRequest(t({ flow: 'award', from: 'A', to: 'B' }))).toEqual({ ok: false, reason: 'Penerbitan hanya dijalankan BI' });
   expect(validateRequest(t({ flow: 'award', from: 'A', to: 'BI' }))).toEqual({ ok: false, reason: 'Penerima harus bank' });
 });
+test('award on token v2: only its fixed ledger terms pass (a 400 with the reason, not a hidden 503)', () => {
+  const fx = (o: Partial<FlowRequest>) => t({ model: 'fabricx-adapter', flow: 'award', from: 'BI', to: 'A', amount: '1', ...o });
+  expect(validateRequest(fx({}))).toEqual({ ok: true, amount: 1n });
+  const why = { ok: false, reason: 'Penjualan perdana Fabric-X (token v2) hanya ke Bank Mandala, 1 unit (dibayar Rp 1.000.000.000)' };
+  expect(validateRequest(fx({ to: 'B' }))).toEqual(why);
+  expect(validateRequest(fx({ amount: '2' }))).toEqual(why);
+});
 test.each([
   ['dvp', true], ['award', true], ['rd-issue', false], ['rd-transfer', false], ['dfabi-issue', false], ['dfabi-transfer', false], [null, false],
 ] as const)('isDvpFlow(%s) = %s', (f, v) => expect(isDvpFlow(f)).toBe(v));

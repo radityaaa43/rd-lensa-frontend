@@ -1,4 +1,4 @@
-import { BANKS, FLOWS, MAX_AMOUNT, PRICE_PER_UNIT, dfabiIssueToBi, type FlowRequest, type PartyId } from '../../../server/src/domain.ts';
+import { BANKS, FIXED_AWARD, FLOWS, MAX_AMOUNT, PRICE_PER_UNIT, dfabiIssueToBi, type FlowRequest, type PartyId } from '../../../server/src/domain.ts';
 import type { Meta } from '../api.ts';
 import type { Route } from '../app/route.ts';
 import { amountWords, formatRupiah, parseAmountInput } from '../format.ts';
@@ -24,10 +24,11 @@ export function Compose({ meta, route, s, dispatch, dvp, onSend }: {
   const asset: Asset = dvp ? 'DFABI' : s.asset;
   const amount = req.amount === '' ? null : BigInt(req.amount);
   const valid = amount !== null && amount >= 1n && amount <= MAX_AMOUNT;
+  const fixed = req.flow === 'award' ? FIXED_AWARD[model] : undefined; // terms fixed by the ledger: buyer and amount are not choices
   // the payment line is the request's terms (a protocol constant), shown only in this preview, never in a party's view
   const hint = !valid
     ? `Isi nominal antara 1 dan ${MAX_AMOUNT.toLocaleString('id-ID')}`
-    : amountWords(amount, f.asset) + (dvp ? ` · dibayar ${formatRupiah(amount * PRICE_PER_UNIT)}` : '');
+    : amountWords(amount, f.asset) + (dvp ? ` · dibayar ${formatRupiah(fixed?.price ?? amount * PRICE_PER_UNIT)}` : '');
 
   return (
     <section className="compose2" aria-label="Susun transaksi">
@@ -51,7 +52,7 @@ export function Compose({ meta, route, s, dispatch, dvp, onSend }: {
               // DFABI is issued into BI's own inventory; a bank gets it through the sale on the next screen
               <select id="to" value="BI" disabled aria-describedby="to-hint"><option value="BI">{MINT_TO_BI}</option></select>
             ) : (
-              <select id="to" value={req.to} disabled={busy} onChange={(e) => dispatch({ type: 'to', to: e.target.value as PartyId })}>
+              <select id="to" value={req.to} disabled={busy || fixed !== undefined} onChange={(e) => dispatch({ type: 'to', to: e.target.value as PartyId })}>
                 {BANKS.filter((b) => b !== party).map((b) => <option key={b} value={b}>{name(b)}</option>)}
               </select>
             )}
@@ -59,11 +60,11 @@ export function Compose({ meta, route, s, dispatch, dvp, onSend }: {
           </div>
           <div>
             <label htmlFor="amount">{asset === 'RD' ? 'Nominal (Rupiah)' : 'Jumlah (unit DFABI)'}</label>
-            <input id="amount" inputMode="numeric" autoComplete="off" disabled={busy} value={amount === null ? '' : amount.toLocaleString('id-ID')}
+            <input id="amount" inputMode="numeric" autoComplete="off" disabled={busy || fixed !== undefined} value={amount === null ? '' : amount.toLocaleString('id-ID')}
               aria-describedby="amount-hint" aria-invalid={!valid}
               onChange={(e) => dispatch({ type: 'amount', asset, amount: parseAmountInput(e.target.value)?.toString() ?? '' })} />
             <p className="hint2" id="amount-hint">{hint}</p>
-            {dvp && <p className="hint2">Harga per unit Rp 1.000.000 (ketentuan transaksi)</p>}
+            {dvp && <p className="hint2">{fixed ? `Syarat tetap di ledger: ${fixed.amount} unit ke ${name(fixed.to)}, dibayar ${formatRupiah(fixed.price)}` : 'Harga per unit Rp 1.000.000 (ketentuan transaksi)'}</p>}
           </div>
         </div>
         {!cap.enabled && <p className="notice">{cap.reason}</p>}

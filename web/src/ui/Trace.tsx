@@ -3,7 +3,8 @@ import type { ModelId, PartyId } from '../../../server/src/domain.ts';
 import { getTrace, type Meta } from '../api.ts';
 import { usePoll } from '../app/usePoll.ts';
 import { shortHash } from '../format.ts';
-import { Polled } from './States.tsx';
+import { NO_TRACE } from '../demo/copy.ts';
+import { NotAvailable, Polled } from './States.tsx';
 
 const SEC = new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const secs = (ms: number) => `${SEC.format(ms / 1000)} s`;
@@ -83,12 +84,17 @@ export function TraceView({ t }: { t: Trace }) {
 }
 
 export function TracePanel({ model, tx, party, meta }: { meta: Meta; model: ModelId; tx: string; party: PartyId }) {
-  const p = usePoll(`${model}|${party}|trace|${tx}`, () => getTrace(model, party, tx));
+  const none = NO_TRACE[model];
   return (
     <section className="trace" aria-labelledby="h-trace">
       <h2 id="h-trace">Alur transaksi di jaringan</h2>
       <p className="muted small">Dibaca melalui node {meta.parties[party].name}.</p>
-      <Polled p={p} rows={4}>{(t) => <TraceView t={t} />}</Polled>
+      {none ? <NotAvailable reason={none} /> : <TraceRead model={model} tx={tx} party={party} />}
     </section>
   );
+}
+
+function TraceRead({ model, tx, party }: { model: ModelId; tx: string; party: PartyId }) {
+  const p = usePoll(`${model}|${party}|trace|${tx}`, () => getTrace(model, party, tx));
+  return <Polled p={p} rows={4}>{(t) => <TraceView t={t} />}</Polled>;
 }
