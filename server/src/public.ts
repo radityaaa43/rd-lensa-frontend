@@ -20,7 +20,9 @@ export const TX_WRITES = /^\/api\/(?:tx|stress(?:\/(?:stop|prepare))?|policy\/(?
 // What must never reach a public client: IPs, URLs, cluster hosts, namespaces, node / gateway names.
 const PATTERNS: RegExp[] = [
   /\b[a-z][a-z0-9+.-]*:\/\/[^\s'")<>]+/gi, // URLs
-  /\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b/g, // IPv4 (+ port)
+  // IPv4 (+ port). Octets are 0-255 without a leading zero, so an id-ID amount ("Rp 1.000.000.000", "1.001.001.703") is not an IP.
+  // ponytail: an amount whose groups are all valid octets (e.g. 1.100.200.250) is still redacted; fine for a leak filter.
+  /\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?::\d{1,5})?\b/g,
   /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:svc|cluster\.local)\b(?::\d{1,5})?/gi, // cluster hosts
   /\brd-(?:zeto|stealth|iroha3|fabricx|lensa)(?:-[a-z0-9]+)*\b/gi, // namespaces
   /\bmember-\d+-node\b|\b(?:bank|fx|st)-gw-\d+(?:-ext|-lb)?\b/gi, // nodes, gateways
