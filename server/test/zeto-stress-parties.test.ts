@@ -40,9 +40,19 @@ describe('ledgerParties for a stress transfer', () => {
     expect(ledgerParties(l, ['r'], false)).toEqual({ from: 'A', to: null });
   });
 
-  it('a BI load user sending to a bank user: BI to the bank, BI change ignored', () => {
-    const l = ledger({ r: { owner: 'kB0', reporters: ['stress-n1-00@node1'] }, change: { owner: 'kBI0', reporters: ['stress-n1-00@node1'] } });
+  it('a BI load user sending to a bank user: no report, node1 adopted every output; BI to the bank, BI change ignored', () => {
+    const l = ledger({ r: { owner: 'kB0', reporters: ['bi-own-state'] }, change: { owner: 'kBI0', reporters: ['bi-own-state'] } });
     expect(ledgerParties(l, ['r', 'change'], false)).toEqual({ from: 'BI', to: 'B' });
+  });
+
+  it('a bank user sending to a BI load user: adopted output plus the bank report names the bank', () => {
+    const l = ledger({ r: { owner: 'kBI0', reporters: ['bi-own-state', 'stress-n2-00@node2'] }, change: { owner: 'kA0', reporters: ['stress-n2-00@node2'] } });
+    expect(ledgerParties(l, ['r', 'change'], false)).toEqual({ from: 'A', to: 'BI' });
+  });
+
+  it('a bank user paying a BI load user exactly, before the bank report: sender unknown, not BI', () => {
+    const l = ledger({ r: { owner: 'kBI0', reporters: ['bi-own-state'] } });
+    expect(ledgerParties(l, ['r'], false)).toEqual({ from: null, to: 'BI' });
   });
 });
 
