@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { ModelId } from '../../../server/src/domain.ts';
 import { BATCH_COUNT_MAX as SERVER_COUNT_MAX, BATCH_DEFAULT as SERVER_DEFAULT, BATCH_LIMITS_MIN as SERVER_LIMITS, RATES as SERVER_RATES } from '../../../server/src/stress.ts';
 import type { Meta } from '../api.ts';
-import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, RATES, STOP_TEXT_BATCH, batchBody, batchMaxMinutes, batchReady, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
+import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, RATES, STOP_TEXT_BATCH, batchBody, batchMaxMinutes, batchReady, batchRows, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
 
 const row = (model: ModelId, tps: number, users = 4, p95Ms = 2000) => ({ model, stage: { tps, users, p95Ms } });
 
@@ -114,4 +114,14 @@ test('batchBody has no stageS and a rate only when sending at a rate', () => {
   const f = { models: ['zeto'] as ModelId[], users: 8 as const, stageS: 60 as const, mode: 'batch' as const, count: 50, modelLimitMin: 15 as const, rate: 2 as const };
   expect(batchBody({ ...f, pace: 'serial' })).toEqual({ models: ['zeto'], users: 1, mode: 'batch', count: 50, pace: 'serial', modelLimitMin: 15 });
   expect(batchBody({ ...f, pace: 'rate' })).toEqual({ models: ['zeto'], users: 8, mode: 'batch', count: 50, pace: 'rate', modelLimitMin: 15, rate: 2 });
+});
+
+test('batchRows: BI, A, B, C in order; a skipped party reads "Tidak ikut"; times in seconds', () => {
+  const pb = (ok: number, failed: number) => ({ ok, failed, tps: 1.234, p50Ms: 2500, p95Ms: 9876, maxMs: 12000, durationMs: 40000 });
+  const m = { load: 'batch', batch: { parties: ['A', 'B', 'C'], skipped: { BI: 'x' }, sent: { A: 50, B: 50, C: 49 }, byParty: { A: pb(48, 2), B: pb(50, 0), C: pb(49, 0) } } };
+  const rows = batchRows(m as never);
+  expect(rows.map((r) => [r.party, r.label])).toEqual([['BI', 'BI'], ['A', 'Bank A'], ['B', 'Bank B'], ['C', 'Bank C']]);
+  expect(rows[0].cells).toEqual(['Tidak ikut: x']);
+  expect(rows[1].cells).toEqual(['50', '48', '2', '1,23', '2,50 s', '9,88 s', '12,00 s']);
+  expect(batchRows(m as never, { A: 'Bank Alfa' })[1].label).toBe('Bank Alfa');
 });

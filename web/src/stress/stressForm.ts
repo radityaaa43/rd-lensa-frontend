@@ -1,5 +1,5 @@
-import { MODEL_NAMES, type ModelId } from '../../../server/src/domain.ts';
-import type { StopReason, StressConfig, StressSnapshot } from '../../../server/src/stress.ts';
+import { MODEL_NAMES, type ModelId, type PartyId } from '../../../server/src/domain.ts';
+import type { ModelSnapshot, StopReason, StressConfig, StressSnapshot } from '../../../server/src/stress.ts';
 import type { Meta } from '../api.ts';
 import { formatDecimal } from '../format.ts';
 
@@ -80,4 +80,19 @@ export function conclusion(rows: { model: ModelId; stage: { tps: number; users: 
   const text = `${MODEL_NAMES[best.model]} paling tinggi: ${at(best)}`;
   if (worst.stage.tps === 0) return `${text}.`; // no ratio against a model that measured nothing
   return `${text}, sekitar ${Math.round(best.stage.tps / worst.stage.tps)}× ${MODEL_NAMES[worst.model]} (${at(worst)}).`;
+}
+
+// Batch table: always BI, A, B, C. A skipped party has one cell, "Tidak ikut: <reason>" (the table spans it over the data columns).
+export const BATCH_PARTIES: PartyId[] = ['BI', 'A', 'B', 'C'];
+export function batchRows(m: ModelSnapshot, names: Partial<Record<PartyId, string>> = {}): { party: PartyId; label: string; cells: string[] }[] {
+  const b = m.batch;
+  const sec = (ms: number) => `${formatDecimal(ms / 1000, 2)} s`;
+  return BATCH_PARTIES.map((party) => {
+    const label = names[party] ?? (party === 'BI' ? 'BI' : `Bank ${party}`);
+    const why = b?.skipped[party];
+    if (why !== undefined) return { party, label, cells: [`Tidak ikut: ${why}`] };
+    const r = b?.byParty[party];
+    const sent = String(b?.sent[party] ?? 0);
+    return { party, label, cells: r ? [sent, String(r.ok), String(r.failed), formatDecimal(r.tps, 2), sec(r.p50Ms), sec(r.p95Ms), sec(r.maxMs)] : [sent, '—', '—', '—', '—', '—', '—'] };
+  });
 }
