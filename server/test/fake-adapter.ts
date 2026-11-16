@@ -6,7 +6,7 @@ const FLOW_IDS: FlowId[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-tra
 // Deterministic adapter for tests: no chain access, fixed results.
 export function fakeAdapter(
   id: ModelId,
-  opts: { ready?: boolean; readyFor?: (req: FlowRequest) => { ready: boolean; detail: string }; capacity?: number; circulates?: boolean; maxUsers?: number; tps?: number; failEvery?: number; serial?: boolean; onSubmit?: () => void; disabled?: Partial<Record<FlowId, string>>; transparent?: boolean; biVerdict?: 'reported' | 'notarised' | 'viewkey' | 'sealed' } = {}, // transparent: every party reads everything (Iroha 3); biVerdict: what BI's read of a bank-to-bank tx is called (default 'clear')
+  opts: { ready?: boolean; readyFor?: (req: FlowRequest) => { ready: boolean; detail: string }; capacity?: number; loadMode?: 'capacity' | 'latency' | 'none'; loadLimit?: string; reportMs?: number; overheadMs?: number; circulates?: boolean; maxUsers?: number; tps?: number; failEvery?: number; serial?: boolean; onSubmit?: () => void; disabled?: Partial<Record<FlowId, string>>; transparent?: boolean; biVerdict?: 'reported' | 'notarised' | 'viewkey' | 'sealed' } = {}, // transparent: every party reads everything (Iroha 3); biVerdict: what BI's read of a bank-to-bank tx is called (default 'clear')
 ): ModelAdapter {
   let calls = 0;
   let lockTail: Promise<unknown> = Promise.resolve(); // opts.serial: one transfer at a time, like a per-sender lock
@@ -92,6 +92,7 @@ export function fakeAdapter(
     prepareLoad: async () => {},
     loadCirculates: opts.circulates ?? true,
     maxLoadUsers: opts.maxUsers,
+    ...(opts.loadMode ? { loadMode: opts.loadMode } : {}), ...(opts.loadLimit ? { loadLimit: opts.loadLimit } : {}),
     async transferForLoad(_from, _to, _amount, signal) {
       const work = async () => {
         if (signal?.aborted) throw new Error(CANCELLED); // checked once the lock is held, before submitting
@@ -100,7 +101,7 @@ export function fakeAdapter(
         const submittedAt = Date.now();
         await new Promise((r) => setTimeout(r, 1000 / (opts.tps ?? 10)));
         if (opts.failEvery && n % opts.failEvery === 0) throw new Error('gagal simulasi');
-        return { submittedAt, confirmedAt: Date.now() };
+        return { submittedAt, confirmedAt: Date.now(), ...(opts.reportMs !== undefined ? { reportMs: opts.reportMs } : {}), ...(opts.overheadMs !== undefined ? { overheadMs: opts.overheadMs } : {}) };
       };
       if (!opts.serial) return work();
       const r = lockTail.then(work);

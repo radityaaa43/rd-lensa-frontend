@@ -99,6 +99,16 @@ describe('W on: everything else stays closed', () => {
     expect((await a.inject({ method: 'POST', url: '/api/stress/prepare', payload: { models: ['zeto'], users: 1 } })).statusCode).toBe(202);
     expect((await a.inject('/api/livez')).statusCode).toBe(200);
   });
+  it('stress on the public pod: at most 16 users per bank, one run per cool-down, the run is capped, and the platform modes are in /api/meta', async () => {
+    const a = make({ zeto: fakeAdapter('zeto', { tps: 100, loadMode: 'latency', loadLimit: 'satu sekaligus', maxUsers: 1 }), noto: fakeAdapter('noto', { tps: 100 }) }, policyDeps());
+    const meta = (await a.inject('/api/meta')).json();
+    expect(meta.models.zeto.load).toEqual({ mode: 'latency', limit: 'satu sekaligus', maxUsers: 1 });
+    expect(meta.models.noto.load).toEqual({ mode: 'capacity', limit: null, maxUsers: null });
+    const go = (payload: object) => a.inject({ method: 'POST', url: '/api/stress', payload });
+    expect((await go({ models: ['noto'], users: 32, stageS: 60 })).json()).toEqual({ reason: 'Di URL publik paling banyak 16 user per bank' });
+    expect((await go({ models: ['noto'], users: 4, stageS: 60, mode: 'open' })).json()).toEqual({ reason: 'Pilih laju kedatangan untuk mode laju tetap' });
+    expect((await go({ models: ['zeto'], users: 1, stageS: 60, mode: 'open', rate: 1 })).statusCode).toBe(400);
+  });
   it('Kebijakan GETs are readable now (not 404)', async () => {
     const a = make(undefined, policyDeps());
     for (const url of ['/api/policy?pihak=BI&model=zeto', '/api/policy/usage?pihak=A&model=zeto', '/api/policy/bi/history?pihak=BI&model=zeto']) {

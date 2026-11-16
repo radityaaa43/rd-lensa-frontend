@@ -320,13 +320,17 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
     },
     loadCirculates: true,
     maxLoadUsers: 1, // one wallet per token node
-    async transferForLoad({ bank: from }: LoadUser, { bank: to }: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
-      return exclusive([from], () => withGates([from], async () => { // ponytail: a gate lease per transfer; keep one lease open across a run if TPS matters
-        if (signal?.aborted) throw new Error(CANCELLED);
-        const submittedAt = Date.now();
-        await transfer(from, to, 'RD', amount);
-        return { submittedAt, confirmedAt: Date.now() };
-      }));
+    loadMode: 'latency',
+    loadLimit: 'Satu wallet per node token, jadi satu pengirim per bank. Konfirmasi = final di ledger; panggilan gate aset (buka/tutup) dihitung terpisah sebagai overhead gateway',    async transferForLoad({ bank: from }: LoadUser, { bank: to }: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
+      return exclusive([from], () => {
+        const t0 = Date.now(); // after the lock: the wait for it is queue time, not gateway
+        return withGates([from], async () => { // ponytail: a gate lease per transfer; keep one lease open across a run if TPS matters
+          if (signal?.aborted) throw new Error(CANCELLED);
+          const submittedAt = Date.now();
+          await transfer(from, to, 'RD', amount);
+          return { submittedAt, confirmedAt: Date.now(), overheadMs: submittedAt - t0 }; // the gate's open call(s) before the transfer
+        });
+      });
     },
   };
   return adapter;

@@ -2,7 +2,7 @@ import type { ModelId } from '../../../server/src/domain.ts';
 import type { StressConfig as Cfg } from '../../../server/src/stress.ts';
 import type { Capacity, Meta } from '../api.ts';
 import { COLOR } from './RunRows.tsx';
-import { STAGES, USERS, WARMUP_S, maxMinutes, ramp, ready, showZetoWarning } from './stressForm.ts';
+import { LOAD_LABEL, PUBLIC_MAX_USERS, RATES, STAGES, USERS, WARMUP_S, limitsOf, loadOf, openAllowed, ready, totalMinutes } from './stressForm.ts';
 
 export type Form = Cfg;
 export interface ConfigProps {
@@ -18,6 +18,9 @@ export function StressConfig(p: ConfigProps) {
   const { meta, capacity, form, running } = p;
   const locked = running || p.starting;
   const canStart = ready(form.models, capacity);
+  const open = form.mode === 'open';
+  const canOpen = openAllowed(meta, form.models);
+  const users = USERS.filter((u) => !(meta.publicTx && u > PUBLIC_MAX_USERS));
   return (
     <aside aria-label="Konfigurasi stress test" className="cfg">
       <div className="q">
@@ -25,14 +28,16 @@ export function StressConfig(p: ConfigProps) {
         <div className="mchk">
           {(Object.keys(meta.models) as ModelId[]).map((m) => {
             const cap = capacity[m];
-            const usable = meta.models[m].available && cap !== undefined;
+            const load = loadOf(meta, m);
+            const usable = meta.models[m].available && cap !== undefined && load.mode !== 'none';
             const on = form.models.includes(m);
             return (
               <button key={m} aria-pressed={on} disabled={locked || !usable} onClick={() => p.onToggle(m)}>
                 <span className="box">{on && CHECK}</span>
                 <span>
                   {meta.models[m].name}
-                  <small style={SUB}>{usable ? `Saldo siap: ${cap.toLocaleString('id-ID')} tx per user` : meta.models[m].available ? 'Kapasitas tidak terbaca' : 'Belum tersedia'}</small>
+                  <small style={SUB}>{LOAD_LABEL[load.mode]}</small>
+                  <small style={SUB}>{usable ? `Saldo siap: ${cap!.toLocaleString('id-ID')} tx per user` : load.mode === 'none' ? 'Belum bisa diuji beban' : meta.models[m].available ? 'Kapasitas tidak terbaca' : 'Belum tersedia'}</small>
                 </span>
                 <i className="swatch" style={{ background: COLOR[m] }} />
               </button>
@@ -47,23 +52,38 @@ export function StressConfig(p: ConfigProps) {
       </div>
       <div className="q">
         <h3><span className="n">3</span>Beban bertahap</h3>
-        <label className="f" id="tusers-label">User per bank (tahap terakhir)</label>
+        <label className="f" id="tmode-label">Cara kirim</label>
+        <div className="seg" role="group" aria-labelledby="tmode-label">
+          <button aria-pressed={!open} disabled={locked} onClick={() => p.onChange({ mode: 'closed', rate: undefined })}>User bergantian</button>
+          <button aria-pressed={open} disabled={locked || !canOpen} title={canOpen ? undefined : 'Hanya untuk platform yang benar-benar paralel (Kapasitas)'} onClick={() => p.onChange({ mode: 'open', rate: form.rate ?? 2 })}>Laju tetap</button>
+        </div>
+        {open && (
+          <>
+            <label className="f" id="trate-label">Laju kirim tertinggi per bank (transaksi per detik)</label>
+            <div className="seg" role="group" aria-labelledby="trate-label">
+              {RATES.map((r) => <button key={r} aria-pressed={form.rate === r} disabled={locked} onClick={() => p.onChange({ rate: r })}>{r.toLocaleString('id-ID')}</button>)}
+            </div>
+          </>
+        )}
+        <label className="f" id="tusers-label">{open ? 'Pengirim per bank' : 'User per bank (tahap terakhir)'}</label>
         <div className="seg" role="group" aria-labelledby="tusers-label">
-          {USERS.map((u) => <button key={u} aria-pressed={form.users === u} disabled={locked} onClick={() => p.onChange({ users: u })}>{u}</button>)}
+          {users.map((u) => <button key={u} aria-pressed={form.users === u} disabled={locked} onClick={() => p.onChange({ users: u })}>{u}</button>)}
         </div>
         <label className="f" htmlFor="tstage">Durasi per tahap</label>
         <select id="tstage" value={form.stageS} disabled={locked} onChange={(e) => p.onChange({ stageS: Number(e.target.value) as Form['stageS'] })}>
           {STAGES.map(([s, t]) => <option key={s} value={s}>{t}</option>)}
         </select>
         <p className="small">
-          Tahap {ramp(form.users).join(' → ')} user per bank, dari node bank masing-masing. Tiap user mengirim satu transaksi sekaligus; tiap transaksi ke node bank lain yang diundi, lalu ke user acak di node itu, jadi satu pengirim membayar banyak penerima di kedua node.
-          {` ${WARMUP_S}`} detik pertama tiap tahap adalah pemanasan dan tidak diukur. Paling lama {maxMinutes(form.models.length, form.users, form.stageS)} menit.
+          {open
+            ? <>Tahap menaikkan laju kirim 0,5 → … → {(form.rate ?? 2).toLocaleString('id-ID')} transaksi per detik per bank, pada jadwal tetap, apa pun jawaban chain. Latensi dihitung dari waktu kirim yang dijadwalkan, jadi antrean terlihat sebagai waktu tunggu. Transaksi yang tidak terkirim (saldo habis atau terlalu banyak yang tertunda) dihitung sendiri. </>
+            : <>Platform Kapasitas naik bertahap 1 → 2 → 4 … sampai {form.users} user per bank; platform Latensi 1 transaksi satu tahap saja. Tiap user mengirim satu transaksi sekaligus; tiap transaksi ke node bank lain yang diundi, lalu ke user acak di node itu. </>}di kedua node.
+          {` ${WARMUP_S}`} detik pertama tiap tahap adalah pemanasan dan tidak diukur. Paling lama {totalMinutes(meta, form)} menit{meta.publicTx ? '; satu run paling lama 15 menit, dan 30 menit jeda sebelum run berikutnya' : ''}.
         </p>
         <p className="small">Model berhenti lebih awal bila lebih dari 20% transaksi satu tahap gagal, TPS tidak naik dua tahap berturut-turut, tidak ada konfirmasi selama 3 menit, atau saldo user habis.</p>
       </div>
-      {showZetoWarning(form.models, form.users) && (
-        <div className="warn">{WARN}<span>Zeto mengirim satu transaksi beban sekaligus: bukti ZK paralel dari beberapa node pernah membuat pohon SMT node menyimpang dari chain (UTXORootNotFound). User tambahan menunggu antrean, jadi latensi naik dan TPS menunjukkan batas serial.</span></div>
-      )}
+      {limitsOf(meta, form.models).map((l) => (
+        <div className="warn" key={l.model}>{WARN}<span><b>{meta.models[l.model].name} · {LOAD_LABEL[l.mode]}.</b> {l.limit}.</span></div>
+      ))}
       <div>
         <button className={running ? 'btn2 stop' : 'btn2'} disabled={!running && (p.starting || !canStart)} onClick={p.onGo}>
           {running ? 'Hentikan' : 'Mulai stress test'}

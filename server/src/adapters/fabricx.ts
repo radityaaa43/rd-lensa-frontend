@@ -546,6 +546,8 @@ export function createFabricxAdapter(exec: Exec, gw?: GwCall, opts: { pod?: bool
       }
     },
     loadCirculates: true,
+    loadMode: 'latency',
+    loadLimit: 'Satu wallet per node FSC, jadi satu pengirim per bank',
     maxLoadUsers: 1, // one wallet per FSC node: a bank has one sender (tahap 2: more wallets per node)
     // The sender slot is held for the whole call; execFile's timeout (CALL_MS) bounds it and kills a hung kubectl.
     async transferForLoad({ bank: from }: LoadUser, { bank: to }: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {

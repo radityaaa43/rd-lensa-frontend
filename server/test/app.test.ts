@@ -479,6 +479,27 @@ test('stress/prepare: tops up only a model below the target, runs under the lock
   expect((await post(make({ zeto: z }), '/api/stress/prepare', { models: ['noto'], users: 1 })).statusCode).toBe(503);
 });
 
+test('public pod: a second stress run inside the cool-down is refused with 429 and Retry-After; the first run is free', async () => {
+  const app = buildApp({ zeto: quick() }, { probe, public: true, publicTx: true });
+  const cfg = { models: ['zeto'], users: 1, stageS: 60 };
+  expect((await post(app, '/api/stress', cfg)).statusCode).toBe(202);
+  expect((await stressState(app)).state).toBe('done');
+  const again = await post(app, '/api/stress', cfg);
+  expect(again.statusCode).toBe(429);
+  expect(Number(again.headers['retry-after'])).toBeGreaterThan(1700);
+  expect(again.json().reason).toMatch(/satu run per 30 menit/);
+  await app.close();
+});
+
+test('a platform with no load transfer is listed with capacity 0 in preflight and refused to start with its reason', async () => {
+  const i = fakeAdapter('iroha3', { loadMode: 'none', loadLimit: 'settle 100 detik' });
+  const app = make({ iroha3: i });
+  expect((await app.inject('/api/preflight-capacity')).json()).toEqual({ iroha3: 0 });
+  const r = await post(app, '/api/stress', { models: ['iroha3'], users: 1, stageS: 60 });
+  expect(r.statusCode).toBe(400);
+  expect(r.json().reason).toBe('Iroha 3 belum bisa diuji beban: settle 100 detik');
+});
+
 test('unknown routes are 404 with an Indonesian reason', async () => {
   const res = await make().inject('/api/nope');
   expect(res.statusCode).toBe(404);

@@ -565,6 +565,9 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
       }
     },
     loadCirculates: true,
+    loadMode: 'latency',
+    loadLimit: 'Satu transfer beban sekaligus: bukti ZK paralel dari beberapa node membuat pohon SMT node menyimpang dari chain (UTXORootNotFound), dan di atas 1 user per bank node Paladin bisa kehabisan memori. Konfirmasi = receipt chain; laporan ke BI diukur terpisah',
+    maxLoadUsers: 1,
     // ONE load transfer at a time, across all users and nodes: Zeto_AnonNullifier transfers proved concurrently on several
     // nodes made each node's SMT diverge from the chain for good (every later transfer: UTXORootNotFound), 2026-11-09.
     // The orchestrator still ramps users; their wait is queue time (end-to-end latency), so the ramp shows the ceiling.
@@ -576,8 +579,9 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
         if (signal?.aborted) throw new Error(CANCELLED);
         const submittedAt = Date.now();
         const tx = await transfer(x, zeto('RD', x), loadParty(to), Number(amount));
+        const confirmedAt = Date.now(); // finality = the chain receipt; the BI report (async, spec 7a.2) is timed apart so it does not inflate the settlement latency
         await reportTo(state.groups[from.bank], x, 'RD', address.RD, tx.receipt);
-        return { submittedAt, confirmedAt: Date.now() }; // confirmed = receipt + BI report accepted by the node (spec 7a.2)
+        return { submittedAt, confirmedAt, reportMs: Date.now() - confirmedAt };
       }));
     },
     fund,

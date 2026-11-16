@@ -38,6 +38,16 @@ test('csv: one row per stage, stop reason on the last', () => {
   const lines = toCsv([{ model: 'Zeto', stages: [s, s], stop: 'saturated' }]).split('\n');
   expect(lines[0]).toBe(CSV_HEAD);
   expect(lines).toHaveLength(3);
-  expect(lines[1].endsWith(',')).toBe(true);
-  expect(lines[2]).toBe('Zeto,2,1,3,0.50,2.00,2.00,2.00,2.00,1,0,0.00,2.0,1,0,0,0,1,0,1,saturated');
+  expect(lines[1].endsWith(',,0.00,0,2.00,2.00,1800.00,0.00,0.00')).toBe(true); // no stop, no mode; closed loop: offered 0, dropped 0; one in flight = 1800 tx/h at 2 s
+  expect(lines[2]).toBe('Zeto,2,1,3,0.50,2.00,2.00,2.00,2.00,1,0,0.00,2.0,1,0,0,0,1,0,1,saturated,,0.00,0,2.00,2.00,1800.00,0.00,0.00');
+});
+
+test('stage summary: min / max, one-in-flight rate, report and gateway overhead medians, open-loop offered and dropped', () => {
+  const r = (issued: number, sub: number, done: number, extra: Partial<Rec> = {}): Rec => ({ ...rec('A', issued, sub, done), ...extra });
+  const s = stageSummary([r(0, 0, 2_000, { reportMs: 500, overheadMs: 100 }), r(3_000, 3_000, 7_000, { reportMs: 1_500, overheadMs: 300 })], 0, 0, 10_000, 0, 1, 3, { offered: 2, dropped: 4 });
+  expect([s.minMs, s.maxMs]).toEqual([2_000, 4_000]);
+  expect(s.cycleMs).toBe(4_000); // mean of (2000 + 500, 4000 + 1500)
+  expect(s.perHour).toBeCloseTo(3_600_000 / s.cycleMs);
+  expect([s.reportP50Ms, s.overheadP50Ms]).toEqual([500, 100]);
+  expect([s.offered, s.dropped]).toEqual([2, 4]);
 });

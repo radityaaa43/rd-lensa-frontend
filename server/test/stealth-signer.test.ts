@@ -324,7 +324,8 @@ describe('keyless adapter, scenario against fake signers', () => {
   it('stress in the pod: capacity = the bank\'s total RD / (1000 x users); prepare only checks the balance; a load transfer is a serial rd-transfer intent that the receiver can spend again', async () => {
     for (const b of ['A', 'B', 'C'] as const) world.seed(b, 'rd', 4000n);
     expect(adapter.loadCirculates).toBe(true);
-    expect(adapter.maxLoadUsers).toBe(4);
+    expect(adapter.maxLoadUsers).toBe(1); // a user is a slot behind one signer lane: more would only queue
+    expect(adapter.loadMode).toBe('latency');
     const rd = async (b: PartyId) => adapter.balanceOf(b, 'RD');
     const min = async (users: bigint) => Number((await Promise.all((['A', 'B', 'C'] as const).map(rd))).reduce((m, x) => (x < m ? x : m)) / (1000n * users));
     expect(await adapter.loadCapacity(2)).toBe(await min(2n));
