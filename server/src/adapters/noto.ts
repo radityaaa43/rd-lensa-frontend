@@ -230,14 +230,14 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     return BigInt((await withDeadline(token.using(b.client).balanceOf(b.verifier, { account: b.verifier.lookup }), BALANCE_MS, `Saldo ${asset} ${party}`)).totalBalance);
   }
 
-  // Load users (stress test): identities stress-nN-ii@nodeN on the bank's own node, each holding its own LOAD_AMOUNT coins.
+  // Load users (stress test): identities stress-nN-ii@nodeN on the party's own node (node1 = BI, also the notary), each holding its own LOAD_AMOUNT coins.
   const loadUsers = new Map<string, Participant>();
   function loadUser(p: Platform, u: LoadUser): Participant {
     const lookup = loadLookup(u);
     let x = loadUsers.get(lookup);
     if (!x) {
-      const b = bank(p, u.bank as BankId); // BI does not send here yet
-      loadUsers.set(lookup, x = { name: lookup, node: b.node, client: b.client, verifier: b.client.getVerifiers(lookup)[0]! });
+      const own = u.bank === 'BI' ? { node: 'node1', client: p.node1 } : bank(p, u.bank);
+      loadUsers.set(lookup, x = { name: lookup, node: own.node, client: own.client, verifier: own.client.getVerifiers(lookup)[0]! });
     }
     return x;
   }
@@ -246,7 +246,7 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
     const r = await withDeadline(p.notoCash.using(x.client).balanceOf(x.verifier, { account: x.verifier.lookup }), BALANCE_MS, `Saldo RD ${x.name}`);
     return Number(BigInt(r.totalBalance) / LOAD_AMOUNT);
   }
-  const loadAll = (users: number) => BANKS.flatMap((bank) => Array.from({ length: users }, (_, i): LoadUser => ({ bank, i })));
+  const loadAll = (users: number, parties: PartyId[] = BANKS) => parties.flatMap((bank) => Array.from({ length: users }, (_, i): LoadUser => ({ bank, i })));
 
   async function untilBalance(party: PartyId, asset: 'RD' | 'DFABI', expected: bigint): Promise<void> {
     const end = Date.now() + DEADLINE;
@@ -468,14 +468,14 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
       const [chain, node] = await Promise.all([besuReceipt(tx), paladinNodeReceipt(party, tx)]); // public receipt + the party's own Paladin node
       return { ...chain, node };
     },
-    async loadCapacity(users) {
+    async loadCapacity(users, parties = BANKS) {
       const p = await plat();
-      return Math.min(...(await Promise.all(loadAll(users).map((u) => loadUnits(p, u)))));
+      return Math.min(...(await Promise.all(loadAll(users, parties).map((u) => loadUnits(p, u)))));
     },
 
-    async prepareLoad(users, units) {
+    async prepareLoad(users, units, parties = BANKS) {
       const p = await plat();
-      for (const u of loadAll(users)) {
+      for (const u of loadAll(users, parties)) {
         const coins = units - (await loadUnits(p, u));
         if (coins <= 0) continue;
         // One exact LOAD_AMOUNT coin per mint (the issue helper mints a single coin per call), 8 in flight; mints have no inputs, so no coin contention.
@@ -489,6 +489,7 @@ export function createNotoAdapter(dataDir: string): ModelAdapter {
       }
     },
     loadCirculates: true,
+    loadParties: ['BI', 'A', 'B', 'C'],
     loadMode: 'capacity',
     loadLimit: 'Notaris BI: setiap transfer dari semua bank disahkan satu notaris BI, jadi titik jenuh adalah batas notaris BI (hasil hanya sah selama BI hidup), bukan batas bank',
 
