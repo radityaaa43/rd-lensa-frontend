@@ -17,6 +17,12 @@ describe('demo request', () => {
     expect(requestOf({ ...dfabi, asset: 'RD' }, 'zeto', 'BI', false)).toMatchObject({ flow: 'rd-issue', to: 'A' });
   });
 
+  test('a fixed award (token v2) always asks for its ledger terms, whatever was picked', () => {
+    const picked = { ...base(), to: 'C' as const, amounts: { ...base().amounts, DFABI: '7' } };
+    expect(requestOf(picked, 'fabricx-adapter', 'BI', true)).toEqual({ model: 'fabricx-adapter', flow: 'award', from: 'BI', to: 'A', amount: '1' });
+    expect(requestOf(picked, 'zeto', 'BI', true)).toMatchObject({ flow: 'award', to: 'C', amount: '7' });
+  });
+
   test('the asset picks RD or DFABI flows; the DvP screen is dvp for a bank and award for BI', () => {
     const d = demoReducer(base(), { type: 'asset', asset: 'DFABI' });
     expect(flowOf(false, 'BI', d.asset)).toBe('dfabi-issue');

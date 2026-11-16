@@ -50,6 +50,7 @@ function BiReport({ meta, route }: { meta: Meta; route: ModelRoute }) {
 
 export function Report({ meta, route }: { meta: Meta; route: ModelRoute }) {
   if (PLATFORM_OF[route.model] === 'iroha3') return <Empty title="Tidak berlaku di Iroha 3"><p>BI menyetujui setiap DvP privat sebelum final lewat kapsul audit, dan transfer biasa terbuka: tidak ada laporan bank yang perlu dicocokkan.</p></Empty>;
+  if (PLATFORM_OF[route.model] === 'fabricx-adapter') return <Empty title="Tidak berlaku di Fabric-X (token v2)"><p>Token v2 tidak mengirim laporan bank ke BI: setiap node hanya membaca riwayat dompetnya sendiri, jadi tidak ada laporan yang perlu dicocokkan.</p></Empty>;
   if (route.party !== 'BI') {
     return (
       <Empty title="Hanya BI yang menerima laporan">

@@ -1,5 +1,5 @@
 import type { LensView, StepEvent } from '../../../server/src/adapter.ts';
-import { BANKS, dfabiIssueToBi, type FlowId, type FlowRequest, type ModelId, type PartyId } from '../../../server/src/domain.ts';
+import { BANKS, FIXED_AWARD, dfabiIssueToBi, type FlowId, type FlowRequest, type ModelId, type PartyId } from '../../../server/src/domain.ts';
 
 export type Asset = 'RD' | 'DFABI';
 export interface TxResult { txHash: string; block: number; steps: StepEvent[]; lenses: LensView[]; reportPending?: string } // reportPending: settled, but the report to BI is not confirmed yet
@@ -40,6 +40,8 @@ export function requestOf(s: DemoState, model: ModelId, party: PartyId, dvp: boo
   const flow = flowOf(dvp, party, s.asset);
   // DFABI is issued BI -> BI (into BI's inventory); a bank gets it only through the award
   const to = dfabiIssueToBi({ model, flow }) ? 'BI' : toOf(s, party);
+  const fixed = flow === 'award' ? FIXED_AWARD[model] : undefined; // the ledger takes these terms only
+  if (fixed) return { model, flow, from: party, to: fixed.to, amount: fixed.amount.toString() };
   return { model, flow, from: party, to, amount: s.amounts[dvp ? 'DFABI' : s.asset] };
 }
 

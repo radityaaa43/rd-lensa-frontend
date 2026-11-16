@@ -66,7 +66,7 @@ export function Sidebar({ meta, route }: { meta: Meta; route: ModelRoute }) {
         <div className="navgroup">{MAIN.map(item)}</div>
         <div className="navgroup">
           <p className="grouplabel">Alat</p>
-          {TOOLS.filter((s) => !(s === 'laporan' && platform === 'iroha3')).map(item)}
+          {TOOLS.filter((s) => !(s === 'laporan' && (platform === 'iroha3' || platform === 'fabricx-adapter'))).map(item)}
         </div>
       </nav>
       <div className="sidefoot">
