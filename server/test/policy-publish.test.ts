@@ -18,12 +18,12 @@ const biSeed: BiPolicy = {
 };
 const bankSeed: BankPolicy = { counterparties: ['bi@node1'] };
 // every owner's seed file has one document per registered platform; they differ so a mix-up between the platforms shows
-const biSeeds: ByPlatform<BiPolicy> = {
+const biSeeds: Record<Exclude<Platform, 'fabricx-adapter'>, BiPolicy> = { // the besu family's platforms
   zeto: biSeed, noto: { ...biSeed, max_per_tx: { RD: 2000, DFABI: 200 } },
   fabricx: { ...biSeed, max_per_tx: { RD: 3000, DFABI: 300 } }, iroha3: { ...biSeed, max_per_tx: { RD: 4000, DFABI: 400 } },
   stealth: { ...biSeed, max_per_tx: { RD: 5000, DFABI: 500 } },
 };
-const bankSeeds: ByPlatform<BankPolicy> = {
+const bankSeeds: Record<Exclude<Platform, 'fabricx-adapter'>, BankPolicy> = {
   zeto: bankSeed, noto: { counterparties: ['bi@node1', 'bankC@node4'] }, fabricx: { counterparties: ['bi@node1', 'bankB@node3'] }, iroha3: { counterparties: [] }, stealth: { counterparties: ['bi@node1', 'bankB@node3', 'bankC@node4'] },
 };
 
@@ -94,8 +94,9 @@ function setup(kube: MemKube) {
   const store = new PolicyStore(join(root, 'policy'), seeds);
   return { store, pub: new Publisher(kube, fakeOpa, store, { waitMs: 60, pollMs: 5 }) };
 }
-const rev = (z: number, n = 1, f = 1, i = 1, st = 1) => ({ zeto: z, noto: n, fabricx: f, iroha3: i, stealth: st });
-const none = { zeto: null, noto: null, fabricx: null, iroha3: null, stealth: null };
+// a status names every platform: the other family's (fabricx-adapter, fxa-gw-N) reads null on bank-gw-N
+const rev = (z: number, n = 1, f = 1, i = 1, st = 1) => ({ zeto: z, noto: n, fabricx: f, iroha3: i, stealth: st, 'fabricx-adapter': null });
+const none = { zeto: null, noto: null, fabricx: null, iroha3: null, stealth: null, 'fabricx-adapter': null };
 const tar = (kube: MemKube, node: number, which: 'bi' | 'bank') =>
   JSON.parse(kube.cms.get(`bank-gw-${node}-bundles`)![`${which}.tar.gz`]!.toString()) as { revision: string; keyId?: string; doc: unknown };
 const saveV2 = (store: PolicyStore, owner: 'bi' | 'bank-a' | 'bank-b' | 'bank-c', platform: Platform, doc: BiPolicy | BankPolicy) =>

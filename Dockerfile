@@ -52,6 +52,7 @@ COPY package.json ./
 COPY server/package.json server/tsconfig.json server/
 COPY server/src server/src
 COPY server/vendor server/vendor
+COPY server/opa-fxa server/opa-fxa
 COPY --from=web /app/frontend/web/dist web/dist
 RUN install -d -m 700 -o 10001 -g 10001 server/state
 USER 10001:10001

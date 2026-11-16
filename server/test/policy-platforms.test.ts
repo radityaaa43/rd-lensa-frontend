@@ -7,7 +7,7 @@ import { gunzipSync } from 'node:zlib';
 import { afterAll, afterEach, expect, test, vi } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { Opa } from '../src/policy/opa.ts';
-import { PLATFORMS, REGISTRY, sinkNames } from '../src/policy/platforms.ts';
+import { BESU, FXA, PLATFORMS, REGISTRY, familyOf, sinkNames } from '../src/policy/platforms.ts';
 import { buildBundles, revisionOf, versionOf } from '../src/policy/publish.ts';
 import { OPA_ROOT, PolicyStore, SEEDS_DIR } from '../src/policy/store.ts';
 import type { BiPolicy } from '../src/policy/types.ts';
@@ -15,16 +15,20 @@ import type { BiPolicy } from '../src/policy/types.ts';
 afterEach(() => vi.restoreAllMocks());
 
 test('registry: platforms in order, zeto and noto enforced on the four bank gateways, the others registered but not enforced', () => {
-  expect([...PLATFORMS]).toEqual(['zeto', 'noto', 'fabricx', 'iroha3', 'stealth']);
+  expect([...PLATFORMS]).toEqual(['zeto', 'noto', 'fabricx', 'iroha3', 'stealth', 'fabricx-adapter']);
   expect(PLATFORMS.map((p) => [p, REGISTRY[p].label, REGISTRY[p].enforced, REGISTRY[p].gateways, !!REGISTRY[p].usage])).toEqual([
     ['zeto', 'Zeto', true, ['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4'], true],
     ['noto', 'Noto', true, ['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4'], true],
     ['fabricx', 'Fabric-X', true, ['fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4'], false], // usage only with LENSA_FABRICX_GW=1
     ['iroha3', 'Iroha 3', false, [], false],
     ['stealth', 'Stealth', true, [], false], // the st-gw-N doors load the same bundle as bank-gw-N; usage (signer /outflow) only in the pod with the four doors
+    ['fabricx-adapter', 'Fabric-X (token v2)', true, ['fxa-gw-1', 'fxa-gw-2', 'fxa-gw-3', 'fxa-gw-4'], false], // its own OPA; usage only with the four LENSA_FXA_GW_*
   ]);
-  // the sinks the Publisher waits for: every platform's gateways, once each
+  // the sinks the besu Publisher waits for: every besu platform's gateways, once each (never fxa-gw-N); the fxa family has its own
   expect(sinkNames()).toEqual(['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4', 'fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4']);
+  expect(sinkNames(FXA)).toEqual(['fxa-gw-1', 'fxa-gw-2', 'fxa-gw-3', 'fxa-gw-4']);
+  expect([BESU.platforms, FXA.platforms]).toEqual([['zeto', 'noto', 'fabricx', 'iroha3', 'stealth'], ['fabricx-adapter']]);
+  expect(PLATFORMS.map((p) => familyOf(p).gw)).toEqual(['bank-gw', 'bank-gw', 'bank-gw', 'bank-gw', 'bank-gw', 'fxa-gw']);
 });
 
 test('/api/meta says per model whether it has a policy document and whether a gateway enforces it', async () => {
@@ -32,12 +36,12 @@ test('/api/meta says per model whether it has a policy document and whether a ga
   const models = (await app.inject('/api/meta')).json().models;
   await app.close();
   expect(Object.fromEntries(Object.entries(models).map(([m, v]) => [m, (v as { policy: unknown }).policy]))).toEqual({
-    zeto: { registered: true, enforced: true },
-    noto: { registered: true, enforced: true },
-    fabricx: { registered: true, enforced: true },
-    iroha3: { registered: true, enforced: false },
-    stealth: { registered: true, enforced: true },
-    'fabricx-adapter': { registered: false, enforced: false, reason: 'Kebijakan belum tersedia untuk Fabric-X (token v2)' },
+    zeto: { registered: true, enforced: true, gateway: 'bank-gw' },
+    noto: { registered: true, enforced: true, gateway: 'bank-gw' },
+    fabricx: { registered: true, enforced: true, gateway: 'bank-gw' },
+    iroha3: { registered: true, enforced: false, gateway: 'bank-gw' },
+    stealth: { registered: true, enforced: true, gateway: 'bank-gw' },
+    'fabricx-adapter': { registered: true, enforced: true, gateway: 'fxa-gw' },
   });
 });
 

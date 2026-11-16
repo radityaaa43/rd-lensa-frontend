@@ -1,7 +1,7 @@
 import { BANKS, PARTIES } from '../domain.ts';
 import type { Opa } from './opa.ts';
 import type { PolicyStore } from './store.ts';
-import { PLATFORMS } from './platforms.ts';
+import { familyOf } from './platforms.ts';
 import type { Platform } from './platforms.ts';
 import { OWNER_OF_PARTY, PolicyError } from './types.ts';
 import type { BankPolicy, BiPolicy, ByPlatform, Hours, Owner, Pending, PolicyDoc, Token, Version } from './types.ts';
@@ -30,11 +30,16 @@ export class PolicyWorkflow {
 
   constructor(
     private readonly store: PolicyStore,
-    private readonly opa: Opa,
+    // one Opa, or the Opa of the platform's family (each family has its own tree)
+    private readonly opa: Opa | ((platform: Platform) => Opa),
     private readonly publish: (owner: Owner, platform: Platform, n: number) => Promise<void>,
     // FREEZE reason (pod mode): approve and republish end in a publish, so they are refused up front with 403, before any state is read or saved.
-    private readonly frozen?: string,
+    // A function = per platform (undefined = not frozen).
+    private readonly frozen?: string | ((platform: Platform) => string | undefined),
   ) {}
+
+  private opaOf(platform: Platform): Opa { return typeof this.opa === 'function' ? this.opa(platform) : this.opa; }
+  private frozenFor(platform: Platform): string | undefined { return typeof this.frozen === 'function' ? this.frozen(platform) : this.frozen; }
 
   // One in-process mutex per document (owner and platform): calls on the same document run one after another.
   private locked<T>(owner: Owner, platform: Platform, fn: () => Promise<T>): Promise<T> {
@@ -56,15 +61,16 @@ export class PolicyWorkflow {
     }).map((id) => PARTIES[id].name);
   }
 
-  // The documents the validator sees: the draft in its platform, the current document of the owner in the other one.
+  // The documents the validator sees: the draft in its platform, the current document of the owner in the other ones of the same family.
   // The bank side of a BI check is a placeholder (the bank rules are not under test then).
-  private composed(owner: Owner, platform: Platform, doc: PolicyDoc): { bi: ByPlatform<BiPolicy>; bank: ByPlatform<BankPolicy> } {
+  private composed(owner: Owner, platform: Platform, doc: PolicyDoc): { bi: Partial<ByPlatform<BiPolicy>>; bank: Partial<ByPlatform<BankPolicy>> } {
+    const platforms = familyOf(platform).platforms;
     const cur = <T extends PolicyDoc>(o: Owner, p: Platform) => this.store.current(o, p).doc as T;
-    const pick = <T extends PolicyDoc>(o: Owner): ByPlatform<T> =>
-      Object.fromEntries(PLATFORMS.map((p) => [p, p === platform && o === owner ? doc : cur(o, p)])) as ByPlatform<T>;
+    const pick = <T extends PolicyDoc>(o: Owner): Partial<ByPlatform<T>> =>
+      Object.fromEntries(platforms.map((p) => [p, p === platform && o === owner ? doc : cur(o, p)])) as Partial<ByPlatform<T>>;
     return {
       bi: pick<BiPolicy>('bi'),
-      bank: owner === 'bi' ? Object.fromEntries(PLATFORMS.map((p) => [p, { counterparties: [] } as BankPolicy])) as ByPlatform<BankPolicy> : pick<BankPolicy>(owner),
+      bank: owner === 'bi' ? Object.fromEntries(platforms.map((p) => [p, { counterparties: [] } as BankPolicy])) as Partial<ByPlatform<BankPolicy>> : pick<BankPolicy>(owner),
     };
   }
 
@@ -77,14 +83,15 @@ export class PolicyWorkflow {
       const current = this.store.current(owner, platform);
       if (same(a.doc, current.doc)) throw new PolicyError(400, 'Tidak ada nilai yang berubah');
       const docs = this.composed(owner, platform, a.doc);
-      const errors = await this.opa.check(owner, docs.bi, docs.bank);
+      const opa = this.opaOf(platform);
+      const errors = await opa.check(owner, docs.bi, docs.bank);
       if (errors.length) throw new PolicyError(422, 'Kebijakan tidak valid', errors);
-      const tests = await this.opa.test();
+      const tests = await opa.test();
       if (tests.passed < tests.total) throw new PolicyError(422, 'Uji kebijakan gagal', [`${tests.total - tests.passed} dari ${tests.total} uji gagal`]);
       const now = new Date().toISOString();
       const p: Pending = {
         owner, platform, base: current.n, doc: a.doc, maker: by, reason, submittedAt: now, state: 'waiting',
-        checks: { errors, tests, inactiveBanks: owner === 'bi' ? this.inactiveBanks(docs.bi[platform], platform) : [] },
+        checks: { errors, tests, inactiveBanks: owner === 'bi' ? this.inactiveBanks(docs.bi[platform]!, platform) : [] },
       };
       this.store.savePending(p);
       this.store.audit(owner, platform, { at: now, event: 'submitted', by, note: reason });
@@ -101,7 +108,8 @@ export class PolicyWorkflow {
   }
 
   approve(owner: Owner, platform: Platform, a: { by: string; note: string }): Promise<Version> {
-    if (this.frozen) return Promise.reject(new PolicyError(403, this.frozen));
+    const frozen = this.frozenFor(platform);
+    if (frozen) return Promise.reject(new PolicyError(403, frozen));
     return this.locked(owner, platform, async () => {
       const by = name(a.by);
       const p = this.store.pending(owner, platform);
@@ -158,7 +166,8 @@ export class PolicyWorkflow {
   }
 
   republish(owner: Owner, platform: Platform, a: { by: string }): Promise<void> {
-    if (this.frozen) return Promise.reject(new PolicyError(403, this.frozen));
+    const frozen = this.frozenFor(platform);
+    if (frozen) return Promise.reject(new PolicyError(403, frozen));
     return this.locked(owner, platform, async () => {
       const by = name(a.by);
       const p = this.store.pending(owner, platform);

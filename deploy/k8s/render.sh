@@ -111,6 +111,7 @@ data:
   LENSA_FXA_MTLS_DIR: "/certs-fxa"
   LENSA_IN_CLUSTER: "1"
   LENSA_SINK_TOKENS_DIR: "/sink-tokens"
+  LENSA_FXA_SINK_TOKENS_DIR: "/fxa-sink-tokens"
   OPA_BIN: "/usr/local/bin/opa"
 EOF
   [[ -z "${LENSA_PUBLIC:-}" || "$LENSA_PUBLIC" == 1 ]] || die "LENSA_PUBLIC must be 1 or unset"

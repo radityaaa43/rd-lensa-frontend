@@ -1,0 +1,9 @@
+{
+  "fabricx-adapter": {
+    "counterparties": [
+      "bankA@node2",
+      "bankB@node3",
+      "bankC@node4"
+    ]
+  }
+}

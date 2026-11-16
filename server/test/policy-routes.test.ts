@@ -19,7 +19,7 @@ const biSeed: BiPolicy = {
 const bankSeed: BankPolicy = { counterparties: ['bi@node1'] };
 const bankDoc: BankPolicy = { counterparties: ['bi@node1', 'bankB@node3'] };
 const NOT_ALLOWED = { reason: 'Pihak ini tidak dapat mengubah kebijakan tersebut' };
-const gw: GatewayStatus[] = [{ node: 1, deployed: true, bi: { zeto: 1, noto: 1, fabricx: 1, iroha3: 1, stealth: 1 }, bank: { zeto: 1, noto: 1, fabricx: 1, iroha3: 1, stealth: 1 }, ready: true }];
+const gw: GatewayStatus[] = [{ node: 1, deployed: true, bi: { zeto: 1, noto: 1, fabricx: 1, iroha3: 1, stealth: 1, 'fabricx-adapter': null }, bank: { zeto: 1, noto: 1, fabricx: 1, iroha3: 1, stealth: 1, 'fabricx-adapter': null }, ready: true }];
 
 let app: FastifyInstance | undefined;
 afterEach(async () => { await app?.close(); app = undefined; });

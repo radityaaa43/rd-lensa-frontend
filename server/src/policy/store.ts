@@ -2,7 +2,7 @@ import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, readFil
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { STATE_DIR } from '../state.ts';
-import { PLATFORMS, REGISTRY } from './platforms.ts';
+import { FXA, PLATFORMS, REGISTRY, familyOf } from './platforms.ts';
 import type { Platform } from './platforms.ts';
 import type { Owner, Pending, Version } from './types.ts';
 
@@ -23,7 +23,15 @@ export const registeredReason = (platform: Platform) => `Platform ${REGISTRY[pla
 // Layout (spec 7.2) under dir/<owner>/<platform>/: v<N>.json (immutable), pending.json, audit.jsonl. Dirs 0700, files 0600.
 // Before the platforms were split the same files sat directly under dir/<owner>/; migrate() copies them (see there).
 export class PolicyStore {
-  constructor(private readonly dir: string, private readonly seedsDir: string) {}
+  // seedsDir holds the besu family's seeds; a fabricx-adapter document seeds from its own tree (server/opa-fxa/seeds)
+  constructor(private readonly dir: string, private readonly seedsDir: string, private readonly fxaSeedsDir = join(FXA.opaRoot, 'seeds')) {}
+
+  private seed(owner: Owner, platform: Platform): Version['doc'] {
+    const dir = familyOf(platform) === FXA ? this.fxaSeedsDir : this.seedsDir;
+    const doc = JSON.parse(readFileSync(join(dir, `${owner}.json`), 'utf8'))[platform];
+    if (!doc) throw new Error(`Seed ${owner}.json tidak punya dokumen ${platform}`);
+    return doc;
+  }
 
   private platformDir(owner: Owner, platform: Platform): string {
     const d = join(this.dir, owner, platform);
@@ -55,8 +63,7 @@ export class PolicyStore {
     const h = this.read(owner, platform);
     if (h.length) return h;
     const now = new Date().toISOString();
-    const doc = JSON.parse(readFileSync(join(this.seedsDir, `${owner}.json`), 'utf8'))[platform];
-    if (!doc) throw new Error(`Seed ${owner}.json tidak punya dokumen ${platform}`);
+    const doc = this.seed(owner, platform);
     const v1: Version = { owner, platform, n: 1, doc, maker: 'seed', checker: 'seed', reason: 'Versi awal', note: '', submittedAt: now, approvedAt: now };
     this.saveVersion(v1);
     return [v1];
@@ -117,8 +124,7 @@ export class PolicyStore {
       for (const platform of PLATFORMS) {
         if (this.read(owner, platform).length > 0) continue;
         const now = new Date().toISOString();
-        const doc = JSON.parse(readFileSync(join(this.seedsDir, `${owner}.json`), 'utf8'))[platform];
-        if (!doc) throw new Error(`Seed ${owner}.json tidak punya dokumen ${platform}`);
+        const doc = this.seed(owner, platform);
         const reason = registeredReason(platform);
         this.saveVersion({ owner, platform, n: 1, doc, maker: 'migrasi', checker: 'migrasi', reason, note: '', submittedAt: now, approvedAt: now });
         this.audit(owner, platform, { at: now, event: 'approved', by: 'migrasi', n: 1, note: reason });

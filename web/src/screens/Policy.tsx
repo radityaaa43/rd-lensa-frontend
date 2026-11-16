@@ -75,7 +75,7 @@ function Loaded({ meta, route, data, reload, loadError, onHold }: { meta: Meta; 
         <StatCard tone="blue" icon={SHIELD} label={`Versi berlaku ${name}`} figure={`v${acting.current.n}`} sub={currentSub(p, wib(acting.current.approvedAt))} />
         <StatCard tone="green" icon={SERVER} label="Gateway memakai versi ini"
           figure={mine.length === 0 ? <span className="figerr">Belum diterapkan: gateway belum terpasang</span> : `${onCurrent} dari ${mine.length}`}
-          sub={party === 'BI' ? 'Dilaporkan status OPA tiap gateway' : `bank-gw-${meta.parties[party].node}`} />
+          sub={party === 'BI' ? 'Dilaporkan status OPA tiap gateway' : `${meta.models[route.model].policy.gateway ?? 'bank-gw'}-${meta.parties[party].node}`} />
         <StatCard tone="peach" icon={CLOCK} label="Menunggu persetujuan" figure={p ? '1 perubahan' : 'Tidak ada'}
           sub={p ? (p.state === 'waiting' ? `Diajukan ${p.maker}` : STATE_SUB[p.state]) : undefined} />
       </div>

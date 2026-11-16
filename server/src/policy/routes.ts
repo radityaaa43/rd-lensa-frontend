@@ -10,7 +10,8 @@ import type { GatewayStatus, Owner, Pending, PolicyDoc, Token, Version } from '.
 export type PolicyDeps = {
   store: PolicyStore;
   workflow: PolicyWorkflow;
-  status: () => Promise<GatewayStatus[]>;
+  // the gateways of the platform's family (platforms.ts): bank-gw-N for besu, fxa-gw-N for fabricx-adapter
+  status: (platform?: Platform) => Promise<GatewayStatus[]>;
   usage?: (party: 'A' | 'B' | 'C', platform: Platform) => Promise<Record<Token, { used: number; limit: number | null }>>;
 };
 export interface VersionView { owner: Owner; platform: Platform; current: Version; pending: Pending | null }
@@ -54,7 +55,7 @@ export function registerPolicyRoutes(app: FastifyInstance, deps: PolicyDeps): vo
   app.get<{ Querystring: Q }>('/api/policy', { schema: { querystring: query } }, async (req) => {
     const p = req.query.pihak;
     const platform = req.query.model ?? 'zeto';
-    const gateways = await deps.status().catch(() => [] as GatewayStatus[]);
+    const gateways = await deps.status(platform).catch(() => [] as GatewayStatus[]);
     // BI's pending draft names banks whose own settings exceed it; only BI may see which banks those are
     const network = view('bi', platform);
     if (p !== 'BI' && network.pending) network.pending = { ...network.pending, checks: { ...network.pending.checks, inactiveBanks: [] } };

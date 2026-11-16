@@ -29,8 +29,10 @@ export type SinkKube = Kube & {
   // uploads an already signed bi (signed_here must be false) and the party's own bank bundle (signed_here must be true)
   applyRelayed(name: string, signedBi: Buffer, bank: Buffer): Promise<void>;
 };
-export function sinkKube(io: SinkIo, parties: PartyId[]): SinkKube {
+// `gw` = the gateway family these sinks serve (`<gw>-<node>`): bank-gw (besu) or fxa-gw (Fabric-X token v2); same sink program and paths.
+export function sinkKube(io: SinkIo, parties: PartyId[], gw = 'bank-gw'): SinkKube {
   const enabled = new Set(parties);
+  const deployRe = new RegExp(`^${gw}-([1-4])$`), cmRe = new RegExp(`^${gw}-([1-4])-bundles$`);
   const call = async (party: PartyId, path: string, init: { method: 'GET' | 'POST'; body?: Buffer }) => {
     const headers: Record<string, string> = { authorization: `Bearer ${io.token(party)}` };
     if (init.body) { headers['content-type'] = 'application/gzip'; headers['content-length'] = String(init.body.length); }
@@ -62,15 +64,15 @@ export function sinkKube(io: SinkIo, parties: PartyId[]): SinkKube {
     return p;
   };
   return {
-    // Only the bank gateways (bank-gw-N) of a party with a token are served by this sink; other platforms' gateways have their own sinks.
+    // Only the family's gateways (`<gw>-N`) of a party with a token are served by this sink; other platforms' gateways have their own sinks.
     async deploymentExists(name) {
-      const n = /^bank-gw-([1-4])$/.exec(name)?.[1];
+      const n = deployRe.exec(name)?.[1];
       return n !== undefined && enabled.has(PARTY_OF_NODE[Number(n)]!);
     },
     // The sink is append-only (every upload is a new revision): there is no previous ConfigMap to put back.
     async getConfigMap() { return null; },
     async applyConfigMap(name, files) {
-      const n = Number(/^bank-gw-([1-4])-bundles$/.exec(name)?.[1]);
+      const n = Number(cmRe.exec(name)?.[1]);
       const party = PARTY_OF_NODE[n];
       if (!party || !enabled.has(party)) throw new Error(`no sink for ${name}`);
       const bi = files['bi.tar.gz'], bank = files['bank.tar.gz'];
@@ -85,7 +87,7 @@ export function sinkKube(io: SinkIo, parties: PartyId[]): SinkKube {
       return r.body;
     },
     async applyRelayed(name, signedBi, bank) {
-      const n = Number(/^bank-gw-([1-4])-bundles$/.exec(name)?.[1]);
+      const n = Number(cmRe.exec(name)?.[1]);
       const party = PARTY_OF_NODE[n];
       if (!party || party === 'BI' || !enabled.has(party)) throw new Error(`no relay sink for ${name}`);
       await upload(party, 'bi', signedBi, false);
@@ -106,7 +108,8 @@ export function sinkKube(io: SinkIo, parties: PartyId[]): SinkKube {
 
 // The real io: tokens from <dir>/<BI|A|B|C> (dir 700, files 600, one line each, written by the gateway operator), requests through gwFetch to the
 // party's gateway URL with that party's client certificate and servername. A party without a token file is simply not enabled.
-export function sinkIo(tokensDir: string): SinkIo & { parties: PartyId[] } {
+// `fetch` = how a party's gateway is reached: the Paladin door (besu) by default, or the fxa-gw door (fabricx-adapter.ts gwRaw).
+export function sinkIo(tokensDir: string, fetch: SinkIo['fetch'] = paladinFetch): SinkIo & { parties: PartyId[] } {
   // Pod mode = LENSA_IN_CLUSTER=1 AND a read-only dir (a Secret mount: the dir cannot be 700 and fsGroup adds the group-read bit): files must be unreachable
   // for others, unwritable and of our group. Anything else is the strict host rule.
   const pod = inCluster() && readOnlyMount(tokensDir);
@@ -129,9 +132,11 @@ export function sinkIo(tokensDir: string): SinkIo & { parties: PartyId[] } {
   return {
     parties: [...tokens.keys()],
     token: (p) => tokens.get(p) ?? '',
-    async fetch(party, path, init) {
-      const res = await gwFetch(`${paladinUrl(party)}${path}`, { ...init, party, signal: AbortSignal.timeout(60_000) });
-      return { status: res.status, body: Buffer.from(await res.arrayBuffer()) };
-    },
+    fetch,
   };
+}
+
+async function paladinFetch(party: PartyId, path: string, init: Parameters<SinkIo['fetch']>[2]): Promise<{ status: number; body: Buffer }> {
+  const res = await gwFetch(`${paladinUrl(party)}${path}`, { ...init, party, signal: AbortSignal.timeout(60_000) });
+  return { status: res.status, body: Buffer.from(await res.arrayBuffer()) };
 }

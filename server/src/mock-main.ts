@@ -8,7 +8,7 @@ import { buildApp } from './app.ts';
 import { fakeAdapter } from '../test/fake-adapter.ts';
 import type { GatewayBundles, Kube } from './policy/kube.ts';
 import { Opa } from './policy/opa.ts';
-import { PLATFORMS } from './policy/platforms.ts';
+import { FXA, PLATFORMS, familyOf } from './policy/platforms.ts';
 import { Publisher, revisionOf as bundleRevision } from './policy/publish.ts';
 import type { PolicyDeps } from './policy/routes.ts';
 import { OPA_ROOT, PolicyStore, SEEDS_DIR } from './policy/store.ts';
@@ -61,6 +61,7 @@ const USED = { A: { RD: 1_900_000_000, DFABI: 300 }, B: { RD: 1_555_400_000, DFA
 function mockPolicy(): PolicyDeps {
   const store = new PolicyStore(mkdtempSync(join(tmpdir(), 'lensa-policy-')), SEEDS_DIR);
   const opa = process.env.OPA_BIN ? new Opa(process.env.OPA_BIN, OPA_ROOT) : new StubOpa();
+  const fxaOpa = process.env.OPA_BIN ? new Opa(process.env.OPA_BIN, FXA.opaRoot, undefined, FXA.platforms) : opa; // fabricx-adapter has its own tree
   const publisher = new Publisher(new MockKube(), opa, store);
   // Playwright's publish-failure path: a version whose reason says "uji gagal terbit" fails its first publish (502), the retry succeeds
   const failed = new Set<string>();
@@ -73,7 +74,7 @@ function mockPolicy(): PolicyDeps {
     return publisher.publish(o, m, n);
   };
   return {
-    store, workflow: new PolicyWorkflow(store, opa, publish), status: () => publisher.status(),
+    store, workflow: new PolicyWorkflow(store, (m) => (familyOf(m) === FXA ? fxaOpa : opa), publish), status: () => publisher.status(),
     usage: async (p, m) => {
       const limit = (store.current(OWNER_OF_PARTY[p], m).doc as BankPolicy).daily_limit;
       return { RD: { used: USED[p].RD, limit: limit?.RD ?? null }, DFABI: { used: USED[p].DFABI, limit: limit?.DFABI ?? null } };

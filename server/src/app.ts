@@ -11,7 +11,7 @@ import {
 import { probeNodes, type Probe } from './health.ts';
 import { BATCH_COUNT_MAX, BATCH_LIMITS_MIN, HEALTH_MS, RATES, STAGE_S, StressRun, USERS, batchUsers, effectiveUsers, senders, validateStress, type StressConfig } from './stress.ts';
 import { toCsv } from './stats.ts';
-import { REGISTRY, isPlatform } from './policy/platforms.ts';
+import { REGISTRY, familyOf, isPlatform } from './policy/platforms.ts';
 import { HIDDEN, SECURITY_HEADERS, TX_WRITES, corrId, generic, scrubPublic } from './public.ts';
 import { registerPolicyRoutes, registerPolicyUnavailable, type PolicyDeps } from './policy/routes.ts';
 
@@ -193,8 +193,8 @@ export function buildApp(adapters: Adapters, opts: { webDist?: string; probe?: P
       parties: PARTIES, flows: FLOWS,
       models: Object.fromEntries(MODELS.map((m) => {
         const a = adapters[m];
-        // Kebijakan: a model with a policy document (the registry in policy/platforms.ts) and whether a gateway enforces it
-        const policy = isPlatform(m) ? { registered: true, enforced: REGISTRY[m].enforced } : { registered: false, enforced: false, reason: `Kebijakan belum tersedia untuk ${MODEL_NAMES[m]}` };
+        // Kebijakan: a model with a policy document (the registry in policy/platforms.ts), whether a gateway enforces it and the gateway name prefix of its family
+        const policy = isPlatform(m) ? { registered: true, enforced: REGISTRY[m].enforced, gateway: familyOf(m).gw } : { registered: false, enforced: false, reason: `Kebijakan belum tersedia untuk ${MODEL_NAMES[m]}` };
         // load: how the stress test reads the platform (capacity | latency | none), the bottleneck or reason, the most senders per bank, who sends in batch mode and why BI does not
         const load = a ? { mode: a.loadMode ?? 'capacity', limit: a.loadLimit ?? null, maxUsers: a.maxLoadUsers ?? null, parties: senders(a), biReason: a.biReason ?? null } : null;
         return [m, { name: MODEL_NAMES[m], available: !!a, stepLabels: a?.stepLabels ?? [], capabilities: a ? capsOf(a) : unavailable, policy, load }];

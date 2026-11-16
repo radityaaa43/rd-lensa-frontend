@@ -40,7 +40,7 @@ const CALLDATA_PATH = /^investors\[\]\.(cashUnlockCall|bondUnlockCall)$/;
 const CALLDATA = /^0x[0-9a-fA-F]{8}([0-9a-fA-F]{64})*$/;
 const ZETO_FIELDS = ['rd', 'dfabi', 'atomFactory', 'groups', 'owners', 'addresses', 'fromBlock', 'funded', 'privateMint'];
 const OWNERS = ['bi', 'bank-a', 'bank-b', 'bank-c'];
-const PLATFORMS = ['zeto', 'noto', 'fabricx', 'iroha3'];
+const PLATFORMS = ['zeto', 'noto', 'fabricx', 'iroha3', 'fabricx-adapter']; // policy/<owner>/<platform>/ directories carried into the pod seed
 const POLICY_FILE = /^(v\d+\.json|pending\.json|audit\.jsonl)$/;
 
 type Problems = string[];
