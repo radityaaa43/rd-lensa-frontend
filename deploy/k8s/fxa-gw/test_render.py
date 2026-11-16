@@ -16,7 +16,7 @@ class Render(unittest.TestCase):
     def test_objects_and_custody(self):
         for p in PARTIES:
             k = by_kind(render.render(p))
-            self.assertEqual({a: len(b) for a, b in k.items()}, {"ConfigMap": 2, "Service": 2, "Deployment": 1, "NetworkPolicy": 2}, p)
+            self.assertEqual({a: len(b) for a, b in k.items()}, {"ConfigMap": 3, "Service": 2, "PersistentVolumeClaim": 1, "Deployment": 1, "NetworkPolicy": 2}, p)
             self.assertNotIn("Secret", k, "keys are a custody step, never rendered")
             for o in sum(k.values(), []):
                 self.assertEqual(o["metadata"]["namespace"], f"fabricx-{p}")
@@ -80,11 +80,11 @@ class Render(unittest.TestCase):
                 self.assertTrue(c["securityContext"]["readOnlyRootFilesystem"])
             n = render.PARTY_N[p]
             self.assertEqual(sorted(v["secret"]["secretName"] for v in vols.values() if "secret" in v),
-                             sorted(f"fxa-gw-{n}-{s}" for s in ("server", "client-ca", "operator", "upstream-ca")))
+                             sorted(f"fxa-gw-{n}-{s}" for s in ("server", "client-ca", "operator", "upstream-ca", "verify", "signing", "sink-token")))
 
     def test_images_can_be_pinned(self):
         dep = by_kind(render.render("bi", "e/e@sha256:1", "o/o@sha256:2"))["Deployment"][0]
-        self.assertEqual([c["image"] for c in dep["spec"]["template"]["spec"]["containers"]], ["e/e@sha256:1", "o/o@sha256:2"])
+        self.assertEqual([c["image"] for c in dep["spec"]["template"]["spec"]["containers"]], ["e/e@sha256:1", "o/o@sha256:2", render.SINK_IMAGE])
 
     def test_defaults_are_pinned_and_tag_only_images_are_refused(self):
         dep = by_kind(render.render("bi"))["Deployment"][0]
@@ -93,6 +93,40 @@ class Render(unittest.TestCase):
         for args in (("envoyproxy/envoy:v1.38.9", render.OPA_IMAGE), (render.ENVOY_IMAGE, "openpolicyagent/opa:1.21.1-envoy-1-static")):
             with self.assertRaises(SystemExit):
                 render.render("bi", *args)
+
+    def test_policy_bundles_come_from_the_gateways_own_sink_only(self):
+        for p in PARTIES:
+            k = by_kind(render.render(p))
+            n, kid = render.PARTY_N[p], render.KEYID[p]
+            opa = yaml.safe_load(k["ConfigMap"][1]["data"]["opa.yaml"])
+            self.assertEqual(opa["services"], {"sink": {"url": "http://127.0.0.1:8081", "credentials": {"bearer": {"token_path": "/sink-token/token"}}}})  # never besu's bundle-server
+            self.assertEqual({b: v["signing"]["keyid"] for b, v in opa["bundles"].items()}, {"bi": "bi", "bank": kid})
+            self.assertEqual(opa["labels"], {"gateway": f"fxa-gw-{n}"})
+            self.assertEqual(opa["plugins"]["envoy_ext_authz_grpc"]["path"], "fxa/authz/result")
+            spec = k["Deployment"][0]["spec"]["template"]["spec"]
+            sink = next(c for c in spec["containers"] if c["name"] == "sink")
+            env = {e["name"]: e["value"] for e in sink["env"]}
+            self.assertEqual((env["PARTY_BUNDLE"], env["SIGNING_KEYID"]), ("bi,bank" if p == "bi" else "bank", kid))
+            opa_c = next(c for c in spec["containers"] if c["name"] == "opa")
+            self.assertIn(f"--set-file=keys.bi.key=/verify/bi.pem", opa_c["args"])
+            self.assertIn(f"--set-file=keys.{kid}.key=/verify/{kid}.pem", opa_c["args"])
+            self.assertEqual(k["Deployment"][0]["spec"]["strategy"], {"type": "Recreate"})
+            self.assertEqual(k["PersistentVolumeClaim"][0]["spec"]["storageClassName"], "fabricx-essd")
+            with open(os.path.join(render.HERE, "sink.py")) as f:
+                self.assertEqual(k["ConfigMap"][2]["data"]["sink.py"], f.read())
+            self.assertEqual(env["OPA_BIN"], "/tools/opa")
+            self.assertEqual(spec["initContainers"][0]["command"], ["cp", "/opa", "/tools/opa"])
+
+    def test_sink_door_is_three_exact_calls_and_the_main_route_names_the_node(self):
+        cfg = yaml.safe_load(by_kind(render.render("bank-b"))["ConfigMap"][0]["data"]["envoy.yaml"])
+        routes = cfg["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][0]["typed_config"]["route_config"]["virtual_hosts"][0]["routes"]
+        sink = [r for r in routes if r["route"]["cluster"] == "sink"]
+        self.assertEqual([r["match"].get("path") or r["match"]["safe_regex"]["regex"] for r in sink], ["^/sink/bundles/(bi|bank)$", "/sink/bundles/bi/latest", "/sink/status"])
+        self.assertEqual([r["match"]["headers"][0]["string_match"]["exact"] for r in sink], ["POST", "GET", "GET"])
+        main = routes[-1]
+        self.assertEqual(main["match"], {"prefix": "/"})
+        ctx = main["typed_per_filter_config"]["envoy.filters.http.ext_authz"]["check_settings"]["context_extensions"]
+        self.assertEqual(ctx, {"node": "node3", "target": "fabricx-adapter"})
 
 
 if __name__ == "__main__":

@@ -1,0 +1,9 @@
+{
+  "nodes": {
+    "node1": {"party": "BI", "identities": ["bi@node1"], "issuer": true},
+    "node2": {"party": "A", "identities": ["bankA@node2"]},
+    "node3": {"party": "B", "identities": ["bankB@node3"]},
+    "node4": {"party": "C", "identities": ["bankC@node4"]}
+  },
+  "participants": ["bi@node1", "bankA@node2", "bankB@node3", "bankC@node4"]
+}

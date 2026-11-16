@@ -75,7 +75,7 @@ test.skipIf(need)('assemble keeps git participants and puts one document per pla
   bi.noto.max_mint_per_tx.DFABI = 7;
   bi.zeto.frozen = ['bankB@node3'];
   bi.noto.holidays = [{ date: '2026-12-25', name: 'Natal' }];
-  const bank: ByPlatform<BankPolicy> = { zeto: { counterparties: ['bi@node1'], daily_limit: { RD: 9 } }, noto: { counterparties: ['bi@node1', 'bankB@node3'] }, fabricx: { counterparties: ['bi@node1'] }, iroha3: { counterparties: ['bi@node1'] }, stealth: { counterparties: ['bi@node1'] } };
+  const bank: Partial<ByPlatform<BankPolicy>> = { zeto: { counterparties: ['bi@node1'], daily_limit: { RD: 9 } }, noto: { counterparties: ['bi@node1', 'bankB@node3'] }, fabricx: { counterparties: ['bi@node1'] }, iroha3: { counterparties: ['bi@node1'] }, stealth: { counterparties: ['bi@node1'] } };
   const out = tmp();
   opa.assemble(2, bi, bank, out);
   const data = JSON.parse(readFileSync(join(out, 'bi/bi/config/data.json'), 'utf8'));

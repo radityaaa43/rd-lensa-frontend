@@ -10,7 +10,7 @@ export interface Meta {
   parties: Record<PartyId, { name: string; node: 1 | 2 | 3 | 4 }>;
   flows: Record<FlowId, { asset: 'RD' | 'DFABI'; issuer: boolean; dvp: boolean }>;
   // policy: does the model have Kebijakan documents (a registered platform), and does a gateway enforce them yet. An unregistered model says why not.
-  models: Record<ModelId, { name: string; available: boolean; stepLabels: string[]; capabilities: Record<FlowId, Capability>; policy: { registered: boolean; enforced: boolean; reason?: string };
+  models: Record<ModelId, { name: string; available: boolean; stepLabels: string[]; capabilities: Record<FlowId, Capability>; policy: { registered: boolean; enforced: boolean; gateway?: string; reason?: string };
     // how the stress test reads the platform: capacity (parallel senders, a knee), latency (one transfer in flight), none (no load transfer yet); limit = the bottleneck or why; maxUsers = senders per bank;
     // parties = who sends in batch mode, biReason = why BI is not one of them
     load: { mode: 'capacity' | 'latency' | 'none'; limit: string | null; maxUsers: number | null; parties: PartyId[]; biReason: string | null } | null }>;

@@ -96,6 +96,15 @@ describe('fabricx-adapter (token v2)', () => {
     expect(reads()).toBe(2);
   });
 
+  it('a gateway Kebijakan refusal names its reasons, and only well-formed ones', async () => {
+    const t = fakeTokenV2(); t.bal.A.RupiahDigital = 10n;
+    const body = { error: 'policy_denied', reasons: ['Melebihi batas per transaksi bank RD', '<script>x</script>', 'Di luar jam operasional RD'] };
+    const call: Call = (p, m, path, b) => (path === '/test/transfer' ? Promise.resolve({ status: 403, body }) : t.call(p, m, path, b));
+    const a = createFabricxTokenAdapter(call, fast);
+    await expect(a.run(req('rd-transfer', 'A', 'B', '5'), 5n, () => {})).rejects.toThrow('ditolak kebijakan: Melebihi batas per transaksi bank RD; Di luar jam operasional RD');
+    expect(t.gate.size).toBe(0);
+  });
+
   it('closes the gate and reports the code when the ledger rejects', async () => {
     const t = fakeTokenV2({ reject: true }); const a = createFabricxTokenAdapter(t.call, fast);
     await expect(a.run(req('rd-issue', 'BI', 'A'), 5n, () => {})).rejects.toThrow(/MVCC/);

@@ -74,6 +74,7 @@ spec:
             # file over the PVC state dir: the pod seed never holds iroha3.json (render.sh seed refuses it), and adapters/iroha3.ts reads <state dir>/iroha3.json
             - {name: iroha3-state, mountPath: /app/frontend/server/state/iroha3.json, subPath: iroha3.json, readOnly: true}
             - {name: sink-tokens, mountPath: /sink-tokens, readOnly: true}
+            - {name: fxa-sink-tokens, mountPath: /fxa-sink-tokens, readOnly: true}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -150,6 +151,13 @@ spec:
               - secret:
                   name: lensa-sink-token-c
                   items: [{key: token, path: C}]
+        # LENSA_FXA_SINK_TOKENS_DIR: the bearer tokens of the fxa-gw-N Kebijakan sinks (fabricx-adapter's own OPA, independent of the besu sinks above), file
+        # <BI|A|B|C> from Secret fxa-sink-tokens (deploy/k8s/fxa-gw/secrets.sh; never rendered). 0440 like sink-tokens. Not optional.
+        - name: fxa-sink-tokens
+          secret:
+            secretName: fxa-sink-tokens
+            defaultMode: 0440
+            items: [{key: BI, path: BI}, {key: A, path: A}, {key: B, path: B}, {key: C, path: C}]
 ---
 apiVersion: v1
 kind: Service

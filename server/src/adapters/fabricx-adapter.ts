@@ -37,6 +37,10 @@ const str = (x: unknown): string => (typeof x === 'string' ? x : '');
 const pick = (o: Record<string, unknown>, k: string): unknown => o[k] ?? o[k.charAt(0).toLowerCase() + k.slice(1)];
 const fail = (what: string, r: Reply): never => {
   const code = str(obj(r.body).error) || str(obj(r.body).code);
+  // fxa-gw Kebijakan refusal: the reasons are the gateway policy's own fixed Indonesian texts (server/opa-fxa), so they are shown, each checked for shape
+  const why = code === 'policy_denied' && Array.isArray(obj(r.body).reasons)
+    ? (obj(r.body).reasons as unknown[]).filter((x): x is string => typeof x === 'string' && /^[A-Za-z0-9 ().,()-]{3,120}$/.test(x)).slice(0, 5) : [];
+  if (why.length) throw new Error(`${what} ditolak kebijakan: ${why.join('; ')}`);
   throw new Error(`${what} gagal (HTTP ${r.status}${/^[a-z_]{3,60}$/.test(code) ? `: ${code}` : ''})`); // never the raw body: it reaches the browser
 };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -366,24 +370,57 @@ function agentFor(p: PartyId): https.Agent | undefined {
 }
 const baseOf = (p: PartyId) => process.env[`LENSA_FXA_GW_${p}`];
 
-export const gwCall: Call = (party, method, path, body) => new Promise((resolve, reject) => {
+export const fxaConfigured = (): boolean => (Object.keys(PARTIES) as PartyId[]).every((p) => baseOf(p));
+
+// Raw bytes through the party's gateway (same agent and rules as gwCall): the policy sink's tar.gz bundles (policy/sink.ts SinkIo.fetch).
+export const gwRaw = (party: PartyId, path: string, init: { method: 'GET' | 'POST'; headers?: Record<string, string>; body?: Buffer }): Promise<{ status: number; body: Buffer }> => new Promise((resolve, reject) => {
   const base = baseOf(party);
   if (!base) return reject(new Error(`LENSA_FXA_GW_${party} belum diatur`));
   const u = new URL(path, base.endsWith('/') ? base : `${base}/`);
-  const data = body === undefined ? undefined : JSON.stringify(body);
-  const req = (u.protocol === 'http:' ? http : https).request(u, { method, agent: agentFor(party), timeout: 60_000, headers: data ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } : {} }, (res) => {
-    let raw = '';
-    res.on('data', (c) => { raw += c; });
-    res.on('end', () => { let b: unknown = null; try { b = raw ? JSON.parse(raw) : null; } catch { /* non-JSON error page: body stays null */ } resolve({ status: res.statusCode ?? 0, body: b }); });
+  const req = (u.protocol === 'http:' ? http : https).request(u, { method: init.method, agent: agentFor(party), timeout: 60_000, headers: init.headers ?? {} }, (res) => {
+    const chunks: Buffer[] = [];
+    res.on('data', (c: Buffer) => { chunks.push(c); });
+    res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks) }));
   });
   req.on('timeout', () => req.destroy(new Error('Gateway token v2 tidak menjawab dalam 60 detik')));
   req.on('error', () => reject(new Error('Gateway token v2 tidak terjangkau'))); // never the raw error: it carries host and port
-  req.end(data);
+  req.end(init.body);
 });
+
+export const gwCall: Call = async (party, method, path, body) => {
+  const data = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
+  const r = await gwRaw(party, path, { method, headers: data ? { 'content-type': 'application/json', 'content-length': String(data.length) } : {}, body: data });
+  let b: unknown = null;
+  try { b = r.body.length ? JSON.parse(r.body.toString()) : null; } catch { /* non-JSON error page: body stays null */ }
+  return { status: r.status, body: b };
+};
+
+// "Terpakai hari ini" for the Kebijakan page: what the party's own token v2 wallet sent since 00:00 WIB (rows with direction 'sent' that
+// were not rejected), per token. Throws instead of answering a total that may be short (a failed read, or a full page still inside today).
+export async function fxaUsage(
+  party: PartyId, limits: Partial<Record<'RD' | 'DFABI', number>> = {}, call: Call = gwCall, now = new Date(),
+): Promise<Record<'RD' | 'DFABI', { used: number; limit: number | null }>> {
+  const day = 86_400_000, wib = 7 * 3_600_000;
+  const start = Math.floor((now.getTime() + wib) / day) * day - wib;
+  const r = await call(party, 'GET', '/test/history');
+  if (r.status !== 200) fail(`Riwayat ${party}`, r);
+  const list = obj(r.body).transactions;
+  if (!Array.isArray(list)) throw new Error('Riwayat token v2 tidak berbentuk daftar');
+  const rows = list.map(obj);
+  // the node returns at most 1000 rows (history.go): a full page whose oldest row is still today may hide earlier rows of today
+  if (rows.length >= 1000 && rows.every((e) => Date.parse(str(e.timestamp)) >= start)) throw new Error('Riwayat token v2 penuh: pemakaian hari ini tidak dapat dihitung utuh');
+  const used = { RD: 0n, DFABI: 0n };
+  for (const e of rows) {
+    const t = str(e.asset) === ASSET.RD ? 'RD' : str(e.asset) === ASSET.DFABI ? 'DFABI' : null;
+    if (!t || str(e.direction) !== 'sent' || str(e.status) === 'rejected' || !(Date.parse(str(e.timestamp)) >= start) || !/^\d+$/.test(str(e.units))) continue;
+    used[t] += BigInt(str(e.units));
+  }
+  return { RD: { used: Number(used.RD), limit: limits.RD ?? null }, DFABI: { used: Number(used.DFABI), limit: limits.DFABI ?? null } };
+}
 
 export async function load(_stateDir?: string): Promise<ModelAdapter | null> {
   const parties = Object.keys(PARTIES) as PartyId[];
-  if (!parties.every((p) => baseOf(p))) return null;
+  if (!fxaConfigured()) return null;
   // Fail here, not as an obscure agent/protocol error on the first call. Names only: a URL or path would reach the browser.
   const mtls = !!process.env.LENSA_FXA_MTLS_DIR;
   for (const p of parties) {

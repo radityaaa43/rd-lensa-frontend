@@ -1,7 +1,9 @@
 import type { PartyId } from '../domain.ts';
 import type { Token } from './types.ts';
 import { usage } from './usage.ts';
+import { fileURLToPath } from 'node:url';
 import { fabricxUsage, transport } from '../adapters/fabricx.ts';
+import { fxaConfigured, fxaUsage } from '../adapters/fabricx-adapter.ts';
 import { stealthUsage } from '../adapters/stealth-signer.ts';
 import { inCluster } from '../incluster.ts';
 import { stealthEndpoints } from '../gateway.ts';
@@ -9,8 +11,16 @@ import { stealthEndpoints } from '../gateway.ts';
 // The one place that lists the platforms with a policy document. Everything else (store, bundles, revisions, routes,
 // readiness, the web screen through /api/meta) is derived from this array and REGISTRY, so a new platform is one entry here
 // plus its rego packages (besu/opa/README.md, "Adding a platform").
-export const PLATFORMS = ['zeto', 'noto', 'fabricx', 'iroha3', 'stealth'] as const;
+export const PLATFORMS = ['zeto', 'noto', 'fabricx', 'iroha3', 'stealth', 'fabricx-adapter'] as const;
 export type Platform = (typeof PLATFORMS)[number];
+
+// A family = one OPA tree with its own bi/bank bundles, revision strings and gateways (`<gw>-<node>`), published on its own.
+// besu: the shared bundles of bank-gw-N (and the doors loading the same bundle); fxa: Fabric-X token v2 alone, on fxa-gw-N with their own sinks.
+export interface Family { platforms: readonly Platform[]; opaRoot: string; gw: string }
+const tree = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
+export const BESU: Family = { platforms: ['zeto', 'noto', 'fabricx', 'iroha3', 'stealth'], opaRoot: tree('../../vendor/besu/opa'), gw: 'bank-gw' };
+export const FXA: Family = { platforms: ['fabricx-adapter'], opaRoot: tree('../../opa-fxa'), gw: 'fxa-gw' };
+export const familyOf = (p: Platform): Family => (FXA.platforms.includes(p) ? FXA : BESU);
 
 export type Usage = Record<Token, { used: number; limit: number | null }>;
 
@@ -41,9 +51,14 @@ export const REGISTRY: Record<Platform, PlatformInfo> = {
     label: 'Stealth', gateways: [], enforced: true,
     ...(inCluster() && stealthEndpoints() ? { usage: (party: Exclude<PartyId, 'BI'>, limits: Partial<Record<Token, number>> | undefined) => stealthUsage(party, limits) } : {}),
   },
+  // its own OPA (server/opa-fxa) on fxa-gw-1..4; usage from the party's token v2 history, so only once the four LENSA_FXA_GW_* are set
+  'fabricx-adapter': {
+    label: 'Fabric-X (token v2)', gateways: ['fxa-gw-1', 'fxa-gw-2', 'fxa-gw-3', 'fxa-gw-4'], enforced: true,
+    ...(fxaConfigured() ? { usage: (party: Exclude<PartyId, 'BI'>, limits: Partial<Record<Token, number>> | undefined) => fxaUsage(party, limits) } : {}),
+  },
 };
 
 export const isPlatform = (v: unknown): v is Platform => (PLATFORMS as readonly unknown[]).includes(v);
 
-// Sink names the Publisher waits for: the gateways of every platform, once each.
-export const sinkNames = (): string[] => [...new Set(PLATFORMS.flatMap((p) => REGISTRY[p].gateways))];
+// Sink names a family's Publisher waits for: the gateways of every platform of the family, once each.
+export const sinkNames = (family: Family = BESU): string[] => [...new Set(family.platforms.flatMap((p) => REGISTRY[p].gateways))];

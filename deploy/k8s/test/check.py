@@ -170,7 +170,7 @@ check(cm.get("LENSA_GW_IROHA_BI") == "https://gateway.rd-iroha3-bi.svc.cluster.l
 check(cm.get("LENSA_FXA_GW_BI") == "https://fxa-gw-1.fabricx-bi.svc.cluster.local:8443" and cm.get("LENSA_FXA_GW_C") == "https://203.0.113.9:31463", "configmap takes the token v2 gateway URLs (LENSA_FXA_GW_<P>) from the env file")
 check(cm.get("LENSA_GW_STEALTH_BI") == "https://10.0.0.1:8550", "configmap takes the S17 stealth signer door (LENSA_GW_STEALTH_<P>, the st-gw-N doors) from the env file")
 for k in cm:
-    if k == "LENSA_SINK_TOKENS_DIR": continue  # a directory name; the tokens are mounted from Secrets
+    if k in ("LENSA_SINK_TOKENS_DIR", "LENSA_FXA_SINK_TOKENS_DIR"): continue  # directory names; the tokens are mounted from Secrets
     check(not re.search(r"KEY|SECRET|TOKEN|PASSWORD|KUBECONFIG", k), f"configmap key looks secret: {k}")
 for bad in ["LENSA_GW_PALADIN_BI=https://user:pw@10.0.0.1:1", "LENSA_GW_STEALTH_A=https://user:pw@10.0.0.1:1", "LENSA_GW_STEALTH_X=https://10.0.0.1:1", "LENSA_GW_IROHA_A=https://user:pw@10.0.0.1:1", "LENSA_GW_IROHA_X=https://10.0.0.1:1", "LENSA_GW_MTLS_DIR_IROHA=/x", "KUBECONFIG=/x", "OPA_KEYS_DIR=/x", "LENSA_IN_CLUSTER=0", "LENSA_SINK_TOKENS_DIR=/x", "OPA_BIN=/tmp/opa", "DEPLOYER_KEY=x", 'LENSA_BESU_RPC=http://a"b']:
     p = os.path.join(fx, "_bad.env"); open(p, "w").write(bad + "\n")
@@ -195,8 +195,8 @@ check(c.get("livenessProbe", {}).get("httpGet") == {"path": "/api/livez", "port"
 r = c.get("resources", {})
 check(r.get("requests") == {"cpu": "100m", "memory": "256Mi"} and r.get("limits") == {"cpu": "1", "memory": "1Gi"}, f"resources {r}")
 mounts = {m["mountPath"]: m for m in c.get("volumeMounts", [])}
-check(set(mounts) == {"/tmp", "/app/frontend/server/state", "/certs", "/sink-tokens", "/certs-iroha", "/certs-fxa", "/iroha3-state", "/app/frontend/server/state/iroha3.json"}, f"mounts {sorted(mounts)}")
-check(all(mounts.get(m, {}).get("readOnly") is True for m in ("/certs", "/sink-tokens", "/certs-iroha", "/certs-fxa", "/iroha3-state", "/app/frontend/server/state/iroha3.json")), "/certs, /sink-tokens, /certs-iroha, /certs-fxa and the Iroha 3 state ConfigMap mounts are read-only")
+check(set(mounts) == {"/tmp", "/app/frontend/server/state", "/certs", "/sink-tokens", "/fxa-sink-tokens", "/certs-iroha", "/certs-fxa", "/iroha3-state", "/app/frontend/server/state/iroha3.json"}, f"mounts {sorted(mounts)}")
+check(all(mounts.get(m, {}).get("readOnly") is True for m in ("/certs", "/sink-tokens", "/fxa-sink-tokens", "/certs-iroha", "/certs-fxa", "/iroha3-state", "/app/frontend/server/state/iroha3.json")), "/certs, /sink-tokens, /fxa-sink-tokens, /certs-iroha, /certs-fxa and the Iroha 3 state ConfigMap mounts are read-only")
 check(mounts.get("/app/frontend/server/state/iroha3.json", {}).get("subPath") == "iroha3.json" and mounts.get("/iroha3-state", {}).get("name") == mounts["/app/frontend/server/state/iroha3.json"].get("name"), "iroha3.json is a subPath file over the PVC state dir (the PVC seed never holds iroha3 files), from the same ConfigMap as /iroha3-state")
 vols = {v["name"]: v for v in pod.get("volumes", [])}
 check(any("persistentVolumeClaim" in v and v["persistentVolumeClaim"]["claimName"] == "lensa-state" for v in vols.values()), "state volume is PVC lensa-state")
@@ -506,6 +506,12 @@ check([d["kind"] for d in allx][0] == "Namespace", "all: namespace first")
 check(not any(d["kind"] == "Secret" for d in allx), "no render path ever emits a Secret")
 check(not any(d["metadata"]["name"] in ("lensa-flow", "lensa-flow-env") for d in allx), "`all` never renders the write instance")
 
+# fabricx-adapter Kebijakan: the fxa-gw sink tokens, one file per party from Secret fxa-sink-tokens, 0440, read-only (server/src/policy/boot.ts fxaPublisher)
+fxv = vols.get(mounts.get("/fxa-sink-tokens", {}).get("name"), {}).get("secret", {})
+check(cm.get("LENSA_FXA_SINK_TOKENS_DIR") == "/fxa-sink-tokens" and fxv.get("secretName") == "fxa-sink-tokens" and fxv.get("defaultMode") == 0o440
+      and sorted(i["path"] for i in fxv.get("items", [])) == ["A", "B", "BI", "C"], "fxa sink tokens: Secret fxa-sink-tokens files BI/A/B/C, 0440, at /fxa-sink-tokens")
+
 if fails:
     print("\n".join("FAIL: " + f for f in fails)); sys.exit(1)
 print("ok: all assertions hold")
+

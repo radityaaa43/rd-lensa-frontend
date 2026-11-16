@@ -21,7 +21,8 @@ import { inCluster, readOnlyMount } from '../incluster.ts';
 import { Opa } from '../policy/opa.ts';
 import { buildBundles, revisionOf, versionOf, type PublisherTiming } from '../policy/publish.ts';
 import type { GatewayBundles } from '../policy/kube.ts';
-import { PLATFORMS } from '../policy/platforms.ts';
+import { BESU } from '../policy/platforms.ts';
+const PLATFORMS = BESU.platforms; // this CLI publishes the besu family's shared bundles (bank-gw-N) only
 import { sinkIo, sinkKube, type SinkIo } from '../policy/sink.ts';
 import { OPA_ROOT, POLICY_STATE_DIR, PolicyStore, SEEDS_DIR } from '../policy/store.ts';
 import { OWNER_OF_PARTY, type BankPolicy, type BiPolicy, type ByPlatform } from '../policy/types.ts';

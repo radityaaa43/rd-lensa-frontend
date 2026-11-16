@@ -6,7 +6,8 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runPublishCli, type CliDeps } from '../src/cli/policy-publish.ts';
 import { Opa } from '../src/policy/opa.ts';
-import { PLATFORMS } from '../src/policy/platforms.ts';
+import { BESU } from '../src/policy/platforms.ts';
+const PLATFORMS = BESU.platforms; // the CLI publishes the besu family only
 import { sinkIo as realSinkIo, type SinkIo } from '../src/policy/sink.ts';
 import { PolicyStore as RealStore, type PolicyStore } from '../src/policy/store.ts';
 
@@ -190,7 +191,7 @@ describe('publishes from the store\'s latest versions only, never from seeds', (
     for (const o of ['bank-a', 'bank-b', 'bank-c']) writeFileSync(join(seeds, `${o}.json`), JSON.stringify({ zeto: docs.bank, noto: docs.bank, fabricx: docs.bank, iroha3: docs.bank, stealth: docs.bank }));
     const st = new RealStore(join(root, 'policy'), seeds);
     const t = new Date().toISOString();
-    const ver = (owner: 'bi' | 'bank-a' | 'bank-b' | 'bank-c', platform: 'zeto' | 'noto' | 'fabricx' | 'iroha3' | 'stealth', n: number, doc: unknown) =>
+    const ver = (owner: 'bi' | 'bank-a' | 'bank-b' | 'bank-c', platform: (typeof PLATFORMS)[number], n: number, doc: unknown) =>
       st.saveVersion({ owner, platform, n, doc, maker: 'm', checker: 'c', reason: 'r', note: '', submittedAt: t, approvedAt: t } as never);
     for (const o of ['bi', 'bank-a', 'bank-b', 'bank-c'] as const) for (const p of PLATFORMS) {
       ver(o, p, 1, o === 'bi' ? seedBi.zeto : docs.bank);

@@ -58,6 +58,12 @@ describe('planSeed: what is carried', () => {
     expect(p.files.every((f) => !/key|seed|secret|mnemonic|token|password|kubeconfig/i.test(f.content.toString().replace(/"keyid"/g, '')) || f.path.startsWith('policy/'))).toBe(true);
   });
 
+  it('carries the fabricx-adapter policy directory (its own family) and still refuses an unknown one', () => {
+    const p = planSeed(fixture({ policy: { 'bi/fabricx-adapter/v1.json': '{"frozen":[]}' } }), opts);
+    expect(names(p)).toContain('policy/bi/fabricx-adapter/v1.json');
+    expect(() => planSeed(fixture({ policy: { 'bi/nope/v1.json': '{}' } }), opts)).toThrow();
+  });
+
   it('a dry run lists names, sizes and counts only, never a value', () => {
     const p = planSeed(fixture(), opts);
     const text = JSON.stringify(p.summary);
