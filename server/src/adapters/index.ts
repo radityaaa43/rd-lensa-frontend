@@ -1,7 +1,7 @@
 import type { ModelAdapter } from '../adapter.ts';
 import type { ModelId } from '../domain.ts';
 
-// Each adapter module (stealth.ts, noto.ts, zeto.ts, fabricx.ts, iroha3.ts) exports load(); null when its state file is missing.
+// Each adapter module (stealth.ts, noto.ts, zeto.ts, fabricx-adapter.ts, iroha3.ts) exports load(); null when its state file is missing.
 // `only` restricts which models are loaded (tests); `stateDir` is handed to each load().
 export type Adapters = Partial<Record<ModelId, ModelAdapter>>;
 export type LoadFailures = Partial<Record<ModelId, string>>; // model -> text safe to show in the UI
@@ -15,7 +15,7 @@ export async function loadAdaptersWithFailures(
   const adapters: Adapters = {};
   const failures: LoadFailures = {};
   const importModule = opts.importModule ?? ((m: ModelId) => import(`./${m}.ts`) as Promise<Module>);
-  for (const m of opts.only ?? (['stealth', 'noto', 'zeto', 'fabricx', 'fabricx-adapter', 'iroha3'] as const)) {
+  for (const m of opts.only ?? (['stealth', 'noto', 'zeto', 'fabricx-adapter', 'iroha3'] as const)) {
     try {
       const a = await (await importModule(m)).load(opts.stateDir);
       if (a) adapters[m] = a;

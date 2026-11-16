@@ -47,8 +47,7 @@ export async function preflight(a: Api, models: ModelId[], scenarios: string[], 
     if (run.has('rd-transfer')) { left(`${X} RD`, b.Xrd, 1n, 'S4'); b.Xrd -= 1n; b.Yrd += 1n; }
     if (run.has('dfabi-transfer')) { left(`${X} DFABI`, b.Xdf, 1n, 'S4'); b.Xdf -= 1n; b.Ydf += 1n; }
     if (writes.includes('S5')) { left(`${X} DFABI`, b.Xdf, 1n, 'S5'); left(`${Y} RD`, b.Yrd, PRICE, 'S5'); b.Xdf -= 1n; b.Ydf += 1n; b.Yrd -= PRICE; b.Xrd += PRICE; }
-    // Fabric-X issues new DFABI for an award (no BI stock to draw from), so a BI stock of 0 is normal there
-    if (writes.includes('S6')) { if (m !== 'fabricx') left('BI DFABI (persediaan)', b.BIdf, 1n, 'S6'); left(`${Y} RD`, b.Yrd, PRICE, 'S6'); }
+    if (writes.includes('S6')) { left('BI DFABI (persediaan)', b.BIdf, 1n, 'S6'); left(`${Y} RD`, b.Yrd, PRICE, 'S6'); }
     if (!errors.some((e) => e.startsWith(`${m}:`))) ok(`saldo cukup untuk ${writes.join('+')} (${X} -> ${Y})`);
   }
   if (scenarios.includes('S10')) {

@@ -23,13 +23,12 @@ const UI: Record<FlowId, { screen: 'transfer' | 'dvp'; tab?: string; verb: strin
   dvp: { screen: 'dvp', verb: 'Jalankan DvP' },
   award: { screen: 'dvp', verb: 'Jalankan penjualan' },
 };
-const TYPICAL: Record<string, string> = { zeto: '25 sampai 30 detik', noto: '3 sampai 16 detik', stealth: '5 sampai 25 detik', fabricx: '4 sampai 5 detik', iroha3: 'beberapa detik sampai 10 detik' };
+const TYPICAL: Record<string, string> = { zeto: '25 sampai 30 detik', noto: '3 sampai 16 detik', stealth: '5 sampai 25 detik', iroha3: 'beberapa detik sampai 10 detik' };
 const SLOW = { timeout: 180_000 };
 const WRITE_WAIT = MOCK ? 30_000 : 6 * 60_000; // the server's own tx deadline is 120 s; this only bounds the wait, it never triggers a resend
 
 type Delta = Partial<Record<`${PartyId}.${'RD' | 'DFABI'}`, bigint>>;
-// Exact balance change per flow, for the bank parties only. BI's own balance is model specific (Noto's custodian, Fabric-X issues instead
-// of drawing stock), so BI is read and shown but not asserted to a number.
+// Exact balance change per flow, for the bank parties only. BI's own balance is model specific (Noto's custodian, for one), so BI is read and shown but not asserted to a number.
 function expected(flow: FlowId, from: PartyId, to: PartyId): Delta {
   const a = AMOUNT, pay = AMOUNT * PRICE_PER_UNIT;
   switch (flow) {

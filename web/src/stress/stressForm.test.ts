@@ -43,7 +43,7 @@ const meta = { models: {
   noto: { load: { mode: 'capacity', limit: 'notaris BI', maxUsers: null } },
   stealth: { load: { mode: 'latency', limit: null, maxUsers: 1 } },
   iroha3: { load: { mode: 'none', limit: 'settle 100 detik', maxUsers: null } },
-  fabricx: { load: null },
+  'fabricx-adapter': { load: null },
 } } as unknown as Meta;
 
 test('stages per model: a single-flight platform has one, a capacity platform ramps, the open loop steps through the rates', () => {
@@ -54,7 +54,7 @@ test('stages per model: a single-flight platform has one, a capacity platform ra
 });
 
 test('a model without load info reads as capacity; open loop only when every selected model is a capacity platform', () => {
-  expect(loadOf(meta, 'fabricx').mode).toBe('capacity');
+  expect(loadOf(meta, 'fabricx-adapter').mode).toBe('capacity');
   expect(openAllowed(meta, ['noto'])).toBe(true);
   expect(openAllowed(meta, ['noto', 'zeto'])).toBe(false);
   expect(openAllowed(meta, [])).toBe(false);

@@ -1,5 +1,5 @@
-// L5 pre-stage (final-design zeto S19 / fabricx S19): Lensa reaches each party's gateway at a URL from lensa.env
-// (LENSA_GW_<PALADIN|FABRICX>_<BI|A|B|C>=https://<ip>:<port>) with that party's own mTLS client cert
+// L5 pre-stage (final-design zeto S19): Lensa reaches each party's gateway at a URL from lensa.env
+// (LENSA_GW_PALADIN_<BI|A|B|C>=https://<ip>:<port>) with that party's own mTLS client cert
 // (LENSA_GW_MTLS_DIR/<BI|A|B|C>/{ca.crt,lensa.crt,lensa.key}), no kubectl port-forward. Unset = today's loopback ports and one flat cert dir.
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -10,14 +10,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { assertGatewayEnv, gwEndpoint, gwFetch, gwUrl, paladinUrl } from '../src/gateway.ts';
-import { fxGateway } from '../src/adapters/fabricx.ts';
 import { probeNodes } from '../src/health.ts';
 
 // Certs are made here with openssl (no sibling-repo script, so this test also runs in CI): a CA, a server cert for 127.0.0.1 (gw-2.*) and a
-// client cert (lensa.*); the server cert also carries the service names the per-party client verifies (bank-gw-N, fx-gw-N), written under the same file names the real generator (besu/opa/mtls/gen-certs.sh) uses.
+// client cert (lensa.*); the server cert also carries the service names the per-party client verifies (bank-gw-N), written under the same file names the real generator (besu/opa/mtls/gen-certs.sh) uses.
 function makeCerts(dir: string) {
   const sh = (...a: string[]) => execFileSync('openssl', a, { cwd: dir, stdio: 'ignore' });
-  writeFileSync(join(dir, 'ext.cnf'), 'subjectAltName=IP:127.0.0.1,DNS:bank-gw-2,DNS:bank-gw-3,DNS:fx-gw-2,DNS:fx-gw-3\nextendedKeyUsage=serverAuth,clientAuth\n');
+  writeFileSync(join(dir, 'ext.cnf'), 'subjectAltName=IP:127.0.0.1,DNS:bank-gw-2,DNS:bank-gw-3\nextendedKeyUsage=serverAuth,clientAuth\n');
   sh('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'ca.key', '-out', 'ca.crt', '-days', '2', '-subj', '/CN=test-ca');
   for (const [name, cn] of [['gw-2', 'gw-2'], ['lensa', 'lensa']] as const) {
     sh('req', '-newkey', 'rsa:2048', '-nodes', '-keyout', `${name}.key`, '-out', `${name}.csr`, '-subj', `/CN=${cn}`);
@@ -50,7 +49,6 @@ describe('gateway endpoints from env', () => {
   it('unset: today\'s loopback ports per party', () => {
     expect(gwEndpoint('paladin', 'BI')).toBe('http://127.0.0.1:31548');
     expect(gwEndpoint('paladin', 'C')).toBe('http://127.0.0.1:31848');
-    expect(gwEndpoint('fabricx', 'A')).toBe('http://127.0.0.1:39442');
     expect(paladinUrl('B')).toBe('http://127.0.0.1:31748');
   });
 
@@ -62,17 +60,10 @@ describe('gateway endpoints from env', () => {
   });
 
   it('a value that is not an http(s) URL fails loudly and names the variable, never a silent default', () => {
-    vi.stubEnv('LENSA_GW_FABRICX_B', '10.1.2.3:8443');
-    expect(() => gwEndpoint('fabricx', 'B')).toThrow(/LENSA_GW_FABRICX_B/);
-    vi.stubEnv('LENSA_GW_FABRICX_B', 'ftp://10.1.2.3');
-    expect(() => gwEndpoint('fabricx', 'B')).toThrow(/LENSA_GW_FABRICX_B/);
-  });
-
-  it('the Fabric-X call goes to the URL of the acting party', async () => {
-    vi.stubEnv('LENSA_GW_FABRICX_C', plainBase);
-    vi.stubEnv('LENSA_GW_FABRICX_A', 'http://127.0.0.1:1'); // would refuse if it were used
-    await fxGateway('C', { op: 'usage' }).catch(() => undefined);
-    expect(seen).toEqual(['/']);
+    vi.stubEnv('LENSA_GW_PALADIN_B', '10.1.2.3:8443');
+    expect(() => gwEndpoint('paladin', 'B')).toThrow(/LENSA_GW_PALADIN_B/);
+    vi.stubEnv('LENSA_GW_PALADIN_B', 'ftp://10.1.2.3');
+    expect(() => gwEndpoint('paladin', 'B')).toThrow(/LENSA_GW_PALADIN_B/);
   });
 
   it('the node probe asks the gateway URL of each Paladin party', async () => {
@@ -134,10 +125,9 @@ describe('assertGatewayEnv (startup check)', () => {
     expect(() => assertGatewayEnv()).not.toThrow();
   });
 
-  it('all eight set to distinct host:port: passes', () => {
+  it('all four set to distinct host:port: passes', () => {
     for (const [i, p] of ['BI', 'A', 'B', 'C'].entries()) {
       vi.stubEnv(`LENSA_GW_PALADIN_${p}`, `https://10.0.0.${i + 1}:30548`);
-      vi.stubEnv(`LENSA_GW_FABRICX_${p}`, `https://10.0.1.${i + 1}:30549`);
     }
     expect(() => assertGatewayEnv()).not.toThrow();
   });
@@ -153,12 +143,6 @@ describe('assertGatewayEnv (startup check)', () => {
     expect(() => assertGatewayEnv()).toThrow(/LENSA_GW_PALADIN_A.*LENSA_GW_PALADIN_B/);
   });
 
-  it('paladin and fabricx on the same host:port also refuse', () => {
-    vi.stubEnv('LENSA_GW_PALADIN_A', 'https://10.0.0.2:30548');
-    vi.stubEnv('LENSA_GW_FABRICX_A', 'https://10.0.0.2:30548');
-    expect(() => assertGatewayEnv()).toThrow(/LENSA_GW_FABRICX_A.*LENSA_GW_PALADIN_A|LENSA_GW_PALADIN_A.*LENSA_GW_FABRICX_A/);
-  });
-
   it('a configured URL that equals another party\'s unset default (loopback port) refuses', () => {
     vi.stubEnv('LENSA_GW_PALADIN_A', 'http://127.0.0.1:31548'); // BI's default Paladin port, BI unset
     expect(() => assertGatewayEnv()).toThrow(/LENSA_GW_PALADIN_A/);
@@ -166,7 +150,7 @@ describe('assertGatewayEnv (startup check)', () => {
 
   it('a gateway URL equal to LENSA_BESU_RPC refuses (the Besu door belongs to BI)', () => {
     vi.stubEnv('LENSA_BESU_RPC', 'https://10.0.0.9:30545');
-    vi.stubEnv('LENSA_GW_FABRICX_B', 'https://10.0.0.9:30545');
+    vi.stubEnv('LENSA_GW_PALADIN_B', 'https://10.0.0.9:30545');
     expect(() => assertGatewayEnv()).toThrow(/LENSA_BESU_RPC/);
   });
 

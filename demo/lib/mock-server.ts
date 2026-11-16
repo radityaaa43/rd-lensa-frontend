@@ -11,7 +11,7 @@ const web = fileURLToPath(new URL('../../web', import.meta.url));
 const dist = fileURLToPath(new URL('../out/.mock/web/dist', import.meta.url));
 execFileSync('npx', ['vite', 'build', '--outDir', dist, '--emptyOutDir', '--logLevel', 'error'], { cwd: web, stdio: 'inherit' });
 
-const models: ModelId[] = ['zeto', 'noto', 'stealth', 'fabricx', 'iroha3'];
+const models: ModelId[] = ['zeto', 'noto', 'stealth', 'iroha3'];
 const mocks = Object.fromEntries(models.map((m) => [m, mockAdapter(m)])) as Record<ModelId, ReturnType<typeof mockAdapter>>;
 const app = buildApp(
   Object.fromEntries(models.map((m) => [m, mocks[m].adapter])) as never,

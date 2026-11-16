@@ -16,7 +16,7 @@ who finds a fact in here wrong reports it rather than building on it.
    - Fonts (Geist, Geist Mono since DESIGN.md v2.1) come from the existing Google Fonts `<link>` in `web/index.html`; not an npm dependency.
 2. **Live only.** Every adapter path runs against what is already deployed on the ACK cluster:
    - `KUBECONFIG` is `alibaba.yaml` at the repo root. Never print or commit it.
-   - Besu/Paladin, ns `fabricx` (rdbi-*, ns `rd_dfabi_v2`), and ns `iroha3`.
+   - Besu/Paladin, the Fabric-X token v2 namespaces `fabricx-<party>`, and ns `iroha3`.
    - No local replica and no redeploy. `mock-main.ts` stays test-only.
    - Before building each adapter, run `kubectl get pods,svc -n <ns>` and confirm ids, addresses
      and tokens against the live chain. Report every difference from code or docs to lead.
@@ -50,7 +50,7 @@ export interface HistoryItem {
   rdAmount: string | null;       // dvp only: RD leg as this party reads it
   counterparty: Counterparty | null;
 }
-export type NodeKind = 'besu-validator' | 'paladin' | 'fsc-node' | 'fabricx-committer' | 'fabricx-orderer' | 'iroha-peer';
+export type NodeKind = 'besu-validator' | 'paladin' | 'fsc-node' | 'iroha-peer';
 export interface NetworkNode { id: string; label: string; kind: NodeKind; owner: PartyId | null; status: 'up' | 'down' | 'unknown'; detail: string }
 export interface Network { nodes: NetworkNode[]; links: { from: string; to: string }[] }
 export const HISTORY_MAX = 100;
@@ -88,14 +88,13 @@ and `Receipt { source; chain: ReceiptPart[]; node: { source; parts; note } | nul
 - **`chain`** = the public receipt, the same answer on every node: Zeto/Noto/Stealth `eth_getTransactionReceipt` +
   `eth_getBlockByNumber` on the Besu RPC tunnel (validator 1), event logs (first 12) named and decoded with the event fragments
   vendored in `adapters/event-abi.ts` (49 events of the Zeto, Noto/Pente, Atom and Stealth contracts; an unknown topic0 stays raw;
-  `Interface` comes through `besu/stealth-address/ts/chain.ts`, the server's one ethers entry); Fabric-X `tx_status` and the
-  ledger keys in `committer-db-0` (`readLedger(tx, 0)`); Iroha 3 `ledger transaction get` + `transaction status` on the party's own
+  `Interface` comes through `besu/stealth-address/ts/chain.ts`, the server's one ethers entry); Iroha 3 `ledger transaction get` + `transaction status` on the party's own
   Torii as `op-<party>`.
 - **`node`** = what the party's OWN node holds beyond that (R1). Only Zeto and Noto (Paladin): `ptx_queryTransactionReceipts`
   (eq `transactionHash`) then `ptx_getTransactionReceiptFull` per id, on the party's port only. Shown: id, status, domain, contract,
   block, state counts, the domain's own `transfers`/`sender` summary, the public submission (from, nonce). **Never** a state body
   (owner, amount, salt). A node that was never party to the tx answers `PD011658` and has no states: `note` says "Tidak ada data
-  privat di node {pihak}". Stealth, Fabric-X and Iroha 3 return `node: null`.
+  privat di node {pihak}". Stealth and Iroha 3 return `node: null`.
 - Live check 2026-11-04 (6 txs, 4 nodes): base receipt on all four nodes; private part only on the parties (Zeto: sender and
   receiver; Noto: + BI as notary); a DvP maps to 2-3 Paladin receipts. Every log of those txs decoded (0 unknown).
 - Iroha 3: the receipt runs in the party's lane (a CLI query must not overlap an account-list read on one Torii). Concurrent
@@ -116,7 +115,7 @@ at; spans; events; req; resp; node }`, `TraceSpan { component; label; start; end
   matching salt/private/secret/spendKey/viewKey/identityKey/signature and cuts hex over 64 bytes.
 - **R1**: a party sees Paladin timings and requests only for steps its own node submitted (live 2026-11-04: Zeto seller sees its lock
   0.18 s Paladin + 1.83 s Besu, the outsider block times only).
-- **Limits, stated in `note`**: Fabric-X ledger keeps no time (1 step); Iroha 3 keeps only the signing time (the account row repeats it
+- **Limits, stated in `note`**: Iroha 3 keeps only the signing time (the account row repeats it
   and the status height is not the tx's block on this lane), and the buyer's `CanExecuteSettlement` grant is not linked yet.
 
 ## 2. Server
@@ -139,7 +138,7 @@ No other new server files.
 ```ts
 // domain.ts additions
 export interface Counterparty { from: PartyId | null; to: PartyId | null } // moved; adapter.ts re-exports it
-export type PlatformId = 'besu' | 'fabricx' | 'iroha3';
+export type PlatformId = 'besu' | 'fabricx-adapter' | 'iroha3';
 export const PLATFORMS: Record<PlatformId, { name: string; models: ModelId[] }>;
 export const PLATFORM_OF: Record<ModelId, PlatformId>;
 // Role of `party` in a tx it observed, from what its own read shows:
@@ -168,7 +167,7 @@ export function roleFromParties(party: PartyId, cp: Counterparty | null, issuer:
   `{ reason: \`Riwayat ${MODEL_NAMES[m]} untuk ${PARTIES[p].name} tidak dapat dibaca: ${msg(e)}\` }`.
   The network route uses the same body with `Status jaringan`.
 - **Balance** uses `Promise.allSettled`. A rejected asset becomes `{ error }`, so one asset never
-  hides the other. Example: Fabric-X BI returns "BI tidak memegang saldo transfer".
+  hides the other.
 - **501 vs 502** (UX-REVIEW H5). `adapter.ts` exports `class NotAvailableError extends Error`.
   An adapter throws it when a platform has no source for the read (and the step 0 stubs throw
   it). The route maps it to 501 `{ reason: e.message }`. Any other throw stays 502. The UI shows
@@ -180,7 +179,7 @@ export function roleFromParties(party: PartyId, cp: Counterparty | null, issuer:
   sedang berjalan…") as a loading state, not an error, and retries once after `Retry-After`. Any
   later failure is the normal 502.
 - **`x-history-pending: <id,id,…>`** header (v1.3, 2026-11-02). An adapter that holds back a
-  fresh unreadable tx (the R1 race rule: Fabric-X and Noto) lists those tx ids on the result as
+  fresh unreadable tx (the R1 race rule: Noto) lists those tx ids on the result as
   `pending: string[]`, next to `truncated`. The route turns them into this header. Lensa never
   claims "Tidak terlihat oleh pihak ini" for a pending id; it shows "Belum terindeks di node
   pihak ini" and rechecks once after 10 s. Riwayat ignores the header. Reason: the live T7 run
@@ -251,30 +250,8 @@ retired. The live demo txs (blocks 121, 127) proved that `/v1/explorer/*` serves
 - **Network.** 4 `iroha-peer` nodes. Status: `GET /health` with `Accept: text/plain`.
   `detail` = `blok {n}` from `/status`. Full mesh.
 
-**Fabric-X** (`fabricx.ts`). The driver command `api history` was approved by the user and reviewed by lead
-- **Fact** (blockhain): `rdbi-driver api` has no listing command. The library has a per-node
-  `acceptedTransactionHistory` view (filters SenderWallet, RecipientWallet, From, To,
-  ActionTypes, Statuses, IDs) that the driver does not expose; it passes only IDs and drops the
-  timestamp.
-- **Proposal** (escalated to orchetrator, pending approval): one new read-only driver command,
-  `rdbi-driver api history <node> <limit>`. It returns JSON
-  `{ records: [{ txId, type, sender, recipient, token, amount, timestamp }] }` from that node's
-  own `acceptedTransactionHistory`. A bank calls it on its own node, and BI on `issuer`
-  (audit view).
-  - Rejected alternatives: parsing `audited` (human text, BI only), and looping `records` over
-    tx ids collected elsewhere (a global list).
-- **Sealed items** for a non-party bank come from the tx ids and blocks in **its own**
-  committer DB: container `db` in deploy `rdbi-bankN`, database `committer`. blockhain confirms
-  the table and column names first; they differ from `sc_db` on committer-db-0.
-- **`at`** = the record `timestamp` (node submission time, labelled as such in a code comment).
-  Sealed items have `at: null`.
-- **Network** (built). One `kubectl get pods -o json -n fabricx` gives 9 nodes: `fsc-node`
-  rdbi-bi/bank2/3/4; one shared `fabricx-committer` (6 pods); `fabricx-orderer` orderer-1..4. Each
-  orderer groups the assembler, batcher, consenter and router pods of org N, and is up only
-  when all 4 are Ready. `fca-orderer-*` are Fabric CAs, not orderers, so they are not listed,
-  and neither are the block explorer and rdbi-driver.
-  Owner: rdbi-bi = BI, rdbi-bank2/3/4 = A/B/C, shared stack = null. Status = Ready. A
-  container-level view is not needed in v1.
+**Fabric-X** (old model, `fabricx.ts`): removed from Lensa on 2026-11-17 (its live network no longer answered). The Fabric-X
+token v2 model is `fabricx-adapter.ts`. The old adapter, its driver/`kubectl exec` reads and its fx-gw-N gateway path are in git history.
 
 **Noto** (`noto.ts`) and **Zeto** (`zeto.ts`), on Paladin
 - **Source.** `ptx_queryTransactionReceipts` on the party's own node, with
@@ -320,7 +297,7 @@ retired. The live demo txs (blocks 121, 127) proved that `/v1/explorer/*` serves
 - With `paladin`, add 4 `paladin` nodes. Status from `rpcUp(transport_nodeName)` on
   31548/31648/31748/31848. Link paladin N to validator N, and full mesh between validators.
 
-**Test injection (§6.5).** Iroha/Paladin/Besu: a bad URL or port. Fabric-X: a bad namespace or deployment name in the test's adapter instance.
+**Test injection (§6.5).** Iroha/Paladin/Besu: a bad URL or port.
 
 ## 3. Web
 
@@ -350,7 +327,7 @@ No other folders, no component library, no CSS-in-JS.
 type Screen = 'dasbor' | 'riwayat' | 'transfer' | 'dvp' | 'lensa' | 'kebijakan' | 'laporan' | 'tps';
 type Route = { page: 'landing' } | { page: 'model'; model: ModelId; screen: Screen; party: PartyId; tx?: string };
 ```
-- **URLs.** `/` · `/besu/:model/:screen` · `/fabricx/:screen` · `/iroha3/:screen` · `…/lensa/:tx`,
+- **URLs.** `/` · `/besu/:model/:screen` · `/fabricx-adapter/:screen` · `/iroha3/:screen` · `…/lensa/:tx`,
   plus `?pihak=BI|A|B|C`. `/besu` without a model goes to `PLATFORMS.besu.models[0]`, because
   `parse` stays pure. An unavailable model shows the 503 state. A missing screen becomes `dasbor`
   via `replaceState`. `/iroha3/laporan` parses, but the UI hides it.
@@ -540,7 +517,7 @@ award: { asset: 'DFABI', issuer: true, dvp: true },
 - **DFABI issue is BI -> BI (user decision 2026-11-15).** On zeto, noto, stealth and iroha3 `dfabi-issue` is
   only `from: BI, to: BI` (`DFABI_TO_BI_MODELS` in `domain.ts`): DFABI is issued into BI's own inventory, and a bank
   gets it only through the award. `validateRequest` accepts that one shape and rejects `dfabi-issue` BI -> bank on
-  these models; Fabric-X and Fabric-X token v2 keep their own rules. Per model: zeto mints to BI's own node
+  these models; Fabric-X token v2 keeps its own rules. Per model: zeto mints to BI's own node
   (no report, BI ingests its own outputs); stealth sends `bond-issue` to BI's own meta-address (the gateway rule
   already allows only that); noto runs besu's `reissueBond` (close the round, mint unsold + amount to the custodian, open it again; not
   resumable, 20-40 s) and iroha3 needs a tested BI -> BI APS pay, so iroha3 shows `dfabi-issue` disabled with a reason until then. The award keeps its own
@@ -582,7 +559,7 @@ sudah diperbaiki" (dropped once node1 passes).
 Lensa edits the off-chain rules the bank gateways enforce (`besu/opa/`, spec
 `besu/opa/docs/superpowers/specs/2026-11-05-halaman-kebijakan-design.md`, plan next to it). Two owners of documents:
 BI (`bi`, applies to all four gateways) and each bank (`bank-a`, `bank-b`, `bank-c`, applies to its own node's gateway).
-A change is drafted by one person and approved by a different one, then published. Every registered platform (`policy/platforms.ts`: `zeto`, `noto`, `fabricx`, `iroha3`) has its own document per owner
+A change is drafted by one person and approved by a different one, then published. Every registered platform (`policy/platforms.ts`: `zeto`, `noto`, `fabricx`, `iroha3`, `stealth`, `fabricx-adapter`) has its own document per owner. `fabricx` (the removed old Fabric-X model) stays only because the besu bundles and their revision strings carry it: with no `ModelId` it is not in `/api/meta` `models` and never shows on the Kebijakan screen
 (`policy.<platform>`), with independent versions, maker-checker and history; the screen at `/<platform>/[<model>/]kebijakan` edits the documents of the platform in the URL.
 The registry is the only list of platforms: a new one is an entry there plus its rego packages (`besu/opa/README.md`, "Adding a platform"), with no change to the shared layer.
 
@@ -664,8 +641,8 @@ calls `republish`. At startup `recoverInterrupted()` turns a `publishing` left b
 ### 8.4 Web
 
 `screens/Policy.tsx` plus `web/src/policy/` (`PolicyView`, `DraftForm`, `Approval`, `VersionHistory`, `form.ts`, `keep.ts`,
-`shared.tsx`). Routes `/besu/zeto/kebijakan`, `/besu/noto/kebijakan`, `/fabricx/kebijakan`, `/iroha3/kebijakan` (the platform in the URL picks the documents; every call carries `model`); `Screen` gains `kebijakan` (`route.ts`), in the sidebar "Alat" group
-(`Sidebar.tsx`). `reasonOf` reads `/api/meta` `models[m].policy = { registered, enforced, reason? }` (from the registry) and disables it only for an unregistered model with the server's reason (`Kebijakan belum tersedia untuk Stealth`). A registered platform that is not enforced (Fabric-X, Iroha 3) opens, with the hint `Belum ditegakkan gateway: dokumen dapat disusun, tetapi belum memengaruhi transaksi`; a 501 from the usage route shows `Pemakaian harian belum tersedia untuk platform ini`. `usePoll` keys: `${party}|${platform}|kebijakan`,
+`shared.tsx`). Routes `/besu/zeto/kebijakan`, `/besu/noto/kebijakan`, `/fabricx-adapter/kebijakan`, `/iroha3/kebijakan` (the platform in the URL picks the documents; every call carries `model`); `Screen` gains `kebijakan` (`route.ts`), in the sidebar "Alat" group
+(`Sidebar.tsx`). `reasonOf` reads `/api/meta` `models[m].policy = { registered, enforced, reason? }` (from the registry) and disables it only for an unregistered model with the server's reason (`Kebijakan belum tersedia untuk Stealth`). A registered platform that is not enforced (Iroha 3) opens, with the hint `Belum ditegakkan gateway: dokumen dapat disusun, tetapi belum memengaruhi transaksi`; a 501 from the usage route shows `Pemakaian harian belum tersedia untuk platform ini`. `usePoll` keys: `${party}|${platform}|kebijakan`,
 `${party}|${platform}|kebijakan-pemakaian` (usage of that platform, `/api/policy/usage?pihak=&model=`), `${owner}|${platform}|${party}|riwayat-kebijakan|${n}`. Version badges, gateway counts, drafts and history are all per platform. `keepLast` keeps the last data when a reload
 fails. A 501 from `/api/policy` shows `NotAvailable` with the server's reason. The name in "Masuk sebagai" is kept per
 browser in `localStorage` (`lensa.policy.by`, access guarded). Publishing to the live cluster has not been done; it needs the

@@ -20,7 +20,7 @@ afterEach(async () => { await app?.close(); app = undefined; });
 
 const make = (adapters: Partial<Record<ModelId, ModelAdapter>> = { zeto: fakeAdapter('zeto') }, opts: { webDist?: string } = {}) =>
   (app = buildApp(adapters, { probe, ...opts }));
-const all = () => ({ zeto: fakeAdapter('zeto'), noto: fakeAdapter('noto'), stealth: fakeAdapter('stealth'), fabricx: fakeAdapter('fabricx'), iroha3: fakeAdapter('iroha3') });
+const all = () => ({ zeto: fakeAdapter('zeto'), noto: fakeAdapter('noto'), stealth: fakeAdapter('stealth'), iroha3: fakeAdapter('iroha3') });
 const post = (a: FastifyInstance, url: string, payload: unknown) => a.inject({ method: 'POST', url, payload: payload as object });
 const listen = async (a: FastifyInstance) => a.listen({ port: 0, host: '127.0.0.1' });
 
@@ -59,7 +59,7 @@ test('meta lists 4 models with step labels', async () => {
   const res = await make(all()).inject('/api/meta');
   expect(res.statusCode).toBe(200);
   const body = res.json();
-  expect(Object.keys(body.models).sort()).toEqual(['fabricx', 'fabricx-adapter', 'iroha3', 'noto', 'stealth', 'zeto']);
+  expect(Object.keys(body.models).sort()).toEqual(['fabricx-adapter', 'iroha3', 'noto', 'stealth', 'zeto']);
   expect(body.models.zeto).toMatchObject({ name: 'Zeto', available: true, stepLabels: ['Siapkan', 'Kirim', 'Konfirmasi', 'Selesai'] });
   expect(body.models.zeto.capabilities['dvp']).toEqual({ enabled: true });
   expect(body.parties.A.name).toBe('Bank Mandala');
@@ -438,12 +438,12 @@ test('preflight-capacity returns ready capacity per available model', async () =
 
 test('preflight-capacity asks each adapter for ?users users per bank, capped by its own limit', async () => {
   const seen: Record<string, number> = {};
-  const z = fakeAdapter('zeto'), f = fakeAdapter('fabricx', { maxUsers: 1 });
+  const z = fakeAdapter('zeto'), f = fakeAdapter('fabricx-adapter', { maxUsers: 1 });
   z.loadCapacity = async (u) => { seen.zeto = u; return 3; };
-  f.loadCapacity = async (u) => { seen.fabricx = u; return 4; };
-  const app = make({ zeto: z, fabricx: f });
-  expect((await app.inject('/api/preflight-capacity?users=8')).json()).toEqual({ zeto: 3, fabricx: 4 });
-  expect(seen).toEqual({ zeto: 8, fabricx: 1 });
+  f.loadCapacity = async (u) => { seen['fabricx-adapter'] = u; return 4; };
+  const app = make({ zeto: z, 'fabricx-adapter': f });
+  expect((await app.inject('/api/preflight-capacity?users=8')).json()).toEqual({ zeto: 3, 'fabricx-adapter': 4 });
+  expect(seen).toEqual({ zeto: 8, 'fabricx-adapter': 1 });
   expect((await app.inject('/api/preflight-capacity?users=3')).statusCode).toBe(400);
 });
 
@@ -629,9 +629,9 @@ test('balance returns both assets as strings', async () => {
 });
 
 test('balance: one failing asset does not hide the other', async () => {
-  const a = fakeAdapter('fabricx');
+  const a = fakeAdapter('fabricx-adapter');
   a.balanceOf = async (_p, asset) => { if (asset === 'RD') throw new Error('BI tidak memegang saldo transfer'); return 7n; };
-  const res = await make({ fabricx: a }).inject('/api/balance?model=fabricx&party=BI');
+  const res = await make({ 'fabricx-adapter': a }).inject('/api/balance?model=fabricx-adapter&party=BI');
   expect(res.statusCode).toBe(200);
   expect(res.json()).toEqual({ RD: { error: 'BI tidak memegang saldo transfer' }, DFABI: { amount: '7' } });
 });
@@ -682,7 +682,7 @@ test('deep links get index.html; /api and missing assets keep 404', async () => 
 
 // ---- no server internals in error bodies (ARCHITECTURE.md §2.2, user requirement) ----
 
-const KUBE = 'Command failed: kubectl --kubeconfig /home/x/alibaba.yaml -n fabricx exec deploy/rdbi-driver -- api history\nerror: forbidden';
+const KUBE = 'Command failed: kubectl --kubeconfig /home/x/alibaba.yaml -n rd-zeto exec deploy/rdbi-driver -- api history\nerror: forbidden';
 const ENOENT = "ENOENT: no such file or directory, open '/home/x/state/zeto.json'";
 const leaks = (text: string) => ['/home', 'alibaba.yaml', '--kubeconfig', 'Command failed'].filter((s) => text.includes(s));
 
@@ -696,26 +696,26 @@ test('safeReason drops the command line, kubeconfig and absolute paths but keeps
 });
 
 test.each([['kubectl', KUBE], ['missing file', ENOENT]])('history, network and balance bodies never leak a %s error', async (_n, m) => {
-  const a = fakeAdapter('fabricx');
+  const a = fakeAdapter('fabricx-adapter');
   a.history = async () => { throw new Error(m); };
   a.network = async () => { throw new Error(m); };
   a.balanceOf = async () => { throw new Error(m); };
-  const app = make({ fabricx: a });
-  for (const url of ['/api/history?model=fabricx&party=A', '/api/network?model=fabricx', '/api/balance?model=fabricx&party=A']) {
+  const app = make({ 'fabricx-adapter': a });
+  for (const url of ['/api/history?model=fabricx-adapter&party=A', '/api/network?model=fabricx-adapter', '/api/balance?model=fabricx-adapter&party=A']) {
     const res = await app.inject(url);
     expect(leaks(res.body), url).toEqual([]);
     expect(res.body, url).toMatch(/tidak dapat dibaca|Perintah ke node gagal|berkas server/);
   }
-  expect((await app.inject('/api/history?model=fabricx&party=A')).json().reason).toMatch(/^Riwayat Fabric-X untuk Bank Mandala tidak dapat dibaca: /);
+  expect((await app.inject('/api/history?model=fabricx-adapter&party=A')).json().reason).toMatch(/^Riwayat Fabric-X \(token v2\) untuk Bank Mandala tidak dapat dibaca: /);
 });
 
 test('health and network detail are scrubbed too', async () => {
-  const a = fakeAdapter('fabricx');
+  const a = fakeAdapter('fabricx-adapter');
   a.health = async () => ({ ready: false, detail: ENOENT });
   a.network = async () => ({ nodes: [{ id: 'n', label: 'Node', kind: 'fsc-node', owner: 'A', status: 'down', detail: KUBE }], links: [] });
-  const app = make({ fabricx: a });
+  const app = make({ 'fabricx-adapter': a });
   expect(leaks((await app.inject('/api/health')).body)).toEqual([]);
-  const net = await app.inject('/api/network?model=fabricx');
+  const net = await app.inject('/api/network?model=fabricx-adapter');
   expect(leaks(net.body)).toEqual([]);
   expect(net.json().nodes[0].detail).toBe('Perintah ke node gagal');
 });

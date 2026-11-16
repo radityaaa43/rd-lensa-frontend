@@ -6,7 +6,7 @@
   --focus:#1E5FD8; --focus-on-ink:#9CC3FF;
   --blue:#3B7DD8; --blue-tint:#EDF3FC; --blue-ink:#1B4E94; --green-line:#34B36A;
   --tint-blue:#E5EFFB; --tint-green:#E6F5E9; --tint-peach:#FCEBDD;
-  --tint-besu:var(--tint-green); --tint-fabricx:var(--tint-blue); --tint-iroha:var(--tint-peach); --glass:rgb(255 255 255 / .6);
+  --tint-besu:var(--tint-green); --tint-iroha:var(--tint-peach); --glass:rgb(255 255 255 / .6);
   --clear:#0C7440; --clear-bg:#E2F4E8; --partial:#8A5200; --partial-bg:#FCEFD9;
   --seal:#0E0F11; --seal-bg:#E8EBF0; --danger:#A3202F; --danger-bg:#FBE7E9; --up:#17803F; --down:#C0303F;
   --sans:'Geist',system-ui,sans-serif; --display:var(--sans); --mono:'Geist Mono',ui-monospace,monospace;
@@ -109,7 +109,7 @@ h1,h2{font-family:var(--sans);text-wrap:balance}
 .tiles{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
 .tile{height:100%;border:1px solid transparent;border-radius:var(--r-card);padding:24px;display:flex;flex-direction:column;gap:16px;color:var(--ink);text-decoration:none}
 .tile:hover{border-color:var(--control)}
-.tile.besu{background:var(--tint-besu)} .tile.fabricx{background:var(--tint-fabricx)} .tile.iroha3{background:var(--tint-iroha)}
+.tile.besu{background:var(--tint-besu)} .tile.iroha3{background:var(--tint-iroha)}
 .mark{width:44px;height:44px;border-radius:50%;background:var(--ink);color:var(--sheet);display:grid;place-items:center;font:600 17px var(--sans)}
 .tile h2{margin:0;font:600 17px/24px var(--sans)}
 .tile p{margin:0;color:var(--muted);font-size:14px}
@@ -397,7 +397,6 @@ table.hist .amt{font-weight:600;white-space:nowrap}
 .sealedrow{text-align:left}
 .seal.row summary{width:auto;max-width:100%;height:auto;min-height:28px;padding:4px 12px}
 .badge .ico{width:13px;height:13px;margin-right:5px}
-.pending{display:block;margin-top:4px;font-size:12px;font-weight:600;color:var(--partial)}
 
 /* network graph (§7.7) */
 .netgraph svg{width:100%;max-width:780px;height:auto;display:block;margin:0 auto;font-family:var(--sans);overflow:visible}

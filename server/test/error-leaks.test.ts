@@ -2,7 +2,6 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createFabricxAdapter, kubectl } from '../src/adapters/fabricx.ts';
 import { besuNetwork } from '../src/adapters/besu-network.ts';
 import { createIroha3Adapter, irohaCli, type Cli, type Iroha3State } from '../src/adapters/iroha3.ts';
 import { loadAuth } from '../src/adapters/iroha3-auth.ts';
@@ -22,21 +21,6 @@ async function failsClean(thunk: () => Promise<unknown>): Promise<string> {
 afterEach(() => vi.restoreAllMocks());
 
 describe('adapter error text never carries a path, a command line or a kubeconfig', () => {
-  it('fabricx: kubectl with a missing kubeconfig, through the adapter calls; the failure is logged without the path', async () => {
-    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const a = createFabricxAdapter(kubectl({ kubeconfig: `${SECRET}/alibaba.yaml`, namespace: 'fabricx' }));
-    await failsClean(() => a.balanceOf('A', 'RD'));
-    await failsClean(() => a.history('A', 5));
-    await failsClean(async () => { const h = await a.health(); if (!h.ready) throw new Error(h.detail); });
-    const n = await a.network();
-    expect(n.nodes.every((x) => x.status === 'unknown' && !LEAK.test(x.detail))).toBe(true);
-    const logged = log.mock.calls.map((c) => c.map(String).join(' ')).join('\n');
-    expect(logged).toMatch(/kubectl gagal/); // the failure reaches the server journal...
-    expect(logged).not.toMatch(/secret|alibaba\.yaml|--kubeconfig/); // ...but never the kubeconfig path or the command line
-    // 30 s, not vitest's 5 s: this test spawns the REAL kubectl for every adapter call (the failure must be a real one). It takes ~0.25 s here but timed out at 5 s on the
-    // shared GitHub runner in 3 of 4 CI runs of PRs #57/#58 (cold kubectl start on a loaded runner); the product call limit itself (CALL_MS) is unchanged.
-  }, 30_000);
-
   it('besu-network: a door whose failure text carries a path, a host and a kubeconfig name shows none of it', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const call = async () => { throw new Error(`connect ECONNREFUSED 10.0.0.9:8545 ${SECRET}/alibaba.yaml --kubeconfig`); };

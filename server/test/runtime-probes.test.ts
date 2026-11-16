@@ -23,14 +23,14 @@ describe('bindHost', () => {
 
 describe('/api/livez and /api/readyz', () => {
   it('livez answers 200 even when no model loaded', async () => {
-    app = buildApp({}, { loadFailures: { zeto: 'x', noto: 'x', stealth: 'x', fabricx: 'x', iroha3: 'x' } });
+    app = buildApp({}, { loadFailures: { zeto: 'x', noto: 'x', stealth: 'x', iroha3: 'x' } });
     const r = await app.inject({ url: '/api/livez' });
     expect(r.statusCode).toBe(200);
     expect(r.json()).toEqual({ ok: true });
   });
 
   it('readyz is 503 when every model failed to load, and names the failures', async () => {
-    app = buildApp({}, { loadFailures: { zeto: 'boom', noto: 'x', stealth: 'x', fabricx: 'x', iroha3: 'x' } });
+    app = buildApp({}, { loadFailures: { zeto: 'boom', noto: 'x', stealth: 'x', iroha3: 'x' } });
     const r = await app.inject({ url: '/api/readyz' });
     expect(r.statusCode).toBe(503);
     expect(r.json().failures.zeto).toBe('boom');

@@ -58,8 +58,7 @@ frules = gwf["egress"]
 def find_ns(n): return [r for r in rules if r.get("to", [{}])[0].get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name") == n]
 zbi = find_ns("rd-zeto-bi")
 check(len(zbi) == 1 and zbi[0]["to"][0]["podSelector"] == {"matchLabels": {"app": "bank-gw"}} and [p["port"] for p in zbi[0]["ports"]] == [8548, 8545] and all(p["protocol"] == "TCP" for p in zbi[0]["ports"]), f"gateway rule rd-zeto-bi: {zbi}")
-check(len(find_ns("rd-fabricx-bank-b")) == 0, "the PUBLIC pod has no rule to a Fabric-X gateway")
-check([r["to"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"] for r in frules if "namespaceSelector" in r["to"][0]] == ["rd-fabricx-bank-b", "rd-iroha3-bi"], f"the FLOW pod has exactly the Fabric-X and Iroha 3 gateway rules of the fixture: {frules}")
+check([r["to"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"] for r in frules if "namespaceSelector" in r["to"][0]] == ["rd-iroha3-bi"], f"the FLOW pod has exactly the Iroha 3 gateway rule of the fixture: {frules}")
 irb = find_ns("rd-iroha3-bi")
 check(len(irb) == 1 and irb[0]["to"][0]["podSelector"] == {"matchLabels": {"rd-iroha3/role": "gateway"}} and irb[0]["ports"] == [{"protocol": "TCP", "port": 8443}], f"the PUBLIC pod reaches the Iroha 3 gateway rd-iroha3-bi on 8443 only: {irb}")
 ipb = [r for r in rules if "ipBlock" in r.get("to", [{}])[0]]
@@ -69,7 +68,7 @@ check(len(fxa1) == 1 and fxa1[0]["to"][0]["podSelector"] == {"matchLabels": {"ap
 check(len(rules) == 7, f"egress-gateways-public: 7 rules (2 zeto namespaces + the zeto ipBlock + 1 iroha3 namespace + the iroha3 ipBlock + 1 token v2 namespace + the token v2 ipBlock), got {len(rules)}")
 check(not any(r.get("to") is None for r in rules), "every egress rule names a destination (no allow-all)")
 # bad gateways.conf is refused
-for bad in ["rd-zeto-bi app=x", "rd-zeto-bi app=x notaport", "ipblock 0.0.0.0/0 443 zeto", "ipblock 10.0.0.1 443 zeto", "kube-system app=x 53", "ipblock 10.0.0.1/32 443", "ipblock 10.0.0.1/32 443 other"]:
+for bad in ["rd-zeto-bi app=x", "rd-zeto-bi app=x notaport", "ipblock 0.0.0.0/0 443 zeto", "ipblock 10.0.0.1 443 zeto", "kube-system app=x 53", "ipblock 10.0.0.1/32 443", "ipblock 10.0.0.1/32 443 other", "rd-fabricx-bi app=fx-gw 8443", "ipblock 10.0.0.1/32 8443 fabricx"]:  # the old Fabric-X model is gone
     p = os.path.join(fx, "_bad.conf"); open(p, "w").write(bad + "\n")
     check(run(["base"], {"LENSA_GATEWAYS": p}).returncode != 0, f"gateways.conf line accepted but must be refused: {bad!r}")
 os.remove(os.path.join(fx, "_bad.conf"))
@@ -116,19 +115,14 @@ zeto = [r for r in srules if r["to"][0].get("namespaceSelector", {}).get("matchL
 check(sorted(r["to"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"] for r in zeto) == ["rd-zeto-bank-a", "rd-zeto-bank-b", "rd-zeto-bi"], f"shipped gateways.conf: zeto party namespaces {len(zeto)}")
 check(all(r["to"][0]["podSelector"] == {"matchLabels": {"app": "bank-gw"}} and [p["port"] for p in r["ports"]] == [8548, 8545] for r in zeto), "shipped gateways.conf: zeto gateway pods app=bank-gw on 8548 (Paladin) and 8545 (Besu)")
 check(not any("ipBlock" in r["to"][0] for r in srules), "shipped gateways.conf: no bank C ipBlock (a public address is supplied at apply time through LENSA_GATEWAYS, never committed)")
-fxgw = {r["to"][0]["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"]: r for r in frules_ship if r["to"][0].get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name", "").startswith("rd-fabricx-")}
-check(sorted(fxgw) == ["rd-fabricx-bank-a", "rd-fabricx-bank-b", "rd-fabricx-bi"], f"shipped gateways.conf: fabricx party namespaces {sorted(fxgw)}")
-for n, g in (("rd-fabricx-bi", "fx-gw-1"), ("rd-fabricx-bank-a", "fx-gw-2"), ("rd-fabricx-bank-b", "fx-gw-3")):
-    r = fxgw.get(n)
-    check(bool(r) and r["to"][0]["podSelector"] == {"matchLabels": {"app.kubernetes.io/name": g}} and r["ports"] == [{"protocol": "TCP", "port": 8443}], f"shipped gateways.conf: {n} gateway pod app.kubernetes.io/name={g} on 8443 only")
 def ns_of(r): return r["to"][0].get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name", "")
-# UNION EQUALITY: the public pod reaches the Zeto/Noto gateways, the Iroha 3 gateways (keyless driverAps, mTLS) and (S17, user-approved 2026-11-13) the Stealth signer doors; the flow pod the Fabric-X, Iroha 3 and Stealth gateways; no Iroha 3 or Fabric-X door in the public policy
+# UNION EQUALITY: the public pod reaches the Zeto/Noto gateways, the Iroha 3 gateways (keyless driverAps, mTLS) and (S17, user-approved 2026-11-13) the Stealth signer doors; the flow pod the Iroha 3 and Stealth gateways; no pod reaches the old Fabric-X gateways (rd-fabricx-*)
 check({ns_of(r) for r in srules} == {f"rd-{p}-{o}" for p in ("zeto", "iroha3", "stealth") for o in ("bi", "bank-a", "bank-b")} | {f"fabricx-{o}" for o in ("bi", "bank-a", "bank-b")}, f"public policy destinations {sorted(ns_of(r) for r in srules)}")
 fxa = {ns_of(r): r for r in srules if ns_of(r).startswith("fabricx-")}
 check(len(fxa) == 3 and all(r["to"][0]["podSelector"] == {"matchLabels": {"app.kubernetes.io/name": f"fxa-gw-{n}"}} and r["ports"] == [{"protocol": "TCP", "port": 8443}] for (o, n) in (("bi", 1), ("bank-a", 2), ("bank-b", 3)) for r in [fxa.get(f"fabricx-{o}", {"to": [{}], "ports": []})]), "public pod reaches the Fabric-X token v2 gateways fxa-gw-1..3 (namespaces fabricx-<party>, no rd- prefix) on 8443 only")
 check(not any(ns_of(r).startswith("fabricx-") for r in frules_ship), "the flow pod reaches no token v2 gateway")
-check({ns_of(r) for r in frules_ship} == {f"rd-{p}-{o}" for p in ("fabricx", "iroha3", "stealth") for o in ("bi", "bank-a", "bank-b")}, f"flow policy destinations {sorted(ns_of(r) for r in frules_ship)}")
-check(not any(ns_of(r).startswith("rd-fabricx-") for r in srules), "the public pod reaches no Fabric-X gateway")
+check({ns_of(r) for r in frules_ship} == {f"rd-{p}-{o}" for p in ("iroha3", "stealth") for o in ("bi", "bank-a", "bank-b")}, f"flow policy destinations {sorted(ns_of(r) for r in frules_ship)}")
+check(not any(ns_of(r).startswith("rd-fabricx-") for r in srules + frules_ship), "no pod reaches the old Fabric-X gateways (model removed)")
 sir = {ns_of(r): r for r in srules if ns_of(r).startswith("rd-iroha3-")}
 check(len(sir) == 3 and all(r["to"][0]["podSelector"] == {"matchLabels": {"rd-iroha3/role": "gateway"}} and r["ports"] == [{"protocol": "TCP", "port": 8443}] for r in sir.values()), f"public pod: iroha3 gateways rd-iroha3/role=gateway on 8443 only (mTLS, no account key in the pod): {sir}")
 sst = {ns_of(r): r for r in srules if ns_of(r).startswith("rd-stealth-")}
@@ -172,7 +166,7 @@ check(cm.get("LENSA_GW_STEALTH_BI") == "https://10.0.0.1:8550", "configmap takes
 for k in cm:
     if k in ("LENSA_SINK_TOKENS_DIR", "LENSA_FXA_SINK_TOKENS_DIR"): continue  # directory names; the tokens are mounted from Secrets
     check(not re.search(r"KEY|SECRET|TOKEN|PASSWORD|KUBECONFIG", k), f"configmap key looks secret: {k}")
-for bad in ["LENSA_GW_PALADIN_BI=https://user:pw@10.0.0.1:1", "LENSA_GW_STEALTH_A=https://user:pw@10.0.0.1:1", "LENSA_GW_STEALTH_X=https://10.0.0.1:1", "LENSA_GW_IROHA_A=https://user:pw@10.0.0.1:1", "LENSA_GW_IROHA_X=https://10.0.0.1:1", "LENSA_GW_MTLS_DIR_IROHA=/x", "KUBECONFIG=/x", "OPA_KEYS_DIR=/x", "LENSA_IN_CLUSTER=0", "LENSA_SINK_TOKENS_DIR=/x", "OPA_BIN=/tmp/opa", "DEPLOYER_KEY=x", 'LENSA_BESU_RPC=http://a"b']:
+for bad in ["LENSA_GW_PALADIN_BI=https://user:pw@10.0.0.1:1", "LENSA_GW_STEALTH_A=https://user:pw@10.0.0.1:1", "LENSA_GW_STEALTH_X=https://10.0.0.1:1", "LENSA_GW_IROHA_A=https://user:pw@10.0.0.1:1", "LENSA_GW_IROHA_X=https://10.0.0.1:1", "LENSA_GW_MTLS_DIR_IROHA=/x", "KUBECONFIG=/x", "OPA_KEYS_DIR=/x", "LENSA_GW_FABRICX_B=https://10.0.0.3:8443", "LENSA_FABRICX_GW=1", "LENSA_IN_CLUSTER=0", "LENSA_SINK_TOKENS_DIR=/x", "OPA_BIN=/tmp/opa", "DEPLOYER_KEY=x", 'LENSA_BESU_RPC=http://a"b']:
     p = os.path.join(fx, "_bad.env"); open(p, "w").write(bad + "\n")
     check(run(["app"], {"LENSA_ENV_FILE": p, "LENSA_IMAGE": IMAGE}).returncode != 0, f"env file line accepted but must be refused: {bad!r}")
 os.remove(os.path.join(fx, "_bad.env"))
@@ -409,9 +403,9 @@ def matches(url):  # Kubernetes Ingress path semantics: Exact = equal, Prefix = 
     u = url.split("?")[0]
     return any((t == "Exact" and u == p) or (t == "Prefix" and (p == "/" or u == p or u.startswith(p.rstrip("/") + "/"))) for p, t, *_ in paths)
 check(not any(p == "/" and t == "Prefix" for p, t, *_ in paths), "no Prefix / path: that would route everything, hidden routes included")
-for ok in ["/", "/robots.txt", "/assets/index-abc.js", "/besu/zeto/dasbor", "/besu/zeto/dasbor?pihak=A", "/fabricx/riwayat", "/fabricx-adapter/riwayat", "/iroha3/lensa/0xabc", "/api/meta", "/api/health", "/api/history", "/api/network", "/api/receipt", "/api/trace", "/api/balance"]:
+for ok in ["/", "/robots.txt", "/assets/index-abc.js", "/besu/zeto/dasbor", "/besu/zeto/dasbor?pihak=A", "/fabricx-adapter/riwayat", "/iroha3/lensa/0xabc", "/api/meta", "/api/health", "/api/history", "/api/network", "/api/receipt", "/api/trace", "/api/balance"]:
     check(matches(ok), f"public path must be routed: {ok}")
-for hidden in ["/api/policy", "/api/policy/usage", "/api/policy/bi/approve", "/api/stress", "/api/stress/csv", "/api/stress/events", "/api/preflight-capacity", "/api/readyz", "/api/livez", "/api/tx", "/api/tx/abc/events", "/api/login", "/admin", "/.env", "/metrics", "/api"]:
+for hidden in ["/fabricx/riwayat", "/api/policy", "/api/policy/usage", "/api/policy/bi/approve", "/api/stress", "/api/stress/csv", "/api/stress/events", "/api/preflight-capacity", "/api/readyz", "/api/livez", "/api/tx", "/api/tx/abc/events", "/api/login", "/admin", "/.env", "/metrics", "/api"]:
     check(not matches(hidden), f"path must NOT be routed at the entry: {hidden}")
 npi = name(ing, "NetworkPolicy", "allow-ingress-controller")["spec"]
 check(npi["podSelector"] == {"matchLabels": {"app": "lensa", "role": "server"}} and npi["policyTypes"] == ["Ingress"], f"ingress NP selects the lensa server pod only: {npi['podSelector']}")

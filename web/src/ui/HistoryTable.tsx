@@ -41,10 +41,6 @@ export function cells(it: HistoryItem, name: (p: PartyId) => string) {
   };
 }
 
-// Fabric-X: BI holds every tx on its ledger, so a sealed row in BI's view is one no bank has reported yet (BI-offline case)
-export const notReported = (model: ModelId, party: PartyId, it: HistoryItem) => model === 'fabricx' && party === 'BI' && it.verdict === 'sealed';
-export const NOT_REPORTED = 'Belum dilaporkan bank';
-
 const GLYPH: Record<string, string> = {
   sender: 'M7 17 17 7M9 7h8v8', receiver: 'M17 7 7 17M15 17H7V9', issuer: 'M12 5v14M5 12h14',
   dvp: 'M4 8h13l-3-3M20 16H7l3 3', other: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
@@ -91,7 +87,6 @@ export function HistoryTable({ items, meta, route, caption }: { items: HistoryIt
                 {c.allSealed ? (
                   <td colSpan={5} className="sealedrow">
                     <Sealed field="row" model={route.model} viewer={viewer} lensHref={href(lens)} />
-                    {notReported(route.model, route.party, it) && <small className="pending">{NOT_REPORTED}</small>}
                   </td>
                 ) : (
                   <>
@@ -99,7 +94,7 @@ export function HistoryTable({ items, meta, route, caption }: { items: HistoryIt
                     <td data-label="Pihak"><span className="cp">{show(c.from, 'party')}<span aria-label="ke">→</span>{show(c.to, 'party')}</span></td>
                     <td data-label="Nominal" className="right amt">{show(c.amount, 'amount')}{c.fee?.t === 'text' && <small>+ biaya {c.fee.text}</small>}</td>
                     <td data-label="Kaki RD" className="right">{show(c.rd, 'amount')}</td>
-                    <td data-label="Status"><Verdict v={it.verdict} />{notReported(route.model, route.party, it) && <small className="pending">{NOT_REPORTED}</small>}</td>
+                    <td data-label="Status"><Verdict v={it.verdict} /></td>
                   </>
                 )}
                 <td data-label="Waktu"><span className={it.at === null ? 'muted' : ''}>{c.time}</span>{it.block !== null && <small className="mono">blok {it.block}</small>}</td>

@@ -10,7 +10,6 @@ const meta = {
   models: {
     zeto: { policy: policy(true, true) },
     noto: { policy: policy(true, true) },
-    fabricx: { policy: policy(true, false) },
     iroha3: { policy: policy(true, false) },
     stealth: { policy: policy(false, false, 'Kebijakan belum tersedia untuk Stealth') },
   },
@@ -18,7 +17,7 @@ const meta = {
 const r = (model: ModelRoute['model']): ModelRoute => ({ page: 'model', model, screen: 'kebijakan', party: 'BI' });
 
 test('kebijakan is usable on every registered platform, enforced or not', () => {
-  for (const m of ['zeto', 'noto', 'fabricx', 'iroha3'] as const) expect(reasonOf(meta, r(m), 'kebijakan')).toBeUndefined();
+  for (const m of ['zeto', 'noto', 'iroha3'] as const) expect(reasonOf(meta, r(m), 'kebijakan')).toBeUndefined();
 });
 test('kebijakan on a model the server did not register shows the server reason', () => {
   expect(reasonOf(meta, r('stealth'), 'kebijakan')).toBe('Kebijakan belum tersedia untuk Stealth');
@@ -34,6 +33,6 @@ test('tps is in the tools for BI only', () => {
 });
 test('iroha3 and fabricx-adapter still have no laporan', () => {
   expect(toolsFor(r('iroha3'), 'iroha3')).toEqual(['lensa', 'kebijakan', 'tps']);
-  expect(toolsFor(r('fabricx'), 'fabricx-adapter')).not.toContain('laporan');
+  expect(toolsFor(r('fabricx-adapter'), 'fabricx-adapter')).not.toContain('laporan');
   expect(toolsFor(r('zeto'), 'besu')).toContain('laporan');
 });

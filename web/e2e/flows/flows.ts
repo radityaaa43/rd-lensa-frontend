@@ -3,7 +3,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { AMOUNT, biVerdicts, need, parseRefusal, payerNeeds, payerShortfalls, short, topUpAllowed, topUpAmount, type Asset, type Bal } from './bi-delta.ts';
 
-export type Model = 'zeto' | 'noto' | 'stealth' | 'fabricx' | 'iroha3';
+export type Model = 'zeto' | 'noto' | 'stealth' | 'iroha3';
 type P = 'BI' | 'A' | 'B' | 'C';
 type Flow = 'rd-issue' | 'rd-transfer' | 'dfabi-issue' | 'dfabi-transfer' | 'dvp' | 'award';
 type Seen = 'clear' | 'partial' | 'sealed';
@@ -27,7 +27,6 @@ const OUTSIDER: Record<Model, (flow: Flow) => Seen> = {
   zeto: () => 'sealed', // commitments + ZK proof only
   noto: () => 'sealed', // hash of the state only
   stealth: () => 'partial', // one-time address and encrypted memo; the amount stays public
-  fabricx: () => 'sealed', // Pedersen commitments + ZK proof, no record on its node
   iroha3: () => 'sealed', // every flow is an APS bundle in the shared pools: validators hold commitments + STARK proofs
 };
 
@@ -55,7 +54,7 @@ async function topUp(request: APIRequestContext, model: Model, to: P, asset: Ass
   return String(JSON.parse(ok[1]!).txHash);
 }
 
-const route = (m: Model, screen: string, party: P) => `/${m === 'fabricx' || m === 'iroha3' ? m : `besu/${m}`}/${screen}?pihak=${party}`;
+const route = (m: Model, screen: string, party: P) => `/${m === 'iroha3' ? m : `besu/${m}`}/${screen}?pihak=${party}`;
 const digits = (s: string | null) => (s ?? '').replace(/\D/g, '');
 
 export function defineFlows(model: Model) {

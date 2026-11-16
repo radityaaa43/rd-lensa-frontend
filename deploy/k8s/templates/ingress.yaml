@@ -49,7 +49,6 @@ spec:
           - {path: /robots.txt, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}
           - {path: /assets, pathType: Prefix, backend: {service: {name: lensa, port: {number: 8790}}}}
           - {path: /besu, pathType: Prefix, backend: {service: {name: lensa, port: {number: 8790}}}}
-          - {path: /fabricx, pathType: Prefix, backend: {service: {name: lensa, port: {number: 8790}}}}
           - {path: /fabricx-adapter, pathType: Prefix, backend: {service: {name: lensa, port: {number: 8790}}}}
           - {path: /iroha3, pathType: Prefix, backend: {service: {name: lensa, port: {number: 8790}}}}
           - {path: /api/meta, pathType: Exact, backend: {service: {name: lensa, port: {number: 8790}}}}

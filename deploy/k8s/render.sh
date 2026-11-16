@@ -56,7 +56,7 @@ EOF
     [[ -n "${b:-}" && -n "${c:-}" ]] || die "gateways.conf line needs three fields: '$a $b $c'"
     if [[ "$a" == ipblock ]]; then
       [[ "$b" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/32$ && "$b" != 0.0.0.0/32 ]] || die "ipblock must be one /32 address: '$b'"
-      [[ "${plat:-}" =~ ^(zeto|fabricx|fabricx-adapter|iroha3|stealth)$ ]] || die "ipblock '$b' needs its platform as the 4th field (zeto|fabricx|fabricx-adapter|iroha3|stealth)"
+      [[ "${plat:-}" =~ ^(zeto|fabricx-adapter|iroha3|stealth)$ ]] || die "ipblock '$b' needs its platform as the 4th field (zeto|fabricx-adapter|iroha3|stealth)"
       [[ "$plat" =~ ^($want)$ ]] || { port_list "$c" >/dev/null; continue; }
       rules+="    - to:
         - ipBlock: {cidr: $b}
@@ -64,7 +64,7 @@ EOF
 $(port_list "$c")
 "
     else
-      [[ "$a" =~ ^(rd-(zeto|stealth|iroha3|fabricx)|fabricx)-(bi|bank-a|bank-b)$ ]] || die "namespace '$a' is not a cluster-1 party namespace rd-<platform>-<bi|bank-a|bank-b> (or fabricx-<bi|bank-a|bank-b>, the Fabric-X token v2 gateways)"
+      [[ "$a" =~ ^(rd-(zeto|stealth|iroha3)|fabricx)-(bi|bank-a|bank-b)$ ]] || die "namespace '$a' is not a cluster-1 party namespace rd-<platform>-<bi|bank-a|bank-b> (or fabricx-<bi|bank-a|bank-b>, the Fabric-X token v2 gateways)"
       [[ "$b" =~ ^[a-z0-9./-]+=[A-Za-z0-9._-]+$ ]] || die "pod label '$b' must be key=value"
       if [[ "$a" == rd-* ]]; then plat="${a#rd-}"; plat="${plat%%-*}"; else plat=fabricx-adapter; fi # fabricx-<party> (no rd- prefix) = the token v2 gateways fxa-gw-<N>
       [[ "$plat" =~ ^($want)$ ]] || { port_list "$c" >/dev/null; continue; }
@@ -82,7 +82,7 @@ $(port_list "$c")
 base() {
   cat "$here/templates/base.yaml"
   echo '---'; gateway_policy egress-gateways-public 'server, probe-public' 'zeto|iroha3|stealth|fabricx-adapter'
-  echo '---'; gateway_policy egress-gateways-flow 'flow, probe-flow' 'fabricx|iroha3|stealth'
+  echo '---'; gateway_policy egress-gateways-flow 'flow, probe-flow' 'iroha3|stealth'
   if [[ "$entry" == a ]]; then echo '---'; cat "$here/templates/access.yaml"; else echo '---'; cat "$here/templates/entry-b.yaml"; fi
 }
 
@@ -132,7 +132,7 @@ env_file_lines() {
   local k v
   while IFS='=' read -r k v; do
     [[ -z "${k:-}" || "$k" == \#* ]] && continue
-    [[ "$k" =~ ^(LENSA_GW_(PALADIN|FABRICX|STEALTH|IROHA)_(BI|A|B|C)|LENSA_FXA_GW_(BI|A|B|C)|LENSA_BESU_RPC|LENSA_BESU_RPC_BANKS|LENSA_FABRICX_GW)$ ]] || die "env key '$k' is not allowed in the ConfigMap"
+    [[ "$k" =~ ^(LENSA_GW_(PALADIN|STEALTH|IROHA)_(BI|A|B|C)|LENSA_FXA_GW_(BI|A|B|C)|LENSA_BESU_RPC|LENSA_BESU_RPC_BANKS)$ ]] || die "env key '$k' is not allowed in the ConfigMap"
     [[ -n "$v" && "$v" != *[\"\\@\ ]* ]] || die "env value of $k is empty or holds a quote, backslash, space or '@' (no credentials in URLs)"
     printf '  %s: "%s"\n' "$k" "$v"
   done < "$LENSA_ENV_FILE"

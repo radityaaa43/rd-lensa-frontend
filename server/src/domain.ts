@@ -1,5 +1,5 @@
 // Imported by the web bundle at runtime: keep this file free of imports.
-export type ModelId = 'zeto' | 'noto' | 'stealth' | 'fabricx' | 'fabricx-adapter' | 'iroha3';
+export type ModelId = 'zeto' | 'noto' | 'stealth' | 'fabricx-adapter' | 'iroha3';
 export type FlowId = 'rd-issue' | 'rd-transfer' | 'dfabi-issue' | 'dfabi-transfer' | 'dvp' | 'award';
 export type PartyId = 'BI' | 'A' | 'B' | 'C';
 export type BankId = Exclude<PartyId, 'BI'>;
@@ -30,14 +30,13 @@ export type Role = 'sender' | 'receiver' | 'issuer' | 'regulator' | 'outsider';
 // Who paid whom as this party's own read shows it. A side that read cannot show is null; the whole value is null when neither is readable.
 export interface Counterparty { from: PartyId | null; to: PartyId | null }
 
-export type PlatformId = 'besu' | 'fabricx' | 'fabricx-adapter' | 'iroha3';
+export type PlatformId = 'besu' | 'fabricx-adapter' | 'iroha3';
 export const PLATFORMS: Record<PlatformId, { name: string; models: ModelId[] }> = {
   besu: { name: 'Besu', models: ['zeto', 'noto', 'stealth'] },
-  fabricx: { name: 'Fabric-X', models: ['fabricx'] },
   'fabricx-adapter': { name: 'Fabric-X (token v2)', models: ['fabricx-adapter'] },
   iroha3: { name: 'Iroha 3', models: ['iroha3'] },
 };
-export const PLATFORM_OF: Record<ModelId, PlatformId> = { zeto: 'besu', noto: 'besu', stealth: 'besu', fabricx: 'fabricx', 'fabricx-adapter': 'fabricx-adapter', iroha3: 'iroha3' };
+export const PLATFORM_OF: Record<ModelId, PlatformId> = { zeto: 'besu', noto: 'besu', stealth: 'besu', 'fabricx-adapter': 'fabricx-adapter', iroha3: 'iroha3' };
 
 // Role of `party` in a tx it observed, from what its own read shows (history has no request to go by).
 export function roleFromParties(party: PartyId, cp: Counterparty | null, issuer: boolean): Role {
@@ -54,7 +53,7 @@ export function roleOf(req: FlowRequest, party: PartyId): Role {
 }
 
 // Models where DFABI is issued BI -> BI only (into BI's own inventory) and reaches a bank by the award (user decision 2026-11-15).
-// Fabric-X and Fabric-X token v2 keep their own rules.
+// Fabric-X token v2 keeps its own rules.
 export const DFABI_TO_BI_MODELS: ModelId[] = ['zeto', 'noto', 'stealth', 'iroha3'];
 export const dfabiIssueToBi = (req: Pick<FlowRequest, 'model' | 'flow'>): boolean => req.flow === 'dfabi-issue' && DFABI_TO_BI_MODELS.includes(req.model);
 
@@ -88,4 +87,4 @@ export function validateRequest(req: FlowRequest): { ok: true; amount: bigint } 
   }
   return { ok: true, amount };
 }
-export const MODEL_NAMES: Record<ModelId, string> = { zeto: 'Zeto', noto: 'Noto', stealth: 'Stealth', fabricx: 'Fabric-X', 'fabricx-adapter': 'Fabric-X (token v2)', iroha3: 'Iroha 3' };
+export const MODEL_NAMES: Record<ModelId, string> = { zeto: 'Zeto', noto: 'Noto', stealth: 'Stealth', 'fabricx-adapter': 'Fabric-X (token v2)', iroha3: 'Iroha 3' };

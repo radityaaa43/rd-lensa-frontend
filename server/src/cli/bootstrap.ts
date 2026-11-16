@@ -1,8 +1,8 @@
 import { isMissing } from '../adapters/index.ts';
 
 const model = process.argv[2];
-if (model !== 'stealth' && model !== 'noto' && model !== 'zeto' && model !== 'fabricx' && model !== 'iroha3') {
-  console.error(`Model tidak dikenal: ${model}. Pilih: stealth, noto, zeto, fabricx, iroha3`);
+if (model !== 'stealth' && model !== 'noto' && model !== 'zeto' && model !== 'iroha3') {
+  console.error(`Model tidak dikenal: ${model}. Pilih: stealth, noto, zeto, iroha3`);
   process.exit(1);
 }
 let mod: { bootstrap(): Promise<void> };

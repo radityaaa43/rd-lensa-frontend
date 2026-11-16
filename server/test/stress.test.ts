@@ -153,10 +153,10 @@ test('runs models one after another', async () => {
 });
 
 test('a platform with one wallet per node runs one user per bank', async () => {
-  const f = fakeAdapter('fabricx', { tps: 1, maxUsers: 1 });
+  const f = fakeAdapter('fabricx-adapter', { tps: 1, maxUsers: 1 });
   const s = spy(f);
-  const snap = await finish(new StressRun(cfg({ models: ['fabricx'], users: 8 }), { fabricx: f }));
-  expect(snap.models.fabricx!.plan).toEqual([1]);
+  const snap = await finish(new StressRun(cfg({ models: ['fabricx-adapter'], users: 8 }), { 'fabricx-adapter': f }));
+  expect(snap.models['fabricx-adapter']!.plan).toEqual([1]);
   expect(s.st.maxInflight).toBe(3);
 });
 

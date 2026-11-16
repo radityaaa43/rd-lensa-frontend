@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { BI_WANT, biVerdicts, need, parseRefusal, payerNeeds, payerShortfalls, short, topUpAllowed, topUpAmount, type Flow, type Model } from '../e2e/flows/bi-delta.ts';
 
-const MODELS: Model[] = ['zeto', 'noto', 'stealth', 'fabricx', 'iroha3'];
+const MODELS: Model[] = ['zeto', 'noto', 'stealth', 'iroha3'];
 const FLOWS: Flow[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer', 'dvp', 'award'];
 const bal = (rd: bigint, dfabi: bigint) => ({ rd, dfabi });
 
 describe('BI expected delta table', () => {
-  it('has 19 rows where both cells are asserted as 0 (draft: 21 of 30; zeto and stealth dfabi-issue now BI -> BI)', () => {
+  it('has 14 rows where both cells are asserted as 0 (draft: 21 of 30; zeto and stealth dfabi-issue now BI -> BI)', () => {
     const zero = MODELS.flatMap((m) => FLOWS.filter((f) => BI_WANT[m][f].rd === 0n && BI_WANT[m][f].dfabi === 0n));
-    expect(zero).toHaveLength(19);
+    expect(zero).toHaveLength(14);
   });
   it('stealth dfabi-issue lands in BI inventory: BI DFABI +3, RD 0', () => {
     expect(BI_WANT.stealth['dfabi-issue']).toEqual({ rd: 0n, dfabi: 3n });
@@ -44,10 +44,6 @@ describe('biVerdicts', () => {
   });
   it('short: noto skips when stock < need, iroha3 when stock <= need (one note strictly > amount)', () => {
     expect([short('noto', 'award', 0n), short('noto', 'award', 1n), short('noto', 'dfabi-issue', 0n), short('iroha3', 'dfabi-issue', 3n), short('iroha3', 'dfabi-issue', 4n), short('zeto', 'award', 0n)]).toEqual([true, false, false, true, false, false]);
-  });
-  it('fabricx award: DFABI 0 is asserted even with zero stock (no precondition)', () => {
-    expect(biVerdicts('fabricx', 'award', bal(0n, 0n), bal(1_000_000n, 0n)).map((x) => x.status)).toEqual(['PASS', 'PASS']);
-    expect(biVerdicts('fabricx', 'award', bal(0n, 0n), bal(1_000_000n, 1n))[1].status).toBe('FAIL');
   });
   it('iroha3 fee cell: RD -1001 on rd-issue is PASS, -1000 is FAIL; its DFABI cell is asserted as 0', () => {
     expect(biVerdicts('iroha3', 'rd-issue', bal(5000n, 5n), bal(3999n, 5n))).toEqual([

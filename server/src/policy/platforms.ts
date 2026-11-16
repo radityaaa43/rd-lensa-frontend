@@ -2,7 +2,6 @@ import type { PartyId } from '../domain.ts';
 import type { Token } from './types.ts';
 import { usage } from './usage.ts';
 import { fileURLToPath } from 'node:url';
-import { fabricxUsage, transport } from '../adapters/fabricx.ts';
 import { fxaConfigured, fxaUsage } from '../adapters/fabricx-adapter.ts';
 import { stealthUsage } from '../adapters/stealth-signer.ts';
 import { inCluster } from '../incluster.ts';
@@ -40,11 +39,9 @@ const BANK_GATEWAYS = ['bank-gw-1', 'bank-gw-2', 'bank-gw-3', 'bank-gw-4'];
 export const REGISTRY: Record<Platform, PlatformInfo> = {
   zeto: { label: 'Zeto', gateways: BANK_GATEWAYS, enforced: true, usage: (party, limits) => usage(party, limits, 'zeto') },
   noto: { label: 'Noto', gateways: BANK_GATEWAYS, enforced: true, usage: (party, limits) => usage(party, limits, 'noto') },
-  // fx-gw-N (fabric-x/opa/DESIGN.md); usage through the bank's gateway, so only once Lensa uses them (LENSA_FABRICX_GW=1)
-  fabricx: {
-    label: 'Fabric-X', gateways: ['fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4'], enforced: true,
-    ...(transport() ? { usage: (party: Exclude<PartyId, 'BI'>, limits: Partial<Record<Token, number>> | undefined) => fabricxUsage(party, limits) } : {}),
-  },
+  // fx-gw-N (fabric-x/opa/DESIGN.md). The old Fabric-X model is gone from Lensa (no ModelId, so /api/meta and the Kebijakan screen never show it);
+  // it stays here only because the besu bundles and their revision strings ('…-fabricx.1-…') still carry it. No usage source.
+  fabricx: { label: 'Fabric-X', gateways: ['fx-gw-1', 'fx-gw-2', 'fx-gw-3', 'fx-gw-4'], enforced: true },
   iroha3: { label: 'Iroha 3', gateways: [], enforced: false },
   // st-gw-1..4 (rd-besu stealth Kebijakan, 2026-11-13): the same bi/bank bundles as bank-gw-N, so no sink of their own; usage from the party's own signer (/outflow), so only in the pod with the four doors (LENSA_GW_STEALTH_*)
   stealth: {

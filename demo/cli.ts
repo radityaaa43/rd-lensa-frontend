@@ -27,7 +27,7 @@ if (a.list) {
   for (const s of SCENARIOS) console.log(`  ${s.id.padEnd(4)} ${s.title}\n       tulis ${s.writes}${s.optIn ? ' | hanya --include-stress' : ''}${s.mockOnly ? ' | hanya --mock' : ''}${s.id === 'S0' || IMPLEMENTED[s.id] ? '' : ' | belum diimplementasikan'}`);
   console.log('\nPlatform dan pasangan bank (X -> Y), live:\n');
   for (const m of PLATFORMS) console.log(`  ${m.padEnd(8)} ${PAIR[m][0]} -> ${PAIR[m][1]}`);
-  console.log('\nSatu run live penuh (S3-S6) = 6 transaksi per platform, 30 total, berurutan.');
+  console.log('\nSatu run live penuh (S3-S6) = 6 transaksi per platform, 24 total, berurutan.');
   console.log(`\nSatu alur saja: --flow ${Object.keys(FLOWS).join('|')} (bisa diulang).`);
   process.exit(0);
 }

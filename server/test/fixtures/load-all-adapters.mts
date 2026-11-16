@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const models = ['stealth', 'noto', 'zeto', 'fabricx', 'iroha3'] as const;
+const models = ['stealth', 'noto', 'zeto', 'fabricx-adapter', 'iroha3'] as const;
 for (const m of models) {
   const mod = (await import(`../../src/adapters/${m}.ts`)) as { load?: unknown };
   if (typeof mod.load !== 'function') throw new Error(`${m}.ts exports no load()`);
