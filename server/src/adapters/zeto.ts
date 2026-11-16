@@ -576,7 +576,7 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
     // ONE load transfer at a time per node (the sender's), nodes in parallel: each transfer is one ZK proof, and more than one
     // proof at a time can run a Paladin node out of memory. Parallel proofs on several nodes once made the node SMTs diverge
     // from the chain (UTXORootNotFound, 2026-11-09); Paladin 89e34e2c8 fixed that, so only the per-node memory limit is left.
-    // The orchestrator still ramps users; their wait is queue time (end-to-end latency), so the ramp shows the ceiling.
+    // One load user per bank, so closed loop never queues here; open loop and batch rate queue on the node lock (queue time = end-to-end latency).
     // The 120 s deadline starts once the lock is held; a hung call keeps it.
     async transferForLoad(from: LoadUser, to: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
       const x = loadParty(from);
