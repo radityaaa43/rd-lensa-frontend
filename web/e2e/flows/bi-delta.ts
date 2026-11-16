@@ -14,8 +14,8 @@ const ZERO: Want = { rd: 0n, dfabi: 0n };
 const award = (dfabi: bigint): Want => ({ rd: AMOUNT.award * PRICE_PER_UNIT, dfabi }); // the RD leg lands on BI on all 5 platforms
 
 export const BI_WANT: Record<Model, Record<Flow, Want>> = {
-  // BI is not a party except for issues (mint, BI balance not debited) and award (sale from BI's DFABI inventory, zeto.ts topUpFor)
-  zeto: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': ZERO, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-AMOUNT.award) },
+  // BI is not a party except for issues (mint; dfabi-issue goes BI -> BI, so BI DFABI +amount) and award (sale from BI's DFABI inventory, zeto.ts topUpFor)
+  zeto: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': { rd: 0n, dfabi: AMOUNT['dfabi-issue'] }, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-AMOUNT.award) },
   // DFABI issue is a transfer from BI's custodian (noto.ts:92), so BI DFABI -amount (3); award sells from the custodian (noto.ts sellerFor)
   noto: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': { rd: 0n, dfabi: -AMOUNT['dfabi-issue'] }, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-AMOUNT.award) },
   // stealth.ts: issues mint straight to the receiver (mintStealth / issueByPartitionStealth); award sells from BI inventory (planInventory)
