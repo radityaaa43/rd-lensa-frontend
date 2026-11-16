@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { ModelId } from '../../../server/src/domain.ts';
 import { BATCH_COUNT_MAX as SERVER_COUNT_MAX, BATCH_DEFAULT as SERVER_DEFAULT, BATCH_LIMITS_MIN as SERVER_LIMITS, RATES as SERVER_RATES } from '../../../server/src/stress.ts';
 import type { Meta } from '../api.ts';
-import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, RATES, STOP_TEXT_BATCH, batchBody, batchCountOk, batchMaxMinutes, batchPlanned, batchReady, batchRows, batchStatus, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
+import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, RATES, STOP_TEXT_BATCH, batchBody, batchCountOk, batchEstimateS, batchMaxMinutes, batchPlanned, batchReady, batchRows, batchStatus, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
 
 const row = (model: ModelId, tps: number, users = 4, p95Ms = 2000) => ({ model, stage: { tps, users, p95Ms } });
 
@@ -87,6 +87,14 @@ test('the batch constants are the server ones', () => {
 test('batch run is at most the per-model limit times the models', () => {
   expect(batchMaxMinutes(3, 15)).toBe(45);
   expect(batchMaxMinutes(1, 1)).toBe(1);
+});
+test('batch estimate per model: serial N x tx, rate the slower of schedule and chain, capped at the limit', () => {
+  const c = { count: 50, pace: 'serial', users: 1, modelLimitMin: 15 } as const;
+  expect(batchEstimateS(meta, 'zeto', c)).toEqual({ s: 300, capped: false }); // 50 x 6 s
+  expect(batchEstimateS(meta, 'zeto', { ...c, modelLimitMin: 1 })).toEqual({ s: 60, capped: true });
+  expect(batchEstimateS(meta, 'noto', { ...c, pace: 'rate', rate: 2, users: 4 })).toEqual({ s: 25, capped: false }); // 50/2 beats 50 x 2 / 4
+  expect(batchEstimateS(meta, 'zeto', { ...c, pace: 'rate', rate: 8, users: 4 })).toEqual({ s: 300, capped: false }); // zeto pool capped at 1
+  expect(batchEstimateS(meta, 'iroha3', c)).toBeNull();
 });
 
 test('batch stop reasons read in batch terms', () => {

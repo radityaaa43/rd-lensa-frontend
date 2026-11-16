@@ -2,7 +2,7 @@ import type { ModelId } from '../../../server/src/domain.ts';
 import type { StressConfig as Cfg } from '../../../server/src/stress.ts';
 import type { Capacity, Meta } from '../api.ts';
 import { COLOR } from './RunRows.tsx';
-import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, LOAD_LABEL, PUBLIC_MAX_USERS, RATES, STAGES, USERS, WARMUP_S, batchCountOk, batchMaxMinutes, batchPool, batchReady, limitsOf, loadOf, openAllowed, ready, totalMinutes } from './stressForm.ts';
+import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, LOAD_LABEL, PUBLIC_MAX_USERS, RATES, STAGES, USERS, WARMUP_S, batchCountOk, batchEstimateS, batchMaxMinutes, batchPool, batchReady, durationText, limitsOf, loadOf, openAllowed, ready, totalMinutes } from './stressForm.ts';
 
 export type Form = Cfg;
 export interface ConfigProps {
@@ -92,6 +92,17 @@ export function StressConfig(p: ConfigProps) {
               BI dan bank mengirim bersamaan, masing-masing tepat {(form.count ?? 0).toLocaleString('id-ID')} transaksi ke pihak lain; tiap transaksi ke node lain yang diundi.
               {' '}Paling lama {batchMaxMinutes(form.models.length, form.modelLimitMin ?? BATCH_DEFAULT.modelLimitMin)} menit (batas per model x jumlah model){meta.publicTx ? '; 30 menit jeda sebelum run berikutnya' : ''}.
             </p>
+            {form.models.length > 0 && batchCountOk(form.count) && (
+              <p className="small">
+                Perkiraan:{' '}
+                {form.models.map((m) => {
+                  const e = batchEstimateS(meta, m, form);
+                  return `${meta.models[m].name} ${e ? `±${durationText(e.s)}${e.capped ? ' (terpotong batas waktu)' : ''}` : 'belum ada ukuran'}`;
+                }).join(', ')}
+                {form.models.length > 1 && form.models.every((m) => batchEstimateS(meta, m, form)) ? `; total ±${durationText(form.models.reduce((t, m) => t + batchEstimateS(meta, m, form)!.s, 0))}` : ''}.
+                {' '}Dari latensi per transaksi yang terukur di uji live; angka nyata bisa berbeda.
+              </p>
+            )}
             {noBi.map((n) => <p className="small" key={n.model}>{meta.models[n.model].name}: BI tidak ikut{n.reason ? ` — ${n.reason}` : ''}</p>)}
             <p className="small">Model berhenti lebih awal bila semua transaksi selesai, batas waktu per model habis, atau lebih dari 20% transaksi gagal.</p>
           </>
