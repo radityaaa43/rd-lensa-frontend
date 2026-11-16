@@ -3,7 +3,7 @@ import type { StressSnapshot } from '../../../server/src/stress.ts';
 import { CSV_URL, type Meta } from '../api.ts';
 import { formatDecimal } from '../format.ts';
 import { COLOR } from './RunRows.tsx';
-import { LOAD_LABEL, STOP_TEXT, STOP_TEXT_BATCH, WARMUP_S, batchRows, bestRows, conclusion, limitsOf, smallSample } from './stressForm.ts';
+import { LOAD_LABEL, STOP_TEXT, WARMUP_S, batchRows, batchStatus, bestRows, conclusion, limitsOf, smallSample } from './stressForm.ts';
 
 const sec = (ms: number) => `${formatDecimal(ms / 1000, 2)} s`;
 
@@ -29,7 +29,7 @@ function BatchResults({ meta, snap, models }: { meta: Meta; snap: StressSnapshot
             <div className="tablewrap">
               <table className="res" aria-label={`Batch ${meta.models[model].name}`}>
                 <caption style={{ textAlign: 'left', fontWeight: 600, padding: '8px 20px' }}>
-                  {meta.models[model].name} · {STOP_TEXT_BATCH[m.stop ?? 'done'] ?? STOP_TEXT[m.stop ?? 'done']}{m.unfinished ? ` · ${m.unfinished} transaksi belum selesai saat ditutup` : ''}
+                  {meta.models[model].name} · {batchStatus(m)}{m.unfinished ? ` · ${m.unfinished} transaksi belum selesai saat ditutup` : ''}
                   {m.limit && <small style={{ display: 'block', fontWeight: 400, color: 'var(--muted)' }}>Batas: {m.limit}.</small>}
                 </caption>
                 <thead><tr>{BATCH_HEAD.map((h) => <th key={h}>{h}</th>)}</tr></thead>

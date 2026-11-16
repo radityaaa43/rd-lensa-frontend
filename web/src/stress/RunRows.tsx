@@ -2,7 +2,7 @@ import type { ModelId } from '../../../server/src/domain.ts';
 import type { ModelRunStatus, StressSnapshot } from '../../../server/src/stress.ts';
 import type { Meta } from '../api.ts';
 import { formatDecimal } from '../format.ts';
-import { LOAD_LABEL, STOP_TEXT, STOP_TEXT_BATCH, smallSample } from './stressForm.ts';
+import { LOAD_LABEL, STOP_TEXT, STOP_TEXT_BATCH, batchPlanned, smallSample } from './stressForm.ts';
 
 // DESIGN.md §7.8 (Ref A bars): ink and aqua alternate by model order; every bar and line is also labelled with its model name
 export const COLOR: Record<ModelId, string> = { zeto: 'var(--ink)', noto: 'var(--aqua-edge)', stealth: 'var(--ink)', fabricx: 'var(--aqua-edge)', 'fabricx-adapter': 'var(--ink)', iroha3: 'var(--ink)' };
@@ -42,7 +42,7 @@ export function RunRows({ meta, snap }: { meta: Meta; snap: StressSnapshot }) {
               <Spark series={r.series} color={COLOR[m]} />
               <div className="bar"><i style={{ width: `${pct}%`, background: COLOR[m] }} /></div>
               <div className="prog">
-                <span>{r.batch ? `${num(r.batch.total.ok + r.batch.total.failed)} dari ${num(Object.values(r.batch.sent).reduce((a, b) => a + b, 0))} selesai` : cur ? `Tahap ${r.stages.length}/${r.plan.length} · ${r.load === 'open' ? `${formatDecimal(cur.offered)} tx/detik per bank` : `${cur.users} user/bank`}` : 'Belum mulai'}</span>
+                <span>{r.batch ? `${num(r.batch.total.ok + r.batch.total.failed)} dari ${num(batchPlanned(r.batch))} selesai` : cur ? `Tahap ${r.stages.length}/${r.plan.length} · ${r.load === 'open' ? `${formatDecimal(cur.offered)} tx/detik per bank` : `${cur.users} user/bank`}` : 'Belum mulai'}</span>
                 <span>{num(r.ok)} ok{r.failed ? ` · ${num(r.failed)} gagal` : ''} · {r.elapsedS} s</span>
               </div>
               {note && <div className="prog" style={{ color: 'var(--sealed)' }}><span>{note}</span></div>}

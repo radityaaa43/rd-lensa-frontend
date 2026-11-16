@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { ModelId } from '../../../server/src/domain.ts';
 import { BATCH_COUNT_MAX as SERVER_COUNT_MAX, BATCH_DEFAULT as SERVER_DEFAULT, BATCH_LIMITS_MIN as SERVER_LIMITS, RATES as SERVER_RATES } from '../../../server/src/stress.ts';
 import type { Meta } from '../api.ts';
-import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, RATES, STOP_TEXT_BATCH, batchBody, batchMaxMinutes, batchReady, batchRows, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
+import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, RATES, STOP_TEXT_BATCH, batchBody, batchMaxMinutes, batchPlanned, batchReady, batchRows, batchStatus, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
 
 const row = (model: ModelId, tps: number, users = 4, p95Ms = 2000) => ({ model, stage: { tps, users, p95Ms } });
 
@@ -124,4 +124,17 @@ test('batchRows: BI, A, B, C in order; a skipped party reads "Tidak ikut"; times
   expect(rows[0].cells).toEqual(['Tidak ikut: x']);
   expect(rows[1].cells).toEqual(['50', '48', '2', '1,23', '2,50 s', '9,88 s', '12,00 s']);
   expect(batchRows(m as never, { A: 'Bank Alfa' })[1].label).toBe('Bank Alfa');
+});
+
+test('batch caption: a live model is not "done"; the stop text only once it is over', () => {
+  expect(batchStatus({ status: 'running' })).toBe('Berjalan');
+  expect(batchStatus({ status: 'waiting' })).toBe('Menunggu giliran');
+  expect(batchStatus({ status: 'done' })).toBe('Semua transaksi selesai');
+  expect(batchStatus({ status: 'stopped', stop: 'limit' })).toBe('Berhenti di batas waktu per model');
+  expect(batchStatus({ status: 'stopped', stop: 'stopped' })).toBe('Dihentikan');
+});
+
+test('batch planned total is count x participating parties, not what was sent so far', () => {
+  expect(batchPlanned({ count: 50, parties: ['A', 'B', 'C'] })).toBe(150);
+  expect(batchPlanned({ count: 20, parties: ['BI', 'A', 'B', 'C'] })).toBe(80);
 });

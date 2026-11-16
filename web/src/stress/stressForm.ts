@@ -96,3 +96,9 @@ export function batchRows(m: ModelSnapshot, names: Partial<Record<PartyId, strin
     return { party, label, cells: r ? [sent, String(r.ok), String(r.failed), formatDecimal(r.tps, 2), sec(r.p50Ms), sec(r.p95Ms), sec(r.maxMs)] : [sent, '—', '—', '—', '—', '—', '—'] };
   });
 }
+
+// caption status of a batch model: no stop rule has fired while it runs, so a stop text only once it is over
+export const batchStatus = (m: Pick<ModelSnapshot, 'status' | 'stop'>): string =>
+  m.status === 'running' ? 'Berjalan' : m.status === 'waiting' ? 'Menunggu giliran' : STOP_TEXT_BATCH[m.stop ?? 'done'] ?? STOP_TEXT[m.stop ?? 'done'];
+// transfers the batch plans to send: `count` per participating party (sent only grows as they are issued)
+export const batchPlanned = (b: { count: number; parties: PartyId[] }): number => b.count * b.parties.length;
