@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import type { ModelId } from '../../../server/src/domain.ts';
-import { RATES as SERVER_RATES } from '../../../server/src/stress.ts';
+import { BATCH_COUNT_MAX as SERVER_COUNT_MAX, BATCH_DEFAULT as SERVER_DEFAULT, BATCH_LIMITS_MIN as SERVER_LIMITS, RATES as SERVER_RATES } from '../../../server/src/stress.ts';
 import type { Meta } from '../api.ts';
-import { RATES, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
+import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, RATES, STOP_TEXT_BATCH, batchMaxMinutes, batchReady, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
 
 const row = (model: ModelId, tps: number, users = 4, p95Ms = 2000) => ({ model, stage: { tps, users, p95Ms } });
 
@@ -77,3 +77,35 @@ test('bestRows leaves out a latency model: it has no TPS to compare', () => {
 });
 
 test('the offered rates are the server list', () => { expect([...RATES]).toEqual([...SERVER_RATES]); });
+
+test('the batch constants are the server ones', () => {
+  expect([...BATCH_LIMITS_MIN]).toEqual([...SERVER_LIMITS]);
+  expect(BATCH_COUNT_MAX).toBe(SERVER_COUNT_MAX);
+  expect(BATCH_DEFAULT).toEqual(SERVER_DEFAULT);
+});
+
+test('batch run is at most the per-model limit times the models', () => {
+  expect(batchMaxMinutes(3, 15)).toBe(45);
+  expect(batchMaxMinutes(1, 1)).toBe(1);
+});
+
+test('batch stop reasons read in batch terms', () => {
+  expect(STOP_TEXT_BATCH.limit).toBe('Berhenti di batas waktu per model');
+  expect(STOP_TEXT_BATCH.done).toBe('Semua transaksi selesai');
+  expect(STOP_TEXT_BATCH.errors).toBe('Lebih dari 20% transaksi gagal');
+});
+
+test('batchReady: every model holds ceil(count / users) transfers per load user', () => {
+  expect(batchReady(['zeto', 'noto'], { zeto: 50, noto: 13 }, 50, 4)).toBe(true); // ceil(50/4) = 13
+  expect(batchReady(['zeto', 'noto'], { zeto: 50, noto: 12 }, 50, 4)).toBe(false);
+  expect(batchReady(['zeto'], {}, 50, 1)).toBe(false);
+  expect(batchReady([], { zeto: 50 }, 50, 1)).toBe(false);
+});
+
+test('batchReady: a model capped at fewer senders needs the larger share; a bad count is never ready', () => {
+  expect(batchReady(['zeto'], { zeto: 13 }, 50, 4, meta)).toBe(false); // zeto sends with 1 user: needs 50
+  expect(batchReady(['zeto'], { zeto: 50 }, 50, 4, meta)).toBe(true);
+  expect(batchReady(['noto'], { noto: 99 }, 0, 1)).toBe(false);
+  expect(batchReady(['noto'], { noto: 999 }, BATCH_COUNT_MAX + 1, 1)).toBe(false);
+  expect(batchReady(['noto'], { noto: 99 }, 1.5, 1)).toBe(false);
+});

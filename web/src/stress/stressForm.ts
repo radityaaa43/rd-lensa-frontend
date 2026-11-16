@@ -21,6 +21,12 @@ export const totalMinutes = (meta: Meta, c: StressConfig) => Math.ceil(c.models.
 // a platform is "capacity" (a ramp finds a knee) or "latency" (one transfer in flight: a latency sample, no TPS); the open loop is for capacity platforms only
 export const LOAD_LABEL = { capacity: 'Kapasitas (titik jenuh)', latency: 'Latensi 1 transaksi', none: 'Belum bisa diuji beban' } as const;
 export const openAllowed = (meta: Meta, models: ModelId[]) => models.length > 0 && models.every((m) => loadOf(meta, m).mode === 'capacity');
+// Batch (mode 'batch'): the same lists as server/src/stress.ts, mirrored for the same reason (a test compares them)
+export const BATCH_COUNT_MAX = 200;
+export const BATCH_LIMITS_MIN = [1, 5, 10, 15] as const;
+export const BATCH_DEFAULT = { count: 50, pace: 'serial', modelLimitMin: 15 } as const;
+// every model may run up to its limit, one after the other
+export const batchMaxMinutes = (models: number, limitMin: number) => models * limitMin;
 export const MIN_P95 = 100; // p95 of fewer samples is the max in disguise
 export const smallSample = (n: number) => n < MIN_P95;
 
@@ -31,6 +37,18 @@ export const ready = (models: ModelId[], capacity: Partial<Record<ModelId, numbe
 // what each selected platform's number is limited by (shown before the run, and next to the result)
 export const limitsOf = (meta: Meta, models: ModelId[]) => models.flatMap((m) => { const l = loadOf(meta, m); return l.limit ? [{ model: m, mode: l.mode, limit: l.limit }] : []; });
 
+// a model can run a batch when each load user holds its share of `count` (a model capped at fewer senders than `users` has a bigger share)
+export const batchReady = (models: ModelId[], capacity: Partial<Record<ModelId, number>>, count: number, users: number, meta?: Meta) =>
+  models.length > 0 && Number.isInteger(count) && count >= 1 && count <= BATCH_COUNT_MAX &&
+  models.every((m) => (capacity[m] ?? 0) >= Math.ceil(count / Math.min(users, (meta && loadOf(meta, m).maxUsers) || users)));
+// load users per party of a batch: the chosen pool when sending at a rate, else one (same as server batchUsers)
+export const batchPool = (c: Pick<StressConfig, 'pace' | 'users'>) => (c.pace === 'rate' ? c.users : 1);
+// the POST body of a batch run: no stageS, a rate only when sending at a rate
+export const batchBody = (c: StressConfig): StressConfig => ({
+  models: c.models, users: batchPool(c) as StressConfig['users'], mode: 'batch', count: c.count, pace: c.pace, modelLimitMin: c.modelLimitMin,
+  ...(c.pace === 'rate' ? { rate: c.rate } : {}),
+});
+
 export const STOP_TEXT: Record<StopReason, string> = {
   done: 'Semua tahap selesai',
   saturated: 'Jenuh: TPS tidak naik dua tahap berturut-turut',
@@ -39,6 +57,12 @@ export const STOP_TEXT: Record<StopReason, string> = {
   funds: 'Saldo user beban habis',
   stopped: 'Dihentikan',
   limit: 'Berhenti di batas satu run (15 menit)',
+};
+
+export const STOP_TEXT_BATCH: Partial<Record<StopReason, string>> = {
+  done: 'Semua transaksi selesai',
+  limit: 'Berhenti di batas waktu per model',
+  errors: 'Lebih dari 20% transaksi gagal',
 };
 
 // One row per CAPACITY model that measured something: its best stage (highest TPS within the fail limit). A latency model has no TPS to compare.

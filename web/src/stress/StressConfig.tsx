@@ -2,12 +2,12 @@ import type { ModelId } from '../../../server/src/domain.ts';
 import type { StressConfig as Cfg } from '../../../server/src/stress.ts';
 import type { Capacity, Meta } from '../api.ts';
 import { COLOR } from './RunRows.tsx';
-import { LOAD_LABEL, PUBLIC_MAX_USERS, RATES, STAGES, USERS, WARMUP_S, limitsOf, loadOf, openAllowed, ready, totalMinutes } from './stressForm.ts';
+import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, LOAD_LABEL, PUBLIC_MAX_USERS, RATES, STAGES, USERS, WARMUP_S, batchMaxMinutes, batchPool, batchReady, limitsOf, loadOf, openAllowed, ready, totalMinutes } from './stressForm.ts';
 
 export type Form = Cfg;
 export interface ConfigProps {
-  meta: Meta; capacity: Capacity; form: Form; running: boolean; starting: boolean; error: string | null;
-  onChange(p: Partial<Form>): void; onToggle(m: ModelId): void; onGo(): void;
+  meta: Meta; capacity: Capacity; form: Form; running: boolean; starting: boolean; preparing: boolean; error: string | null;
+  onChange(p: Partial<Form>): void; onToggle(m: ModelId): void; onGo(): void; onPrepare(): void;
 }
 
 const CHECK = <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#fff" strokeWidth="3.5"><path d="M20 6 9 17l-5-5" /></svg>;
@@ -16,9 +16,14 @@ const SUB = { display: 'block', fontSize: '12.5px', fontWeight: 400, color: 'var
 
 export function StressConfig(p: ConfigProps) {
   const { meta, capacity, form, running } = p;
-  const locked = running || p.starting;
-  const canStart = ready(form.models, capacity);
+  const locked = running || p.starting || p.preparing;
+  const batch = form.mode === 'batch';
+  const canStart = batch ? batchReady(form.models, capacity, form.count!, batchPool(form), meta) : ready(form.models, capacity);
   const open = form.mode === 'open';
+  const rated = form.pace === 'rate';
+  const noBi = batch ? form.models.flatMap((m) => { const l = meta.models[m].load; return l && !l.parties.includes('BI') ? [{ model: m, reason: l.biReason }] : []; }) : [];
+  // back from batch: the batch fields go, stageS stays as it was
+  const classic = { count: undefined, pace: undefined, modelLimitMin: undefined };
   const canOpen = openAllowed(meta, form.models);
   const users = USERS.filter((u) => !(meta.publicTx && u > PUBLIC_MAX_USERS));
   return (
@@ -54,9 +59,43 @@ export function StressConfig(p: ConfigProps) {
         <h3><span className="n">3</span>Beban bertahap</h3>
         <label className="f" id="tmode-label">Cara kirim</label>
         <div className="seg" role="group" aria-labelledby="tmode-label">
-          <button aria-pressed={!open} disabled={locked} onClick={() => p.onChange({ mode: 'closed', rate: undefined })}>User bergantian</button>
-          <button aria-pressed={open} disabled={locked || !canOpen} title={canOpen ? undefined : 'Hanya untuk platform yang benar-benar paralel (Kapasitas)'} onClick={() => p.onChange({ mode: 'open', rate: form.rate ?? 2 })}>Laju tetap</button>
+          <button aria-pressed={!open} disabled={locked} onClick={() => p.onChange({ mode: 'closed', rate: undefined, ...classic })}>User bergantian</button>
+          <button aria-pressed={open} disabled={locked || !canOpen} title={canOpen ? undefined : 'Hanya untuk platform yang benar-benar paralel (Kapasitas)'} onClick={() => p.onChange({ mode: 'open', rate: form.rate ?? 2, ...classic })}>Laju tetap</button>
+          <button aria-pressed={batch} disabled={locked} onClick={() => p.onChange({ mode: 'batch', rate: undefined, ...BATCH_DEFAULT })}>Batch (4 pihak bersamaan)</button>
         </div>
+        {batch && (
+          <>
+            <label className="f" htmlFor="tcount">Jumlah transaksi per pihak</label>
+            <input id="tcount" type="number" min={1} max={BATCH_COUNT_MAX} step={1} value={form.count ?? ''} disabled={locked} onChange={(e) => p.onChange({ count: e.target.value === '' ? undefined : Number(e.target.value) })} />
+            <label className="f" id="tpace-label">Cara kirim per pihak</label>
+            <div className="seg" role="group" aria-labelledby="tpace-label">
+              <button aria-pressed={!rated} disabled={locked} onClick={() => p.onChange({ pace: 'serial', rate: undefined })}>Berurutan</button>
+              <button aria-pressed={rated} disabled={locked} onClick={() => p.onChange({ pace: 'rate', rate: form.rate ?? 2 })}>Sekaligus</button>
+            </div>
+            {rated && (
+              <>
+                <label className="f" id="brate-label">Laju kirim per pihak (transaksi per detik)</label>
+                <div className="seg" role="group" aria-labelledby="brate-label">
+                  {RATES.map((r) => <button key={r} aria-pressed={form.rate === r} disabled={locked} onClick={() => p.onChange({ rate: r })}>{r.toLocaleString('id-ID')}</button>)}
+                </div>
+                <label className="f" id="busers-label">Pengirim per pihak</label>
+                <div className="seg" role="group" aria-labelledby="busers-label">
+                  {users.map((u) => <button key={u} aria-pressed={form.users === u} disabled={locked} onClick={() => p.onChange({ users: u })}>{u}</button>)}
+                </div>
+              </>
+            )}
+            <label className="f" htmlFor="tlimit">Batas waktu per model</label>
+            <select id="tlimit" value={form.modelLimitMin} disabled={locked} onChange={(e) => p.onChange({ modelLimitMin: Number(e.target.value) as Form['modelLimitMin'] })}>
+              {BATCH_LIMITS_MIN.map((m) => <option key={m} value={m}>{m} menit</option>)}
+            </select>
+            <p className="small">
+              BI dan bank mengirim bersamaan, masing-masing tepat {(form.count ?? 0).toLocaleString('id-ID')} transaksi ke pihak lain; tiap transaksi ke node lain yang diundi.
+              {' '}Paling lama {batchMaxMinutes(form.models.length, form.modelLimitMin ?? BATCH_DEFAULT.modelLimitMin)} menit (batas per model x jumlah model){meta.publicTx ? '; satu run paling lama 15 menit, dan 30 menit jeda sebelum run berikutnya' : ''}.
+            </p>
+            {noBi.map((n) => <p className="small" key={n.model}>{meta.models[n.model].name}: BI tidak ikut{n.reason ? ` — ${n.reason}` : ''}</p>)}
+            <p className="small">Model berhenti lebih awal bila semua transaksi selesai, batas waktu per model habis, atau lebih dari 20% transaksi gagal.</p>
+          </>
+        )}
         {open && (
           <>
             <label className="f" id="trate-label">Laju kirim tertinggi per bank (transaksi per detik)</label>
@@ -65,6 +104,8 @@ export function StressConfig(p: ConfigProps) {
             </div>
           </>
         )}
+        {!batch && (
+          <>
         <label className="f" id="tusers-label">{open ? 'Pengirim per bank' : 'User per bank (tahap terakhir)'}</label>
         <div className="seg" role="group" aria-labelledby="tusers-label">
           {users.map((u) => <button key={u} aria-pressed={form.users === u} disabled={locked} onClick={() => p.onChange({ users: u })}>{u}</button>)}
@@ -80,16 +121,21 @@ export function StressConfig(p: ConfigProps) {
           {` ${WARMUP_S}`} detik pertama tiap tahap adalah pemanasan dan tidak diukur. Paling lama {totalMinutes(meta, form)} menit{meta.publicTx ? '; satu run paling lama 15 menit, dan 30 menit jeda sebelum run berikutnya' : ''}.
         </p>
         <p className="small">Model berhenti lebih awal bila lebih dari 20% transaksi satu tahap gagal, TPS tidak naik dua tahap berturut-turut, tidak ada konfirmasi selama 3 menit, atau saldo user habis.</p>
+          </>
+        )}
       </div>
       {limitsOf(meta, form.models).map((l) => (
         <div className="warn" key={l.model}>{WARN}<span><b>{meta.models[l.model].name} · {LOAD_LABEL[l.mode]}.</b> {l.limit}.</span></div>
       ))}
       <div>
-        <button className={running ? 'btn2 stop' : 'btn2'} disabled={!running && (p.starting || !canStart)} onClick={p.onGo}>
+        {batch && !running && (
+          <button className="btn2" style={{ marginBottom: 8, background: 'var(--sheet)', color: 'var(--navy)', border: '1px solid var(--navy)' }} disabled={locked || form.models.length === 0} onClick={p.onPrepare}>{p.preparing ? 'Menyiapkan saldo…' : 'Siapkan saldo'}</button>
+        )}
+        <button className={running ? 'btn2 stop' : 'btn2'} disabled={!running && (p.starting || p.preparing || !canStart)} onClick={p.onGo}>
           {running ? 'Hentikan' : 'Mulai stress test'}
         </button>
         {!running && !p.starting && !canStart && (
-          <p className="small">{form.models.length === 0 ? 'Pilih minimal satu model.' : 'Saldo user beban model terpilih belum siap. Jalankan preflight --prepare dulu.'}</p>
+          <p className="small">{form.models.length === 0 ? 'Pilih minimal satu model.' : batch ? `Saldo user beban belum cukup untuk ${form.count ?? 0} transaksi per pihak. Klik Siapkan saldo.` : 'Saldo user beban model terpilih belum siap. Jalankan preflight --prepare dulu.'}</p>
         )}
         {p.error && <p className="small" role="alert" style={{ color: 'var(--sealed)' }}>{p.error}</p>}
       </div>

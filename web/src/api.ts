@@ -11,8 +11,9 @@ export interface Meta {
   flows: Record<FlowId, { asset: 'RD' | 'DFABI'; issuer: boolean; dvp: boolean }>;
   // policy: does the model have Kebijakan documents (a registered platform), and does a gateway enforce them yet. An unregistered model says why not.
   models: Record<ModelId, { name: string; available: boolean; stepLabels: string[]; capabilities: Record<FlowId, Capability>; policy: { registered: boolean; enforced: boolean; reason?: string };
-    // how the stress test reads the platform: capacity (parallel senders, a knee), latency (one transfer in flight), none (no load transfer yet); limit = the bottleneck or why; maxUsers = senders per bank
-    load: { mode: 'capacity' | 'latency' | 'none'; limit: string | null; maxUsers: number | null } | null }>;
+    // how the stress test reads the platform: capacity (parallel senders, a knee), latency (one transfer in flight), none (no load transfer yet); limit = the bottleneck or why; maxUsers = senders per bank;
+    // parties = who sends in batch mode, biReason = why BI is not one of them
+    load: { mode: 'capacity' | 'latency' | 'none'; limit: string | null; maxUsers: number | null; parties: PartyId[]; biReason: string | null } | null }>;
 }
 export interface Health {
   models: Record<ModelId, { ready: boolean; detail: string }>;
@@ -45,8 +46,12 @@ const post = <T,>(path: string, body?: unknown) =>
 
 export const getMeta = () => call<Meta>('/api/meta');
 export const getHealth = () => call<Health>('/api/health');
-// ready transfers per load user, per model, with `users` load users per bank
-export const getCapacity = (users: number) => call<Capacity>(`/api/preflight-capacity?users=${users}`);
+// ready transfers per load user, per model, with `users` load users per bank; batch: over every party that sends in batch mode
+export const getCapacity = (users: number, batch?: boolean) => call<Capacity>(`/api/preflight-capacity?users=${users}${batch ? '&batch=1' : ''}`);
+// tops the load users up in the background (count: a batch of that many per sending party); poll getPrepare until done or error. 409 while a run or another prepare holds the lock
+export interface PrepareState { state: 'running' | 'done' | 'error'; model?: ModelId; reason?: string }
+export const prepareStress = (b: { models: ModelId[]; users: number; count?: number }) => post<PrepareState>('/api/stress/prepare', b);
+export const getPrepare = () => call<PrepareState | null>('/api/stress/prepare'); // body is null (204) before the first prepare
 // pending: tx ids this party's node holds back as not indexed yet (x-history-pending, ARCHITECTURE.md §2.2 v1.3)
 export interface HistoryPage { items: HistoryItem[]; truncated: boolean; pending: string[] }
 export const getHistory = (model: ModelId, party: PartyId, limit: number) =>
