@@ -61,6 +61,10 @@ export const dfabiIssueToBi = (req: Pick<FlowRequest, 'model' | 'flow'>): boolea
 // Models whose award terms are fixed on the ledger: token v2 sells exactly 1 SBN to Bank A for 1.000.000.000 RD (regulated policy.go ValidateDvP).
 export const FIXED_AWARD: Partial<Record<ModelId, { to: PartyId; amount: bigint; price: bigint }>> = { 'fabricx-adapter': { to: 'A', amount: 1n, price: 1_000_000_000n } };
 
+// Models whose history() is a party's whole wallet history (no block window; `truncated` only at the node's row cap) and carries no
+// block numbers: a tx missing from an untruncated list is absent for that party, not out of range (token v2 history.go).
+export const COMPLETE_HISTORY_MODELS: ModelId[] = ['fabricx-adapter'];
+
 export function validateRequest(req: FlowRequest): { ok: true; amount: bigint } | { ok: false; reason: string } {
   const fail = (reason: string) => ({ ok: false as const, reason });
   const a = req.amount;
