@@ -6,9 +6,12 @@ const FLOWS: Flow[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer
 const bal = (rd: bigint, dfabi: bigint) => ({ rd, dfabi });
 
 describe('BI expected delta table', () => {
-  it('has 21 rows where both cells are asserted as 0 (draft: 21 of 30)', () => {
+  it('has 20 rows where both cells are asserted as 0 (draft: 21 of 30, zeto dfabi-issue now BI -> BI)', () => {
     const zero = MODELS.flatMap((m) => FLOWS.filter((f) => BI_WANT[m][f].rd === 0n && BI_WANT[m][f].dfabi === 0n));
-    expect(zero).toHaveLength(21);
+    expect(zero).toHaveLength(20);
+  });
+  it('zeto dfabi-issue lands in BI inventory: BI DFABI +3, RD 0', () => {
+    expect(BI_WANT.zeto['dfabi-issue']).toEqual({ rd: 0n, dfabi: 3n });
   });
   it('asserts the iroha3 fee cells: rd-issue -1001, dfabi-issue -1, dfabi-transfer -1 (BI RD)', () => {
     expect([BI_WANT.iroha3['rd-issue'].rd, BI_WANT.iroha3['dfabi-issue'].rd, BI_WANT.iroha3['dfabi-transfer'].rd]).toEqual([-1001n, -1n, -1n]);
