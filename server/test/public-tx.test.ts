@@ -14,7 +14,8 @@ import type { Opa } from '../src/policy/opa.ts';
 import { fakeAdapter } from './fake-adapter.ts';
 
 // GO-W (public WRITE, Zeto + Noto, anonymous; R24 waiver extension): LENSA_PUBLIC_TX=1 -> buildApp({ public: true, publicTx: true }).
-// Writes open ONLY for POST /api/tx (every flow, dvp and award included since R28 was lifted) and POST approve/republish (answered 403 "dibekukan" by the freeze); every other write stays 405.
+// Writes open ONLY for POST /api/tx (every flow, dvp and award included since R28 was lifted) and the Kebijakan writes of Fabric-X (token v2) (drafts, approve,
+// reject, cancel, republish; any other platform answers 403); every other write stays 405.
 const probe = async () => ({ besu: true, paladin: [true, true, true, true] });
 const day = [1, 2, 3, 4, 5, 6, 7];
 const biSeed: BiPolicy = { max_per_tx: { RD: 1000, DFABI: 100 }, max_mint_per_tx: { RD: 10_000, DFABI: 10_000 }, hours: { RD: { days: day, open: '00:00', close: '24:00' }, DFABI: { days: day, open: '00:00', close: '24:00' } }, holidays: [], frozen: [] };
@@ -80,9 +81,9 @@ describe('W on: transactions', () => {
 });
 
 describe('W on: everything else stays closed', () => {
-  it('every other write verb answers 405 + Allow: GET, HEAD (stress events / csv, preflight, drafts, reject, cancel, login, unknown, PUT/DELETE/PATCH/OPTIONS)', async () => {
+  it('every other write verb answers 405 + Allow: GET, HEAD (stress events / csv, preflight, policy reads as POST, login, unknown, PUT/DELETE/PATCH/OPTIONS)', async () => {
     const a = make(undefined, policyDeps());
-    const cases: [string, string][] = [['POST', '/api/stress/events'], ['POST', '/api/stress/csv'], ['POST', '/api/preflight-capacity'], ['POST', '/api/policy/bi/drafts'], ['POST', '/api/policy/bi/reject'], ['POST', '/api/policy/bank-a/cancel'], ['POST', '/api/login'], ['POST', '/anything'],
+    const cases: [string, string][] = [['POST', '/api/stress/events'], ['POST', '/api/stress/csv'], ['POST', '/api/preflight-capacity'], ['POST', '/api/policy'], ['POST', '/api/policy/usage'], ['POST', '/api/policy/bank-a/history'], ['POST', '/api/login'], ['POST', '/anything'],
       ['PUT', '/api/tx'], ['DELETE', '/api/tx'], ['PATCH', '/api/tx'], ['OPTIONS', '/api/tx'], ['PUT', '/api/meta'], ['DELETE', '/api/policy/bi/approve'], ['POST', '/api/tx/x/events']];
     for (const [method, url] of cases) {
       const r = await a.inject({ method: method as 'POST', url, payload: method === 'POST' || method === 'PUT' || method === 'PATCH' ? {} : undefined });
@@ -116,17 +117,37 @@ describe('W on: everything else stays closed', () => {
       expect([url, r.statusCode]).toEqual([url, 200]);
     }
   });
-  it('approve and republish reach the handler and are refused 403 "dibekukan"; the policy store is unchanged', async () => {
+  it('every Kebijakan write for a platform other than Fabric-X (token v2) is refused 403 before the schema; the policy store is unchanged', async () => {
     const p = policyDeps();
     const a = make(undefined, { policy: p.policy });
     const before = JSON.stringify(p.store.history('bi', 'zeto'));
-    for (const path of ['approve', 'republish']) {
-      const r = await a.inject({ method: 'POST', url: `/api/policy/bi/${path}`, payload: { pihak: 'BI', model: 'zeto', by: 'anon', ...(path === 'approve' ? { note: '' } : {}) } });
-      expect([path, r.statusCode]).toEqual([path, 403]);
-      expect(r.json().reason).toMatch(/dibekukan/);
+    for (const path of ['drafts', 'approve', 'reject', 'cancel', 'republish']) {
+      for (const payload of [{ pihak: 'BI', model: 'zeto', by: 'anon', note: '' }, { pihak: 'BI' }]) {
+        const r = await a.inject({ method: 'POST', url: `/api/policy/bi/${path}`, payload });
+        expect([path, r.statusCode]).toEqual([path, 403]);
+        expect(r.json().reason).toBe('Di situs publik kebijakan hanya bisa diubah untuk Fabric-X (token v2)');
+      }
     }
     expect(JSON.stringify(p.store.history('bi', 'zeto'))).toBe(before);
     expect(p.publish).not.toHaveBeenCalled();
+  });
+});
+
+describe('W on: Fabric-X (token v2) Kebijakan writes are open on the public host, with maker-checker', () => {
+  it('draft, a refused self-approval, approval by another name: publish runs for fabricx-adapter only', async () => {
+    const p = policyDeps();
+    const workflow = new PolicyWorkflow(p.store, { check: vi.fn(async () => []), test: vi.fn(async () => ({ passed: 13, total: 13 })) } as unknown as Opa, p.publish,
+      (m) => (m === 'fabricx-adapter' ? undefined : 'Terbit kebijakan dibekukan di pod (hanya uji coba)'));
+    const a = make(undefined, { policy: { ...(p.policy as object), workflow } });
+    const doc = { counterparties: ['bi@node1', 'bankB@node3'], max_per_tx: { RD: 500 } };
+    const draft = await a.inject({ method: 'POST', url: '/api/policy/bank-a/drafts', payload: { pihak: 'A', model: 'fabricx-adapter', by: 'Rina', reason: 'uji', doc } });
+    expect(draft.statusCode).toBe(200);
+    const self = await a.inject({ method: 'POST', url: '/api/policy/bank-a/approve', payload: { pihak: 'A', model: 'fabricx-adapter', by: 'Rina', note: '' } });
+    expect(self.statusCode).toBe(403);
+    const ok = await a.inject({ method: 'POST', url: '/api/policy/bank-a/approve', payload: { pihak: 'A', model: 'fabricx-adapter', by: 'Dimas', note: '' } });
+    expect(ok.statusCode).toBe(200);
+    expect(p.publish).toHaveBeenCalledWith('bank-a', 'fabricx-adapter', 2);
+    expect(p.store.current('bank-a', 'fabricx-adapter').doc).toEqual(doc);
   });
 });
 

@@ -334,6 +334,7 @@ ingress() {
     sed "$sub; s#^ *\#TX_PATHS\$#$(printf '%s' "$(tx_paths)" | sed 's/[#&\\]/\\&/g' | sed ':a;N;$!ba;s/\n/\\n/g')#" "$here/templates/ingress.yaml"
     echo '---'; sed "$sub" "$here/templates/ingress-tx.yaml"
     echo '---'; sed "$sub" "$here/templates/ingress-stress.yaml"
+    echo '---'; sed "$sub" "$here/templates/ingress-policy.yaml"
   else
     sed "$sub; /^ *#TX_PATHS$/d" "$here/templates/ingress.yaml"
   fi
