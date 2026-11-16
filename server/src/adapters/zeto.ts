@@ -55,12 +55,12 @@ export function ledgerParties(
   const to = only !== undefined && PARTY_IDS.includes(only as PartyId) ? (only as PartyId) : null;
   return from === null && to === null ? null : { from, to };
 }
-// A stress load user (stress-nN-ii@nodeN, adapter.ts loadLookup) is a throwaway identity of the bank on node N: BI's column names the bank.
+// A stress load user (stress-nN-ii@nodeN, adapter.ts loadLookup) is a throwaway identity of the party on node N (node1 = BI): BI's column names the party.
 export function partyOf(id: string): PartyId | undefined {
   const n = /^stress-n(\d+)-\d+@node(\d+)$/.exec(id);
-  return PARTY_OF.get(id) ?? (n && n[1] === n[2] ? BANKS.find((b) => LOOKUP[b].endsWith(`@node${n[1]}`)) : undefined);
+  return PARTY_OF.get(id) ?? (n && n[1] === n[2] ? PARTY_IDS.find((p) => LOOKUP[p].endsWith(`@node${n[1]}`)) : undefined);
 }
-// A load user's UTXO counts for its bank's key, so zetoBiItem sums the amount the bank received.
+// A load user's UTXO counts for its party's key, so zetoBiItem sums the amount the party received.
 export const seenAsBanks = (seen: Held[], ownerOf: (key: string) => string, ownerKey: Record<PartyId, string>): Held[] =>
   seen.map((h) => { const p = partyOf(ownerOf(h.owner)); return p ? { ...h, owner: ownerKey[p] } : h; });
 // BI's read of one tx from its ledger (bank reports + its own states); null until every output is verified. An award is a DvP whose RD
@@ -502,8 +502,8 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
     });
   }
 
-  // Load users (stress test): identities stress-nN-ii@nodeN on the bank's own node, each with its own RD UTXOs of LOAD_AMOUNT.
-  // They report to BI over their bank's privacy group like the bank does.
+  // Load users (stress test): identities stress-nN-ii@nodeN on the party's own node, each with its own RD UTXOs of LOAD_AMOUNT.
+  // A bank's users report to BI over the bank's privacy group like the bank does; BI's users (node1) report nothing: BI's ledger adopts node1's own states.
   const loadUsers = new Map<string, Party>();
   const loadParty = (u: LoadUser) => {
     const lookup = loadLookup(u);
@@ -524,7 +524,7 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
     if (units > 0) await bookKey(x.lookup); // resolveVerifier can create a key (besu, Paladin key_resolver.go:233): only for a user that already holds UTXOs
     return units;
   };
-  const loadAll = (users: number) => BANKS.flatMap((bank) => Array.from({ length: users }, (_, i): LoadUser => ({ bank, i })));
+  const loadAll = (users: number, parties: PartyId[] = BANKS) => parties.flatMap((bank) => Array.from({ length: users }, (_, i): LoadUser => ({ bank, i })));
 
   const adapter: ModelAdapter & { fund: typeof fund } = {
     id: 'zeto',
@@ -550,21 +550,23 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
       const [chain, node] = await Promise.all([besuReceipt(tx), paladinNodeReceipt(party, tx)]); // public receipt + the party's own Paladin node
       return { ...chain, node };
     },
-    async loadCapacity(users) {
-      return Math.min(...(await Promise.all(loadAll(users).map(loadUnits))));
+    async loadCapacity(users, parties = BANKS) {
+      return Math.min(...(await Promise.all(loadAll(users, parties).map(loadUnits))));
     },
-    async prepareLoad(users, units) {
-      for (const u of loadAll(users)) {
+    async prepareLoad(users, units, parties = BANKS) {
+      for (const u of loadAll(users, parties)) {
         const short = units - (await loadUnits(u));
         if (short <= 0) continue;
         const x = loadParty(u);
+        const bank = u.bank;
         for (const s of await exclusive(['BI'], () => mintUtxos(P.BI, zeto('RD', P.BI), x, short, LOAD_AMOUNT))) {
-          await reportTo(state.groups[u.bank as BankId], x, 'RD', address.RD, s.receipt);
+          if (bank !== 'BI') await reportTo(state.groups[bank], x, 'RD', address.RD, s.receipt); // BI's mint to its own user: no report to itself
         }
         await bookKey(x.lookup); // minted just now, so the key exists
       }
     },
     loadCirculates: true,
+    loadParties: ['BI', 'A', 'B', 'C'],
     loadMode: 'latency',
     loadLimit: 'Satu transfer beban sekaligus: bukti ZK paralel dari beberapa node membuat pohon SMT node menyimpang dari chain (UTXORootNotFound), dan di atas 1 user per bank node Paladin bisa kehabisan memori. Konfirmasi = receipt chain; laporan ke BI diukur terpisah',
     maxLoadUsers: 1,
@@ -580,7 +582,9 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
         const submittedAt = Date.now();
         const tx = await transfer(x, zeto('RD', x), loadParty(to), Number(amount));
         const confirmedAt = Date.now(); // finality = the chain receipt; the BI report (async, spec 7a.2) is timed apart so it does not inflate the settlement latency
-        await reportTo(state.groups[from.bank as BankId], x, 'RD', address.RD, tx.receipt);
+        const bank = from.bank;
+        if (bank === 'BI') return { submittedAt, confirmedAt }; // BI does not report to itself
+        await reportTo(state.groups[bank], x, 'RD', address.RD, tx.receipt);
         return { submittedAt, confirmedAt, reportMs: Date.now() - confirmedAt };
       }));
     },

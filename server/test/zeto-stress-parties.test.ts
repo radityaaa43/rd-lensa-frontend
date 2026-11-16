@@ -3,7 +3,7 @@ import { LOOKUP, biRead, ledgerParties, partyOf, seenAsBanks, zetoBiItem, type H
 import type { PartyId } from '../src/domain.ts';
 
 // A stress load user (stress-nN-ii@nodeN) is a throwaway identity of the bank on node N. BI's column must name the bank.
-const ids: Record<string, string> = { kA0: 'stress-n2-00@node2', kB1: 'stress-n3-01@node3', kA: LOOKUP.A, kB: LOOKUP.B };
+const ids: Record<string, string> = { kA0: 'stress-n2-00@node2', kB1: 'stress-n3-01@node3', kA: LOOKUP.A, kB: LOOKUP.B, kBI0: 'stress-n1-00@node1', kB0: 'stress-n3-00@node3' };
 const ledger = (rows: Record<string, { owner: string; reporters: string[] }>) => ({
   verified: new Map(Object.entries(rows).map(([c, r]) => [c, { output: { owner: r.owner }, reporters: new Set(r.reporters) }])),
   ownerOf: (k: string) => ids[k] ?? k,
@@ -16,6 +16,11 @@ describe('partyOf', () => {
     expect(partyOf(LOOKUP.B)).toBe('B');
     expect(partyOf('stress-n9-00@node9')).toBeUndefined();
     expect(partyOf('stress-n2-00@node3')).toBeUndefined(); // node in the name and after @ disagree
+  });
+
+  it('a load identity on node1 is BI', () => {
+    expect(partyOf('stress-n1-03@node1')).toBe('BI');
+    expect(partyOf('stress-n1-00@node2')).toBeUndefined();
   });
 });
 
@@ -34,6 +39,11 @@ describe('ledgerParties for a stress transfer', () => {
     const l = ledger({ r: { owner: 'kUnknown', reporters: ['stress-n2-00@node2'] } });
     expect(ledgerParties(l, ['r'], false)).toEqual({ from: 'A', to: null });
   });
+
+  it('a BI load user sending to a bank user: BI to the bank, BI change ignored', () => {
+    const l = ledger({ r: { owner: 'kB0', reporters: ['stress-n1-00@node1'] }, change: { owner: 'kBI0', reporters: ['stress-n1-00@node1'] } });
+    expect(ledgerParties(l, ['r', 'change'], false)).toEqual({ from: 'BI', to: 'B' });
+  });
 });
 
 describe('seenAsBanks', () => {
@@ -42,6 +52,11 @@ describe('seenAsBanks', () => {
   it('a load user\'s UTXO is counted for its bank key; bank and unknown keys stay as they are', () => {
     const ownerOf = (k: string) => ({ kb1: 'stress-n3-01@node3', kb: LOOKUP.B }[k] ?? k);
     expect(seenAsBanks([held('kb1', 5), held('kb', 2), held('zzz', 1)], ownerOf, K)).toEqual([held('kb', 5), held('kb', 2), held('zzz', 1)]);
+  });
+
+  it('a BI load user\'s UTXO is counted for BI\'s key', () => {
+    const ownerOf = (k: string) => ({ kbi0: 'stress-n1-00@node1' }[k] ?? k);
+    expect(seenAsBanks([held('kbi0', 5)], ownerOf, K)).toEqual([held('kbi', 5)]);
   });
 });
 
