@@ -55,7 +55,7 @@ export async function createLock(zeto: Pool, owner: LockParty, to: LockParty, am
   if (receipt?.success !== true) throw new Error(`createLock failed: ${receipt?.failureMessage ?? 'no receipt'}`);
   let states: any[] = [];
   let lockId: string | undefined;
-  for (const end = Date.now() + ms; Date.now() < end; await sleep(1000)) {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(250)) { // examples/swap polls every 1000 ms; 250 ms matches receiptWithin
     const sr = await owner.c.ptx.getStateReceipt(receipt.id);
     states = [...(sr?.confirmed ?? []), ...(sr?.info ?? [])];
     lockId = states.find((s: any) => s.data['lockId'])?.data['lockId'];
