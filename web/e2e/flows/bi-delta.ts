@@ -18,8 +18,9 @@ export const BI_WANT: Record<Model, Record<Flow, Want>> = {
   zeto: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': { rd: 0n, dfabi: AMOUNT['dfabi-issue'] }, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-AMOUNT.award) },
   // DFABI issue is BI -> BI: a new tranche minted to BI's custodian (noto.ts reissue / besu reissueBond), so BI DFABI +amount (3); award sells from the custodian (noto.ts sellerFor)
   noto: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': { rd: 0n, dfabi: AMOUNT['dfabi-issue'] }, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-AMOUNT.award) },
-  // stealth.ts: issues mint straight to the receiver (mintStealth / issueByPartitionStealth); award sells from BI inventory (planInventory)
-  stealth: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': ZERO, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-AMOUNT.award) },
+  // stealth.ts: issues mint straight to the receiver (mintStealth / issueByPartitionStealth); dfabi-issue goes BI -> BI, so BI DFABI +amount (3);
+  // award sells from BI inventory (planInventory)
+  stealth: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': { rd: 0n, dfabi: AMOUNT['dfabi-issue'] }, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-AMOUNT.award) },
   // fabricx.ts:140/227: BI's DFABI leg of an award is an issue (BI holds no DFABI stock), so BI DFABI stays 0
   fabricx: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': ZERO, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(0n) },
   // iroha3 fee cells: the RD (leg 0) payer pays SPONSOR_REIMBURSEMENT = 1 on top of the leg; with no RD leg, pay() adds a companion
