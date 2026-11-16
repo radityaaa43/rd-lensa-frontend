@@ -440,7 +440,8 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
       { label: 'Bundle APS', value: r.bundle_id },
       { label: 'Tx carrier', value: r.carrier_tx },
       { label: 'Blok', value: String(r.height) },
-      ...r.legs.map((l) => ({ label: `Pool ${l.lane === 1 ? 'RD (ds-rd, lane 1)' : 'DFABI (ds-dfabi, lane 2)'}`, value: l.pool_id })),
+      // the lane no longer says which asset a pool holds (four pools), so no party's pool label names one
+      ...r.legs.map((l) => ({ label: `Pool ${l.lane} (ds-${l.lane})`, value: l.pool_id })),
     ];
     const dvp = FLOWS[req.flow].dvp;
     if (shared && (party === req.from || party === req.to)) {
@@ -483,10 +484,13 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     return { flow, asset, amount: main?.amount ?? null, rdAmount: dvp ? rdLeg!.amount : null, counterparty };
   }
 
+  // pools.json v2 (pools[].bundles, up to four pools) or the legacy {rd, dfabi}; a bundle can sit in two pools, with the same height.
   const poolHeights = (): Map<string, number> => {
+    type B = { id: string; height: number }[];
     try {
-      const f = JSON.parse(readFileSync(join(shared!.mounts.pools!, 'pools.json'), 'utf8')) as { rd: { bundles: { id: string; height: number }[] } };
-      return new Map(f.rd.bundles.filter((b) => b.height > 0).map((b) => [b.id, b.height])); // 0 = in flight or never finalized
+      const f = JSON.parse(readFileSync(join(shared!.mounts.pools!, 'pools.json'), 'utf8')) as { pools?: { bundles: B }[]; rd?: { bundles: B }; dfabi?: { bundles: B } };
+      const all = (f.pools ?? [f.rd, f.dfabi]).flatMap((p) => p?.bundles ?? []);
+      return new Map(all.filter((b) => b.height > 0).map((b) => [b.id, b.height])); // 0 = in flight or never finalized
     } catch { return new Map(); }
   };
 
@@ -508,7 +512,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   // A party's own wallet items (the shared-pool mount or the keyless driver's GET /aps/wallet) as history rows.
   function walletHistory(party: PartyId, w: Wallet, want: number): HistoryItem[] {
     const bundles = new Map<string, { height: number; carrier?: string; rd?: string; dfabi?: string; rdDir?: string; dfabiDir?: string; fee?: string }>();
-    for (const i of w.items) bundles.set(i.bundle_id, { ...bundles.get(i.bundle_id), height: i.height, ...(i.carrier_tx ? { carrier: i.carrier_tx } : {}), [i.asset]: i.amount, [`${i.asset}Dir`]: i.direction, ...(i.asset === 'rd' && i.fee && i.fee !== '0' ? { fee: i.fee } : {}) });
+    for (const i of w.items) bundles.set(i.bundle_id, { ...bundles.get(i.bundle_id), height: i.height, ...(i.carrier_tx ? { carrier: i.carrier_tx } : {}), [i.asset]: i.amount, [`${i.asset}Dir`]: i.direction, ...(i.fee && i.fee !== '0' ? { fee: i.fee } : {}) });
     return [...bundles].map(([id, b]): HistoryItem => {
       const j = journal[id];
       const flow = j?.flow ?? (b.rd && b.dfabi ? 'dvp' : null);
