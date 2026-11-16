@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { ModelId } from '../../../server/src/domain.ts';
 import { BATCH_COUNT_MAX as SERVER_COUNT_MAX, BATCH_DEFAULT as SERVER_DEFAULT, BATCH_LIMITS_MIN as SERVER_LIMITS, RATES as SERVER_RATES } from '../../../server/src/stress.ts';
 import type { Meta } from '../api.ts';
-import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, RATES, STOP_TEXT_BATCH, batchBody, batchMaxMinutes, batchPlanned, batchReady, batchRows, batchStatus, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
+import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, RATES, STOP_TEXT_BATCH, batchBody, batchCountOk, batchMaxMinutes, batchPlanned, batchReady, batchRows, batchStatus, bestRows, conclusion, limitsOf, loadOf, maxMinutes, openAllowed, ramp, ready, smallSample, stagesOf, totalMinutes } from './stressForm.ts';
 
 const row = (model: ModelId, tps: number, users = 4, p95Ms = 2000) => ({ model, stage: { tps, users, p95Ms } });
 
@@ -93,6 +93,12 @@ test('batch stop reasons read in batch terms', () => {
   expect(STOP_TEXT_BATCH.limit).toBe('Berhenti di batas waktu per model');
   expect(STOP_TEXT_BATCH.done).toBe('Semua transaksi selesai');
   expect(STOP_TEXT_BATCH.errors).toBe('Lebih dari 20% transaksi gagal');
+});
+
+test('batchCountOk: only an integer 1..BATCH_COUNT_MAX', () => {
+  expect(batchCountOk(1)).toBe(true);
+  expect(batchCountOk(BATCH_COUNT_MAX)).toBe(true);
+  for (const n of [undefined, 0, -1, 1.5, BATCH_COUNT_MAX + 1, NaN]) expect(batchCountOk(n)).toBe(false);
 });
 
 test('batchReady: every model holds ceil(count / users) transfers per load user', () => {

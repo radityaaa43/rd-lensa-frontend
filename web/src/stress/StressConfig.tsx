@@ -2,7 +2,7 @@ import type { ModelId } from '../../../server/src/domain.ts';
 import type { StressConfig as Cfg } from '../../../server/src/stress.ts';
 import type { Capacity, Meta } from '../api.ts';
 import { COLOR } from './RunRows.tsx';
-import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, LOAD_LABEL, PUBLIC_MAX_USERS, RATES, STAGES, USERS, WARMUP_S, batchMaxMinutes, batchPool, batchReady, limitsOf, loadOf, openAllowed, ready, totalMinutes } from './stressForm.ts';
+import { BATCH_COUNT_MAX, BATCH_DEFAULT, BATCH_LIMITS_MIN, LOAD_LABEL, PUBLIC_MAX_USERS, RATES, STAGES, USERS, WARMUP_S, batchCountOk, batchMaxMinutes, batchPool, batchReady, limitsOf, loadOf, openAllowed, ready, totalMinutes } from './stressForm.ts';
 
 export type Form = Cfg;
 export interface ConfigProps {
@@ -90,7 +90,7 @@ export function StressConfig(p: ConfigProps) {
             </select>
             <p className="small">
               BI dan bank mengirim bersamaan, masing-masing tepat {(form.count ?? 0).toLocaleString('id-ID')} transaksi ke pihak lain; tiap transaksi ke node lain yang diundi.
-              {' '}Paling lama {batchMaxMinutes(form.models.length, form.modelLimitMin ?? BATCH_DEFAULT.modelLimitMin)} menit (batas per model x jumlah model){meta.publicTx ? '; satu run paling lama 15 menit, dan 30 menit jeda sebelum run berikutnya' : ''}.
+              {' '}Paling lama {batchMaxMinutes(form.models.length, form.modelLimitMin ?? BATCH_DEFAULT.modelLimitMin)} menit (batas per model x jumlah model){meta.publicTx ? '; 30 menit jeda sebelum run berikutnya' : ''}.
             </p>
             {noBi.map((n) => <p className="small" key={n.model}>{meta.models[n.model].name}: BI tidak ikut{n.reason ? ` — ${n.reason}` : ''}</p>)}
             <p className="small">Model berhenti lebih awal bila semua transaksi selesai, batas waktu per model habis, atau lebih dari 20% transaksi gagal.</p>
@@ -129,7 +129,7 @@ export function StressConfig(p: ConfigProps) {
       ))}
       <div>
         {batch && !running && (
-          <button className="btn2" style={{ marginBottom: 8, background: 'var(--sheet)', color: 'var(--navy)', border: '1px solid var(--navy)' }} disabled={locked || form.models.length === 0} onClick={p.onPrepare}>{p.preparing ? 'Menyiapkan saldo…' : 'Siapkan saldo'}</button>
+          <button className="btn2" style={{ marginBottom: 8, background: 'var(--sheet)', color: 'var(--navy)', border: '1px solid var(--navy)' }} disabled={locked || form.models.length === 0 || !batchCountOk(form.count)} onClick={p.onPrepare}>{p.preparing ? 'Menyiapkan saldo…' : 'Siapkan saldo'}</button>
         )}
         <button className={running ? 'btn2 stop' : 'btn2'} disabled={!running && (p.starting || p.preparing || !canStart)} onClick={p.onGo}>
           {running ? 'Hentikan' : 'Mulai stress test'}

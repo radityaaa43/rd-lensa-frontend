@@ -38,8 +38,9 @@ export const ready = (models: ModelId[], capacity: Partial<Record<ModelId, numbe
 export const limitsOf = (meta: Meta, models: ModelId[]) => models.flatMap((m) => { const l = loadOf(meta, m); return l.limit ? [{ model: m, mode: l.mode, limit: l.limit }] : []; });
 
 // a model can run a batch when each load user holds its share of `count` (a model capped at fewer senders than `users` has a bigger share)
+export const batchCountOk = (count?: number) => Number.isInteger(count) && count! >= 1 && count! <= BATCH_COUNT_MAX;
 export const batchReady = (models: ModelId[], capacity: Partial<Record<ModelId, number>>, count: number, users: number, meta?: Meta) =>
-  models.length > 0 && Number.isInteger(count) && count >= 1 && count <= BATCH_COUNT_MAX &&
+  models.length > 0 && batchCountOk(count) &&
   models.every((m) => (capacity[m] ?? 0) >= Math.ceil(count / Math.min(users, (meta && loadOf(meta, m).maxUsers) || users)));
 // load users per party of a batch: the chosen pool when sending at a rate, else one (same as server batchUsers)
 export const batchPool = (c: Pick<StressConfig, 'pace' | 'users'>) => (c.pace === 'rate' ? c.users : 1);

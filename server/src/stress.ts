@@ -248,7 +248,7 @@ export class StressRun extends EventEmitter {
     } catch (e) {
       return skip(e instanceof Error ? e.message : String(e));
     }
-    if (units0 < 1) return skip('Saldo user beban belum siap, jalankan preflight --prepare');
+    if (units0 < 1) return skip(batch ? `Saldo user beban belum cukup untuk ${this.cfg.count} transaksi per pihak, tekan Siapkan saldo dulu` : 'Saldo user beban belum siap, jalankan preflight --prepare');
     if (batch) return this.runBatch(st, adapter, users, units0);
 
     const now = () => this.clock.now();

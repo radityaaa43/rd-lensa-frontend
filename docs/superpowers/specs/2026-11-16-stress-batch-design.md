@@ -1,6 +1,6 @@
 # Stress test mode Batch: BI, A, B, C bertransaksi bersamaan
 
-Status: draf final, menunggu persetujuan user. Tanggal: 2026-11-16.
+Status: disetujui user 2026-11-16; Rilis 1 diimplementasi di branch feat/stress-batch. Tanggal: 2026-11-16.
 
 ## 1. Maksud
 User ingin satu uji beban yang terasa seperti hari sibuk yang nyata: keempat pihak (BI, Bank A, Bank B, Bank C)

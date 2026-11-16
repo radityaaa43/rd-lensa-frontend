@@ -290,6 +290,13 @@ const batch = (o: Partial<StressConfig> = {}): StressConfig => cfg({ mode: 'batc
 const PARTIES = ['BI', 'A', 'B', 'C'] as const;
 const four = { loadParties: [...PARTIES] };
 
+test('batch: a model without balance is skipped with the Siapkan saldo text, not the preflight one', async () => {
+  const z = fakeAdapter('zeto', { capacity: 0, ...four });
+  const snap = await finish(new StressRun(batch(), { zeto: z }));
+  expect(snap.models.zeto!.status).toBe('skipped');
+  expect(snap.models.zeto!.reason).toBe('Saldo user beban belum cukup untuk 5 transaksi per pihak, tekan Siapkan saldo dulu');
+});
+
 test('batch serial: every party sends exactly count, all at once from t0', async () => {
   const z = fakeAdapter('zeto', { tps: 1, ...four });
   const s = spy(z);
