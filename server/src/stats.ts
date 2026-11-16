@@ -48,15 +48,17 @@ export function stageSummary(recs: Rec[], t0: number, start: number, end: number
 }
 
 // One party's slice of a batch run, or all parties together. durationMs: t0 -> its last result; tps = ok / duration.
-export interface PartyBatch { ok: number; failed: number; tps: number; p50Ms: number; p95Ms: number; maxMs: number; durationMs: number }
+// p50/p95/max: end to end (asked -> final, Lensa's queue included); svc*: service (submitted -> final), the Hyperledger PSWG latency.
+export interface PartyBatch { ok: number; failed: number; tps: number; p50Ms: number; p95Ms: number; maxMs: number; svcP50Ms: number; svcP95Ms: number; durationMs: number }
 
-// Batch mode: every party sent its transfers at once at t0. Latency (issued -> done) counts successes only.
+// Batch mode: every party sent its transfers at once at t0. Latency counts successes only.
 export function batchSummary(recs: Rec[], t0: number, end: number, parties: PartyId[]): { total: PartyBatch; parties: Partial<Record<PartyId, PartyBatch>> } {
   const slice = (rs: Rec[], noneMs: number): PartyBatch => {
     const ok = rs.filter((r) => r.ok);
     const lat = sortNum(ok.map((r) => r.doneAt - r.issuedAt));
+    const svc = sortNum(ok.map((r) => r.doneAt - r.submittedAt));
     const durationMs = rs.length ? Math.max(...rs.map((r) => r.doneAt)) - t0 : noneMs;
-    return { ok: ok.length, failed: rs.length - ok.length, tps: durationMs ? ok.length / (durationMs / 1000) : 0, p50Ms: pct(lat, 0.5), p95Ms: pct(lat, 0.95), maxMs: lat.at(-1) ?? 0, durationMs };
+    return { ok: ok.length, failed: rs.length - ok.length, tps: durationMs ? ok.length / (durationMs / 1000) : 0, p50Ms: pct(lat, 0.5), p95Ms: pct(lat, 0.95), maxMs: lat.at(-1) ?? 0, svcP50Ms: pct(svc, 0.5), svcP95Ms: pct(svc, 0.95), durationMs };
   };
   return { total: slice(recs, end - t0), parties: Object.fromEntries(parties.map((p) => [p, slice(recs.filter((r) => r.bank === p), 0)])) };
 }
