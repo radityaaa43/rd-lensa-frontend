@@ -4,7 +4,10 @@
 export type Model = 'zeto' | 'noto' | 'stealth' | 'iroha3';
 export type Flow = 'rd-issue' | 'rd-transfer' | 'dfabi-issue' | 'dfabi-transfer' | 'dvp' | 'award';
 export interface Bal { rd: bigint; dfabi: bigint }
-interface Want { rd: bigint | null; dfabi: bigint | null }
+// fee: this cell may also be one lower: iroha3 official APS pays the 1-unit sponsor reimbursement from the leg-0 payer in leg 0's
+// asset, and leg 0 is the ds-1 leg, whose placement the driver randomizes, so BI pays it only when its own leg (the companion BI->BI 1
+// of a bank pay, or the DFABI leg of an award) lands in ds-1.
+interface Want { rd: bigint | null; dfabi: bigint | null; fee?: 'rd' | 'dfabi' }
 export interface Verdict { cell: 'RD' | 'DFABI'; status: 'PASS' | 'FAIL' | 'SKIP' | 'NOT-ASSERTED'; note: string }
 
 // The amount of each flow: flows.ts builds its CASES from this, so the expected deltas below can never drift from what the flow sends.
@@ -21,12 +24,11 @@ export const BI_WANT: Record<Model, Record<Flow, Want>> = {
   // stealth.ts: issues mint straight to the receiver (mintStealth / issueByPartitionStealth); dfabi-issue goes BI -> BI, so BI DFABI +amount (3);
   // award sells from BI inventory (planInventory)
   stealth: { 'rd-issue': ZERO, 'rd-transfer': ZERO, 'dfabi-issue': { rd: 0n, dfabi: AMOUNT['dfabi-issue'] }, 'dfabi-transfer': ZERO, dvp: ZERO, award: award(-AMOUNT.award) },
-  // iroha3 fee cells: the RD (leg 0) payer pays SPONSOR_REIMBURSEMENT = 1 on top of the leg; with no RD leg, pay() adds a companion
-  // BI->BI 1 RD leg, so BI loses the 1. Source: iroha3-rd-node-build@c1afa67, aps.rs:105 (constant), aps.rs:1143-1147 (change),
-  // pools.rs:300-306 (companion leg); decided by lead 2026-11-11 from iroha's proof. rd-issue: BI is the RD payer, -(amount + 1).
-  // DFABI: dfabi-issue -amount comes from BI's DFABI pool (pre-flow skip in `short`); the other two rows move no BI DFABI.
-  // dvp/award: the buyer pays the 1, so BI shows the sale only.
-  iroha3: { 'rd-issue': { rd: -(AMOUNT['rd-issue'] + 1n), dfabi: 0n }, 'rd-transfer': ZERO, 'dfabi-issue': { rd: -1n, dfabi: -AMOUNT['dfabi-issue'] }, 'dfabi-transfer': { rd: -1n, dfabi: 0n }, dvp: ZERO, award: award(-AMOUNT.award) },
+  // iroha3 (official APS, iroha3-rd-node-build #44 / D18): the leg-0 payer pays SPONSOR_REIMBURSEMENT = 1 in leg 0's asset; leg 0
+  // is the ds-1 leg (canonical order, random placement). A pay has a same-asset companion BI->BI 1 in the other dataspace, so BI
+  // pays the 1 when the companion is leg 0. rd-issue: BI pays every leg, -(amount + 1). dvp has no BI leg.
+  // award: BI's DFABI leg is leg 0 half the time (fee 1 DFABI). dfabi-issue is disabled on iroha3 (no mint under APS).
+  iroha3: { 'rd-issue': { rd: -(AMOUNT['rd-issue'] + 1n), dfabi: 0n }, 'rd-transfer': { ...ZERO, fee: 'rd' }, 'dfabi-issue': { rd: -1n, dfabi: -AMOUNT['dfabi-issue'] }, 'dfabi-transfer': { ...ZERO, fee: 'dfabi' }, dvp: ZERO, award: { ...award(-AMOUNT.award), fee: 'dfabi' } },
 };
 
 // BI's DFABI stock BEFORE the flow that a platform needs, else the test is skipped up front (flows.ts, `short`):
@@ -57,7 +59,8 @@ export function biVerdicts(model: Model, flow: Flow, before: Bal, after: Bal): V
   return cells.map(([cell, w, got, stock]): Verdict => {
     if (w === null) return { cell, status: 'NOT-ASSERTED', note: 'not asserted (out of scope)' };
     if (stock !== null && w < 0n && stock < -w) return { cell, status: 'SKIP', note: `SKIP: precondition (stock=${stock})` };
-    return got === w ? { cell, status: 'PASS', note: `delta ${got}` } : { cell, status: 'FAIL', note: `delta ${got}, want ${w}` };
+    const ok = got === w || (want.fee === cell.toLowerCase() && got === w - 1n);
+    return ok ? { cell, status: 'PASS', note: `delta ${got}` } : { cell, status: 'FAIL', note: `delta ${got}, want ${w}${want.fee === cell.toLowerCase() ? ` or ${w - 1n}` : ''}` };
   });
 }
 
@@ -73,8 +76,9 @@ export function payerNeeds(model: Model, flow: Flow, from: PartyId, to: PartyId)
   if (model !== 'iroha3') return [];
   const a = AMOUNT[flow];
   if (flow === 'rd-issue' || flow === 'rd-transfer') return [{ party: from, asset: 'RD', min: a + 1n }];
-  if (flow === 'dfabi-issue' || flow === 'dfabi-transfer') return [{ party: from, asset: 'DFABI', min: a }];
-  return [{ party: from, asset: 'DFABI', min: a }, { party: to, asset: 'RD', min: a * PRICE_PER_UNIT + 1n }]; // dvp, award: buyer pays RD
+  // the DFABI payer may be the leg-0 payer too (fee 1 DFABI), so its note must also cover the 1
+  if (flow === 'dfabi-issue' || flow === 'dfabi-transfer') return [{ party: from, asset: 'DFABI', min: a + 1n }];
+  return [{ party: from, asset: 'DFABI', min: a + 1n }, { party: to, asset: 'RD', min: a * PRICE_PER_UNIT + 1n }]; // dvp, award: buyer pays RD
 }
 export function payerShortfalls(needs: PayerNeed[], bals: Partial<Record<PartyId, Bal>>): PayerNeed[] {
   return needs.filter((n) => { const b = bals[n.party]; return b !== undefined && (n.asset === 'RD' ? b.rd : b.dfabi) <= n.min; });

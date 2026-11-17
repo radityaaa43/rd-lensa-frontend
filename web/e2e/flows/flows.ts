@@ -97,7 +97,9 @@ export function defineFlows(model: Model) {
       }
 
       // iroha3: the RD-leg payer (not BI) pays the sponsor fee 1, so its history row must carry fee "1" (HistoryItem.fee, driver wallet item `fee`)
-      const feePayers = model === 'iroha3' ? payerNeeds(model, c.flow, c.from, c.to).filter((n) => n.asset === 'RD' && n.party !== 'BI').map((n) => n.party) : [];
+      // iroha3 official APS: the 1-unit fee is paid by the leg-0 (ds-1) payer in its asset: a pay's sender or BI (companion leg 0),
+      // a dvp's RD buyer or DFABI seller. Exactly one of these parties' new history rows carries fee "1".
+      const feePayers: P[] = model === 'iroha3' ? [...new Set<P>(c.dvp ? [c.to, c.from] : [c.from, 'BI'])] : [];
       const payerBefore: Partial<Record<P, Set<string>>> = {};
       for (const p of feePayers) payerBefore[p] = (await biState(request, model, p)).ids;
 
@@ -179,6 +181,7 @@ export function defineFlows(model: Model) {
           expect.soft(v.status, `BI ${v.cell}: ${v.note}`).not.toBe('FAIL');
         }
       }
+      const fees: string[] = [];
       for (const p of feePayers) {
         let fresh: { id: string; fee?: string } | undefined;
         for (let i = 0; i < 24 && !fresh; i++) {
@@ -187,8 +190,9 @@ export function defineFlows(model: Model) {
         }
         console.log(`FEE ${model} ${c.flow} ${p}: ${fresh ? `new history item ${fresh.id.slice(0, 12)} fee=${fresh.fee ?? 'absent'}` : 'no new history item'}`);
         info.annotations.push({ type: `fee ${p}`, description: `${fresh?.fee ?? 'absent'}` });
-        expect.soft(fresh?.fee, `${p}: the RD payer's history row carries fee "1"`).toBe('1');
+        if (fresh?.fee === '1') fees.push(p);
       }
+      if (feePayers.length) expect.soft(fees, `exactly one leg-0 payer of ${feePayers.join('/')} carries fee "1" in its history row`).toHaveLength(1);
       expect(errors, 'error di console/halaman').toEqual([]);
     });
   }
