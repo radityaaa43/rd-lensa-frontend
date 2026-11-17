@@ -168,11 +168,14 @@ export function defineFlows(model: Model) {
 
       // 4. BI's own balance moved as the table in bi-delta.ts says; wait for BI's history to show the new tx first (as the sweep did)
       let biAfter = await biState(request, model);
-      for (let i = 0; i < 24 && ![...biAfter.ids].some((id) => !biBefore.ids.has(id)); i++) {
+      const biParty = model !== 'iroha3' || c.from === 'BI' || c.to === 'BI';
+      for (let i = 0; i < 24 && biParty && ![...biAfter.ids].some((id) => !biBefore.ids.has(id)); i++) {
         await page.waitForTimeout(5_000);
         biAfter = await biState(request, model);
       }
-      expect.soft([...biAfter.ids].some((id) => !biBefore.ids.has(id)), 'BI: transaksi baru belum terbaca di riwayat BI').toBe(true);
+      // iroha3: BI's history lists only bundles BI takes part in; on a bank<->bank flow BI's only movement is the companion BI->BI 1
+      // (and, when the companion is leg 0, the fee), which the driver writes no row for (iroha3-rd-node-build pools.rs "only the fee moved, so no row").
+      if (biParty) expect.soft([...biAfter.ids].some((id) => !biBefore.ids.has(id)), 'BI: transaksi baru belum terbaca di riwayat BI').toBe(true);
       expect.soft(biBefore.bal !== null && biAfter.bal !== null, 'BI: saldo terbaca').toBe(true);
       if (biBefore.bal && biAfter.bal) {
         for (const v of biVerdicts(model, c.flow, biBefore.bal, biAfter.bal)) {
@@ -192,7 +195,10 @@ export function defineFlows(model: Model) {
         info.annotations.push({ type: `fee ${p}`, description: `${fresh?.fee ?? 'absent'}` });
         if (fresh?.fee === '1') fees.push(p);
       }
-      if (feePayers.length) expect.soft(fees, `exactly one leg-0 payer of ${feePayers.join('/')} carries fee "1" in its history row`).toHaveLength(1);
+      // BI as the leg-0 companion pays the fee without a history row: then its balance shows it (biVerdicts: the delta one below the table).
+      const biPaidByBalance = model === 'iroha3' && feePayers.includes('BI') && !fees.includes('BI') && biBefore.bal !== null && biAfter.bal !== null
+        && biVerdicts(model, c.flow, biBefore.bal, biAfter.bal).some((v) => v.status === 'PASS' && /^delta -1$/.test(v.note));
+      if (feePayers.length) expect.soft(fees.length + (biPaidByBalance ? 1 : 0), `exactly one leg-0 payer of ${feePayers.join('/')} pays fee "1" (history row, or BI's balance as companion)`).toBe(1);
       expect(errors, 'error di console/halaman').toEqual([]);
     });
   }
