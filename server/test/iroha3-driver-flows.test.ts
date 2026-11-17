@@ -42,6 +42,7 @@ function fakeDriver() {
     apsIntent: async () => { throw new Error('aps is off'); },
     apsSubmit: async () => { throw new Error('aps is off'); },
     apsWallet: async () => { throw new Error('aps is off'); },
+    apsRecords: async () => { throw new Error('aps is off'); },
   };
   return { driver, calls };
 }
