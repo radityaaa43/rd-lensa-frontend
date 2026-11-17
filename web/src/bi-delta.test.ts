@@ -6,9 +6,9 @@ const FLOWS: Flow[] = ['rd-issue', 'rd-transfer', 'dfabi-issue', 'dfabi-transfer
 const bal = (rd: bigint, dfabi: bigint) => ({ rd, dfabi });
 
 describe('BI expected delta table', () => {
-  it('has 14 rows where both cells are asserted as 0 (draft: 21 of 30; zeto and stealth dfabi-issue now BI -> BI)', () => {
+  it('has 15 rows where both cells are asserted as 0 (draft: 21 of 30; zeto and stealth dfabi-issue now BI -> BI; iroha3 dfabi-transfer 0 with a leg-0 fee cell)', () => {
     const zero = MODELS.flatMap((m) => FLOWS.filter((f) => BI_WANT[m][f].rd === 0n && BI_WANT[m][f].dfabi === 0n));
-    expect(zero).toHaveLength(14);
+    expect(zero).toHaveLength(15);
   });
   it('stealth dfabi-issue lands in BI inventory: BI DFABI +3, RD 0', () => {
     expect(BI_WANT.stealth['dfabi-issue']).toEqual({ rd: 0n, dfabi: 3n });
@@ -16,8 +16,12 @@ describe('BI expected delta table', () => {
   it('zeto dfabi-issue lands in BI inventory: BI DFABI +3, RD 0', () => {
     expect(BI_WANT.zeto['dfabi-issue']).toEqual({ rd: 0n, dfabi: 3n });
   });
-  it('asserts the iroha3 fee cells: rd-issue -1001, dfabi-issue -1, dfabi-transfer -1 (BI RD)', () => {
-    expect([BI_WANT.iroha3['rd-issue'].rd, BI_WANT.iroha3['dfabi-issue'].rd, BI_WANT.iroha3['dfabi-transfer'].rd]).toEqual([-1001n, -1n, -1n]);
+  it('asserts the iroha3 fee cells: rd-issue -1001; bank pays and award may cost BI the leg-0 fee in that asset', () => {
+    expect([BI_WANT.iroha3['rd-issue'].rd, BI_WANT.iroha3['dfabi-issue'].rd]).toEqual([-1001n, -1n]);
+    expect(BI_WANT.iroha3['rd-transfer']).toEqual({ rd: 0n, dfabi: 0n, fee: 'rd' });
+    expect(BI_WANT.iroha3['dfabi-transfer']).toEqual({ rd: 0n, dfabi: 0n, fee: 'dfabi' });
+    expect(BI_WANT.iroha3.award).toEqual({ rd: 1_000_000n, dfabi: -1n, fee: 'dfabi' });
+    expect(BI_WANT.iroha3.dvp).toEqual({ rd: 0n, dfabi: 0n });
   });
 });
 
@@ -51,7 +55,15 @@ describe('biVerdicts', () => {
       { cell: 'DFABI', status: 'PASS', note: 'delta 0' },
     ]);
     expect(biVerdicts('iroha3', 'rd-issue', bal(5000n, 5n), bal(4000n, 5n))[0]).toMatchObject({ status: 'FAIL', note: 'delta -1000, want -1001' });
-    expect(biVerdicts('iroha3', 'dfabi-transfer', bal(5n, 5n), bal(5n, 5n))[0]).toMatchObject({ status: 'FAIL', note: 'delta 0, want -1' });
+  });
+  it('iroha3 leg-0 fee cell: the exact delta or one lower PASS, two lower FAIL; a cell without fee stays exact', () => {
+    expect(biVerdicts('iroha3', 'dfabi-transfer', bal(5n, 5n), bal(5n, 5n)).map((x) => x.status)).toEqual(['PASS', 'PASS']);
+    expect(biVerdicts('iroha3', 'dfabi-transfer', bal(5n, 5n), bal(5n, 4n)).map((x) => x.status)).toEqual(['PASS', 'PASS']);
+    expect(biVerdicts('iroha3', 'dfabi-transfer', bal(5n, 5n), bal(5n, 3n))[1]).toMatchObject({ status: 'FAIL', note: 'delta -2, want 0 or -1' });
+    expect(biVerdicts('iroha3', 'dfabi-transfer', bal(5n, 5n), bal(4n, 5n))[0]).toMatchObject({ status: 'FAIL', note: 'delta -1, want 0' });
+    expect(biVerdicts('iroha3', 'rd-transfer', bal(5n, 5n), bal(4n, 5n)).map((x) => x.status)).toEqual(['PASS', 'PASS']);
+    expect(biVerdicts('iroha3', 'award', bal(0n, 5n), bal(1_000_000n, 3n)).map((x) => x.status)).toEqual(['PASS', 'PASS']);
+    expect(biVerdicts('iroha3', 'award', bal(0n, 5n), bal(999_999n, 4n))[0]).toMatchObject({ status: 'FAIL' });
   });
   it('iroha3 dfabi-issue: RD -1 and DFABI -3 PASS', () => {
     expect(biVerdicts('iroha3', 'dfabi-issue', bal(10n, 10n), bal(9n, 7n)).map((x) => x.status)).toEqual(['PASS', 'PASS']);
@@ -62,19 +74,19 @@ describe('biVerdicts', () => {
 });
 
 describe('iroha3 payer side', () => {
-  it('payerNeeds: RD leg needs one note > amount + 1, DFABI leg > amount; dvp and award add the buyer RD leg', () => {
+  it('payerNeeds: RD leg needs one note > amount + 1, DFABI leg > amount + 1 (it may be leg 0); dvp and award add the buyer RD leg', () => {
     expect(payerNeeds('iroha3', 'rd-transfer', 'A', 'B')).toEqual([{ party: 'A', asset: 'RD', min: 1001n }]);
-    expect(payerNeeds('iroha3', 'dfabi-transfer', 'A', 'B')).toEqual([{ party: 'A', asset: 'DFABI', min: 2n }]);
-    expect(payerNeeds('iroha3', 'dvp', 'A', 'B')).toEqual([{ party: 'A', asset: 'DFABI', min: 1n }, { party: 'B', asset: 'RD', min: 1_000_001n }]);
-    expect(payerNeeds('iroha3', 'award', 'BI', 'C')).toEqual([{ party: 'BI', asset: 'DFABI', min: 1n }, { party: 'C', asset: 'RD', min: 1_000_001n }]);
+    expect(payerNeeds('iroha3', 'dfabi-transfer', 'A', 'B')).toEqual([{ party: 'A', asset: 'DFABI', min: 3n }]);
+    expect(payerNeeds('iroha3', 'dvp', 'A', 'B')).toEqual([{ party: 'A', asset: 'DFABI', min: 2n }, { party: 'B', asset: 'RD', min: 1_000_001n }]);
+    expect(payerNeeds('iroha3', 'award', 'BI', 'C')).toEqual([{ party: 'BI', asset: 'DFABI', min: 2n }, { party: 'C', asset: 'RD', min: 1_000_001n }]);
   });
   it('payerNeeds: other platforms have no payer-side precondition', () => {
     expect(payerNeeds('zeto', 'dvp', 'A', 'B')).toEqual([]);
   });
   it('payerShortfalls: a total at or below the min is short, above it is not, an unreadable balance is not judged', () => {
     const needs = payerNeeds('iroha3', 'dvp', 'A', 'B');
-    expect(payerShortfalls(needs, { A: bal(0n, 1n), B: bal(1_000_001n, 0n) })).toEqual(needs);
-    expect(payerShortfalls(needs, { A: bal(0n, 2n), B: bal(1_000_002n, 0n) })).toEqual([]);
+    expect(payerShortfalls(needs, { A: bal(0n, 2n), B: bal(1_000_001n, 0n) })).toEqual(needs);
+    expect(payerShortfalls(needs, { A: bal(0n, 3n), B: bal(1_000_002n, 0n) })).toEqual([]);
     expect(payerShortfalls(needs, {})).toEqual([]);
   });
   it('parseRefusal reads the driver refusal and ignores other errors', () => {
