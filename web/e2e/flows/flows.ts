@@ -157,6 +157,8 @@ export function defineFlows(model: Model) {
         }
         await expect.soft(col.locator('details.seal.row'), `${id}: tidak boleh tersegel`).toHaveCount(0);
         await expect.soft(col.locator(`.badge.${want}`), `${id}: verdict ${want}`).toHaveCount(1);
+        // iroha3: BI outside the flow reads its auditor records (verdict reported, rendered as the clear badge "Laporan terverifikasi")
+        if (model === 'iroha3' && id === 'BI' && c.from !== 'BI' && c.to !== 'BI') await expect.soft(col.locator('.badge.clear'), 'BI: laporan catatan audit').toHaveText('Laporan terverifikasi');
         expect.soft(digits(await col.locator('.lamt').innerText()), `${id}: nominal`).toContain(amountDigits);
         if (c.dvp && !outsider) expect.soft(digits(await col.locator('.lrd').innerText()), `${id}: kaki RD`).toContain(rdDigits);
       }

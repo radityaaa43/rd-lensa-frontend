@@ -38,6 +38,21 @@ async function fleet(reply: (party: string, req: { method: string; url: string; 
 }
 
 describe('driverClient APS', () => {
+  it('apsRecords reads GET /records/<bundle> at the BI gateway only (never a bank), validates the id first, and rejects a non-array or a non-200', async () => {
+    const id = 'ab'.repeat(32);
+    const recs = [{ bundle_id: id, leg: 0, verdict: 'approved', payer: 'p', recipient: 'r', asset: 'a', amount: '3' }];
+    let { client, seen } = await fleet(() => ({ status: 200, json: recs }));
+    expect(await client.apsRecords(id)).toEqual(recs);
+    expect(seen).toMatchObject([{ party: 'BI', method: 'GET', url: `/records/${id}` }]);
+    await expect(client.apsRecords('../x')).rejects.toThrow(/64/);
+    await expect(client.apsRecords(id.slice(1))).rejects.toThrow(/64/);
+    expect(seen).toHaveLength(1);
+    ({ client } = await fleet(() => ({ status: 403, json: { error: 'x' } })));
+    await expect(client.apsRecords(id)).rejects.toThrow(/HTTP 403/);
+    ({ client } = await fleet(() => ({ status: 200, json: { not: 'an array' } })));
+    await expect(client.apsRecords(id)).rejects.toThrow(/tidak dikenali/);
+  });
+
   it('apsIntent posts the paying party\'s own terms to THAT party\'s driver: recipient as public key, amount as a STRING', async () => {
     const { client, seen } = await fleet(() => ({ status: 200, json: { intent: INTENT } }));
     await client.apsIntent('B', { intent: INTENT, asset: 'rd', to: 'A', amount: 5n });

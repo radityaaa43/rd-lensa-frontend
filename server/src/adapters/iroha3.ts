@@ -120,7 +120,7 @@ interface TxGet {
   result_hash?: string;
   entrypoint: { External: { payload: { authority: string; creation_time_ms?: number; time_to_live_ms?: number; instructions: { Instructions: string[] } } } };
 }
-interface Ctx { sid?: string; aps?: ApsResult }
+interface Ctx { sid?: string; aps?: ApsResult; bundleId?: string }
 
 // What history() needs on top of the CLI: each party's operator key (signs the Torii account reads) and the decoder context.
 // `init` runs on the first history() call, not at startup: a broken op toml must not take the whole server down.
@@ -316,7 +316,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
     emit(1, 0);
     emit(2, 0); // the coordinator answers once the bundle is finalized
     emit(3, 0);
-    return { txHash: done.txHash, block: done.height, steps, context: {} satisfies Ctx };
+    return { txHash: done.txHash, block: done.height, steps, context: { bundleId: done.bundleId } satisfies Ctx };
   }
   async function runViaDrivers(req: FlowRequest, amount: bigint, emit: (i: number, ms: number) => void, steps: StepEvent[]): Promise<FlowResult> {
     const f = FLOWS[req.flow];
@@ -469,9 +469,10 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
 
   // One bundle as BI's audit records show it. A BI -> BI leg of 1 is the companion leg of a single-asset payment (APS needs
   // two dataspaces), not a movement.
-  const walletParty = aps ? new Map(Object.entries(aps.wallets).map(([p, id]) => [id, p as PartyId])) : new Map<string, PartyId>();
-  function fromRecords(records: AuditRecord[]) {
-    const companion = (x: AuditRecord) => x.payer === aps!.wallets.BI && x.recipient === aps!.wallets.BI && x.amount === '1';
+  // `ids`: each party's account id as the audit records print it (the APS wallets; in the keyless pod the canonical accounts of the state).
+  function fromRecords(records: AuditRecord[], ids: Record<PartyId, string> = aps!.wallets) {
+    const walletParty = new Map(Object.entries(ids).map(([p, id]) => [id, p as PartyId]));
+    const companion = (x: AuditRecord) => x.payer === ids.BI && x.recipient === ids.BI && x.amount === '1';
     const real = records.filter((x) => !companion(x));
     const rdLeg = real.find((x) => x.asset === s.assets.RD);
     const dfabiLeg = real.find((x) => x.asset === s.assets.DFABI);
@@ -527,7 +528,7 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
   }
 
   async function lens(req: FlowRequest, result: FlowResult, party: PartyId): Promise<LensView> {
-    const { sid, aps: bundle } = result.context as Ctx;
+    const { sid, aps: bundle, bundleId } = result.context as Ctx;
     if (bundle) return privateLens(req, bundle, party);
     const role = roleOf(req, party);
     const dvp = FLOWS[req.flow].dvp;
@@ -539,6 +540,19 @@ export function createIroha3Adapter(s: Iroha3State, cli: Cli, read?: ReadDeps, a
           method: 'Pihak transaksi: nominal dan lawan transaksi dari permintaan Lensa; hash dan blok dari jawaban driver. Isi transaksi tidak dibaca ulang dari node (tanpa kunci operator, NOT-RUN).' };
       }
       if (driver.aps && party !== 'BI') return { party, role, verdict: 'sealed', ...nothing, method: `Node validator ${PARTIES[party].name} hanya menyimpan bundle, commitment note dan bukti STARK. Nominal dan pihak tidak ada di ledger.` };
+      if (driver.aps) { // BI, not a party: its auditor records (GET /records/<bundle> at BI's gateway) hold the legs' payer, recipient and amount
+        const unread = { party, role, verdict: 'partial' as const, ...nothing, method: 'Catatan audit BI untuk transaksi ini tidak dapat dibaca saat ini; nominal dan pihak belum ditampilkan.' };
+        if (!bundleId) return unread;
+        try {
+          const { amount, rdAmount, counterparty } = fromRecords(await driver.apsRecords(bundleId), s.accounts);
+          if (amount === null) throw new Error('catatan audit kosong');
+          return { party, role, verdict: 'reported', amount, rdAmount, counterparty, onChain: [...onChain, { label: 'Bundle APS', value: bundleId }],
+            method: 'BI membuka kapsul audit tiap leg (X25519 + ML-KEM-768) di layanan bi-auditor sebelum menyetujui. Nominal dan pihak dibaca dari catatan audit BI, bukan dari ledger.' };
+        } catch (e) {
+          console.error('[iroha3] catatan audit BI tidak terbaca:', errMsg(e));
+          return unread;
+        }
+      }
       return { party, role, verdict: 'partial', ...nothing, method: 'Pembacaan oleh pihak ini belum dijalankan (NOT-RUN): tanpa CLI dan kunci operator, Lensa tidak dapat membaca catatan audit atau node.' };
     }
     const tx = await readOn(party, result.txHash);

@@ -1,6 +1,6 @@
 import type { PartyId } from '../domain.ts';
 import { irohaFetch } from '../gateway.ts';
-import type { Wallet } from './iroha3-aps.ts';
+import type { AuditRecord, Wallet } from './iroha3-aps.ts';
 
 // Client of the per-party Iroha 3 drivers (iroha3 plan S16; contract: iroha3-rd-node-build main fbfbdf3 driver/src/server.rs, http.rs).
 // Each driver (ns rd-iroha3-<party>, port 8091) signs with ITS OWN account: Lensa signs nothing here, it only posts the public terms of the
@@ -24,6 +24,7 @@ export interface DriverClient {
   apsIntent(party: PartyId, t: { intent: string; asset: ApsAsset; to: PartyId; amount: bigint }): Promise<{ intent: string }>;
   apsSubmit(party: PartyId, body: ApsSubmit): Promise<ApsDone>;
   apsWallet(party: PartyId): Promise<Wallet>;
+  apsRecords(bundleId: string): Promise<AuditRecord[]>; // BI auditor's records of one bundle: GET /records/<id> at BI's gateway (Lensa leaf only, OPA row 21)
 }
 export interface DriverConfig {
   drivers: Record<PartyId, string>; // base URL of each party's driver (window A: loopback forwards; window B: gateway)
@@ -130,6 +131,15 @@ export function driverClient(c: DriverConfig): DriverClient {
       const w = (await call(party, '/aps/wallet')) as Partial<Wallet>;
       if (!/^\d+$/.test(String(w.balances?.rd)) || !/^\d+$/.test(String(w.balances?.dfabi))) throw new Error(`Saldo wallet dari driver iroha ${party} tidak dikenali`);
       return w as Wallet;
+    },
+    apsRecords: async (bundleId) => {
+      if (!/^[0-9a-f]{64}$/i.test(bundleId)) throw new Error('bundle_id harus 64 karakter heksadesimal');
+      // not serialised behind a running BI driver request: the auditor answers this route, not the driver
+      const res = await http(new URL(`/records/${bundleId}`, c.drivers.BI), { signal: AbortSignal.timeout(10_000) });
+      if (res.status !== 200) throw new Error(`bi-auditor menjawab HTTP ${res.status}`);
+      const rows: unknown = await res.json();
+      if (!Array.isArray(rows)) throw new Error('catatan audit BI tidak dikenali');
+      return rows as AuditRecord[];
     },
     async health(party) {
       if ((active.get(party) ?? 0) > 0) return 'busy'; // /healthz would queue behind the running request: do not poll during a run

@@ -32,6 +32,7 @@ function fakeDriver() {
     apsIntent: async (party, arg) => { calls.push({ fn: 'apsIntent', party, arg }); return { intent: arg.intent }; },
     apsSubmit: async (party, arg) => { calls.push({ fn: 'apsSubmit', party, arg }); return { txHash: TX, height: 77, bundleId: '2'.repeat(64) }; },
     apsWallet: async (party) => { calls.push({ fn: 'apsWallet', party }); return { balances: { rd: '1500', dfabi: '7' }, items: [] }; },
+    apsRecords: async (bundleId) => { calls.push({ fn: 'apsRecords', party: 'BI', arg: bundleId }); return []; },
   };
   return { driver, calls };
 }
@@ -170,6 +171,58 @@ describe('iroha3 aps driver mode: keyless pod, no iroha CLI (ENOENT)', () => {
       for (const l of lenses.filter((x) => x.party !== from && x.party !== to)) expect(l).toMatchObject({ amount: null, counterparty: null });
     });
   }
+
+  describe('BI outside the flow reads its auditor records (GET /records/<bundle>)', () => {
+    const BUNDLE = '2'.repeat(64); // what fakeDriver().apsSubmit answers
+    const rec = (leg: number, payer: string, recipient: string, asset: string, amount: string) => ({ bundle_id: BUNDLE, leg, verdict: 'approved', payer, recipient, asset, amount });
+    const withRecords = (recs: () => Promise<any[]>) => {
+      const d = fakeDriver();
+      d.driver.apsRecords = async (id) => { d.calls.push({ fn: 'apsRecords', party: 'BI', arg: id }); return recs(); };
+      return { d, ad: adapter(d.driver) };
+    };
+    const lensBI = async (ad: ReturnType<typeof adapter>, r: FlowRequest) => ad.lens(r, await ad.run(r, BigInt(r.amount), () => {}), 'BI');
+
+    it('rd-transfer A->B: reported, nominal and parties from the records; the BI->BI 1 companion leg is ignored', async () => {
+      const { d, ad } = withRecords(async () => [rec(0, 'acct-A', 'acct-B', RD, '3'), rec(1, 'acct-BI', 'acct-BI', DFABI, '1')]);
+      const l = await lensBI(ad, req('rd-transfer', 'A', 'B', '3'));
+      expect(l).toMatchObject({ party: 'BI', role: 'regulator', verdict: 'reported', amount: '3', rdAmount: null, counterparty: { from: 'A', to: 'B' } });
+      expect(l.method).toMatch(/catatan audit BI/);
+      expect(d.calls.filter((c) => c.fn === 'apsRecords').map((c) => c.arg)).toEqual([BUNDLE]);
+    });
+
+    it('dfabi-transfer B->A: the RD leg is the BI->BI companion (amount 1), the DFABI leg is the movement', async () => {
+      const { ad } = withRecords(async () => [rec(0, 'acct-BI', 'acct-BI', RD, '1'), rec(1, 'acct-B', 'acct-A', DFABI, '4')]);
+      expect(await lensBI(ad, req('dfabi-transfer', 'B', 'A', '4'))).toMatchObject({ verdict: 'reported', amount: '4', rdAmount: null, counterparty: { from: 'B', to: 'A' } });
+    });
+
+    it('dvp A->B: DFABI amount, RD leg, parties from the DFABI leg', async () => {
+      const { ad } = withRecords(async () => [rec(0, 'acct-B', 'acct-A', RD, '2000000'), rec(1, 'acct-A', 'acct-B', DFABI, '2')]);
+      expect(await lensBI(ad, req('dvp', 'A', 'B', '2'))).toMatchObject({ verdict: 'reported', amount: '2', rdAmount: '2000000', counterparty: { from: 'A', to: 'B' } });
+    });
+
+    it('records unreadable (error, empty, or only the companion leg): partial NOT-RUN with an Indonesian text, no error text leaked', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      for (const recs of [async () => { throw new Error('bi-auditor menjawab HTTP 403 https://secret.internal/x'); }, async () => [], async () => [rec(0, 'acct-BI', 'acct-BI', RD, '1')]]) {
+        const { ad } = withRecords(recs);
+        const l = await lensBI(ad, req('rd-transfer', 'A', 'B', '3'));
+        expect(l).toMatchObject({ verdict: 'partial', amount: null, rdAmount: null, counterparty: null });
+        expect(l.method).toMatch(/tidak dapat dibaca/);
+        expect(JSON.stringify(l)).not.toMatch(/secret|HTTP 403/);
+      }
+    });
+
+    it('a party of the flow never reads the records (its own request is the source); banks outside stay sealed', async () => {
+      const { d, ad } = withRecords(async () => { throw new Error('must not be read'); });
+      const r = req('rd-transfer', 'A', 'B', '3');
+      const result = await ad.run(r, 3n, () => {});
+      expect(await ad.lens(r, result, 'A')).toMatchObject({ verdict: 'clear' });
+      expect(await ad.lens(r, result, 'C')).toMatchObject({ verdict: 'sealed' });
+      expect(d.calls.some((c) => c.fn === 'apsRecords')).toBe(false);
+      const award = req('award', 'BI', 'A', '2');
+      expect(await ad.lens(award, await ad.run(award, 2n, () => {}), 'BI')).toMatchObject({ verdict: 'clear' });
+      expect(d.calls.some((c) => c.fn === 'apsRecords')).toBe(false);
+    });
+  });
 
   it('receipt and trace read the keyless pipeline status of the party\'s own Torii, never the CLI', async () => {
     const ad = createIroha3Adapter(state, enoent, { ...noRead, fetch: pipeline('Applied', 77) }, undefined, fakeDriver().driver);
