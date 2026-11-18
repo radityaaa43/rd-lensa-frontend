@@ -3,7 +3,7 @@ import {
   BANKS, FLOWS, PARTIES, PRICE_PER_UNIT, roleFromParties, roleOf,
   type BankId, type FlowId, type FlowRequest, type PartyId,
 } from '../domain.ts';
-import { BANK_NODE, CANCELLED, HISTORY_MAX, LOAD_AMOUNT, WarmingUpError, loadLookup, type LoadUser } from '../adapter.ts';
+import { CANCELLED, HISTORY_MAX, LOAD_AMOUNT, WarmingUpError, loadLookup, type LoadUser } from '../adapter.ts';
 import { zetoBalanceOf } from '../zeto/token-requests.ts';
 import { besuTrace, nameFrom } from './besu-trace.ts';
 import { besuNetwork, besuReceipt, holdBack, joinInFlight, paladinNodeReceipt, receiptPage, type ReceiptLike } from './besu-network.ts';
@@ -247,27 +247,17 @@ export async function zetoHistory(party: PartyId, want: number, c: ZetoScan): Pr
 }
 
 const DEADLINE_MS = 120_000;
-const MAX_ZETO_TX = 2; // a Paladin node has crashed under concurrent ZK proving
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // BI's DFABI inventory (ARCHITECTURE.md 7.1): mint in batches, only when the stock cannot cover the award.
 export const topUpFor = (stock: bigint, amount: bigint): bigint => (stock >= amount ? 0n : amount - stock > 1000n ? amount - stock : 1000n);
 const hex32 = (v: string) => '0x' + BigInt(v).toString(16).padStart(64, '0');
 const lower = (s: string) => s.toLowerCase();
 
-// Module level, so every adapter instance in the process shares them. At most MAX_ZETO_TX Zeto
-// operations in flight (a released slot is handed straight to the next waiter), and at most one per
-// sender: two concurrent spends by one bank can pick the same UTXO (the N6 duplicate-input bug).
-let active = 0;
-const waiters: (() => void)[] = [];
+// Module level, so every adapter instance in the process shares them. No overall cap on Zeto operations in flight and no
+// per-node cap (both removed 2026-11-18, user: the Paladin memory limit was raised instead). What stays is one operation
+// per sender: two concurrent spends by one sender can pick the same UTXO (the N6 duplicate-input bug). That is correctness, not a limit.
 const senderTails = new Map<string, Promise<void>>();
-async function slot<T>(fn: () => Promise<T>): Promise<T> {
-  if (active >= MAX_ZETO_TX) await new Promise<void>((r) => waiters.push(r)); else active++;
-  try { return await fn(); } finally { const next = waiters.shift(); if (next) next(); else active--; }
-}
-export const exclusive = <T>(senders: PartyId[], fn: () => Promise<T>): Promise<T> => lockSenders(senders, () => slot(fn));
-const ZETO_LOAD_LOCK = (u: LoadUser) => `zeto-load-node${BANK_NODE[u.bank]}`; // one per node, see transferForLoad
-// The per-sender part alone. The stress test locks each node and skips the MAX_ZETO_TX slot: it ramps the load
-// itself and stops on its own rules, so a cap here would measure Lensa instead of the nodes.
+export const exclusive = <T>(senders: PartyId[], fn: () => Promise<T>): Promise<T> => lockSenders(senders, fn);
 async function lockSenders<T>(senders: string[], fn: () => Promise<T>): Promise<T> {
   const releases: (() => void)[] = [];
   try {
@@ -571,16 +561,13 @@ export function createZetoAdapter(state: ZetoState, connections: { name: string;
     loadCirculates: true,
     loadParties: ['BI', 'A', 'B', 'C'],
     loadMode: 'capacity',
-    loadLimit: 'Satu bukti ZK per node sekaligus: lebih dari itu node Paladin bisa kehabisan memori. Konfirmasi = receipt chain; laporan ke BI diukur terpisah',
-    maxLoadUsers: 1,
-    // ONE load transfer at a time per node (the sender's), nodes in parallel: each transfer is one ZK proof, and more than one
-    // proof at a time can run a Paladin node out of memory. Parallel proofs on several nodes once made the node SMTs diverge
-    // from the chain (UTXORootNotFound, 2026-11-09); Paladin 89e34e2c8 fixed that, so only the per-node memory limit is left.
-    // One load user per bank, so closed loop never queues here; open loop and batch rate queue on the node lock (queue time = end-to-end latency).
+    loadLimit: 'Tanpa batas bukti ZK per node (dilepas 2026-11-18): beberapa bukti sekaligus di satu node bisa membuat node Paladin kehabisan memori. Konfirmasi = receipt chain; laporan ke BI diukur terpisah',
+    // No per-node cap (removed 2026-11-18, user): load users prove in parallel, on one node too. Each load user is its own
+    // sender, so its transfers stay one at a time (N6: one sender must not spend the same UTXO twice).
     // The 120 s deadline starts once the lock is held; a hung call keeps it.
     async transferForLoad(from: LoadUser, to: LoadUser, amount: bigint, signal?: { aborted: boolean }): Promise<Sample> {
       const x = loadParty(from);
-      return afterLock(DEADLINE_MS, 'Transaksi Zeto', (armed) => lockSenders([ZETO_LOAD_LOCK(from)], async () => {
+      return afterLock(DEADLINE_MS, 'Transaksi Zeto', (armed) => lockSenders([`zeto-load-${x.lookup}`], async () => {
         armed();
         if (signal?.aborted) throw new Error(CANCELLED);
         const submittedAt = Date.now();
