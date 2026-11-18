@@ -48,14 +48,22 @@ it('load transfers from BI (node1) and A (node2) run at the same time', async ()
   expect(maxAll).toBe(2);
 });
 
-it('two load transfers from one node never overlap', async () => {
+it('load transfers from two users on one node run at the same time (no per-node cap)', async () => {
   const a = await adapter();
   await Promise.all([
     a.transferForLoad({ bank: 'A', i: 0 }, { bank: 'B', i: 0 }, 1n),
     a.transferForLoad({ bank: 'A', i: 1 }, { bank: 'C', i: 0 }, 1n),
     a.transferForLoad({ bank: 'B', i: 0 }, { bank: 'A', i: 0 }, 1n),
   ]);
+  expect(maxNode.get('node2')).toBe(2);
+  expect(maxAll).toBe(3);
+});
+
+it('two load transfers from one user never overlap (N6: one sender cannot spend the same UTXO twice)', async () => {
+  const a = await adapter();
+  await Promise.all([
+    a.transferForLoad({ bank: 'A', i: 0 }, { bank: 'B', i: 0 }, 1n),
+    a.transferForLoad({ bank: 'A', i: 0 }, { bank: 'C', i: 0 }, 1n),
+  ]);
   expect(maxNode.get('node2')).toBe(1);
-  expect(maxNode.get('node3')).toBe(1);
-  expect(maxAll).toBe(2); // node2 and node3 together
 });

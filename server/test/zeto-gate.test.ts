@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { exclusive } from '../src/adapters/zeto.ts';
 
-// Concurrency gate: at most 2 Zeto ops overall, at most 1 per sender bank (N6 duplicate-input guard).
+// Concurrency gate: no overall cap (removed 2026-11-18, user), still at most 1 per sender bank (N6 duplicate-input guard).
 async function peak(jobs: ('A' | 'B' | 'C')[][]) {
   let now = 0, max = 0, perMax = 0;
   const per = new Map<string, number>();
@@ -19,9 +19,9 @@ it('one sender is serialised', async () => {
   expect(await peak([['A'], ['A'], ['A'], ['A']])).toEqual({ max: 1, perMax: 1 });
 });
 
-it('different senders run at most 2 at a time', async () => {
+it('different senders all run at the same time (no overall cap)', async () => {
   const r = await peak([['A'], ['B'], ['C'], ['A'], ['B'], ['C']]);
-  expect(r.max).toBe(2);
+  expect(r.max).toBe(3);
   expect(r.perMax).toBe(1);
 });
 
