@@ -92,7 +92,7 @@ const tmps: string[] = [];
 const tmp = () => { const d = mkdtempSync(join(tmpdir(), 'lensa-plat-')); tmps.push(d); return d; };
 afterAll(() => tmps.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
-const RD = '0x0b91f511a3c9ca8144a5422734a2db42bb86e8f6'; // the Zeto contracts in vendor/besu/opa/bundles/bi/bi/config/data.json
+const RD = '0xb098fa62dc69a5259a92699798e4b3a7a68b3ba2'; // the Zeto contracts in vendor/besu/opa/bundles/bi/bi/config/data.json
 const DFABI = '0x374725a4c44c58d01f4f05739b257be6c71b6b9d';
 const N_RD = '0xf4571ab32cbd61a7cfbf1d1647a39ec8744a7681';
 const door = (node: string, tx: object, method = 'ptx_sendTransaction') => ({
