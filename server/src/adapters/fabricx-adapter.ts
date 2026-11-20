@@ -186,10 +186,31 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
 
   async function balanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
     const r = await call(party, 'GET', '/test/balance');
+    // The node sums unspent tokens with the token precision (balance.go ToQuantitySum, 32 bit on this network): a wallet over 4.294.967.295
+    // answers balance_unavailable. Its own confirmed history (the same wallet) is then summed here without that limit.
+    // ponytail: workaround until token v2 sums with big.Int (balance.go:42); then this branch stops being taken.
+    if (r.status === 503 && str(obj(r.body).error) === 'balance_unavailable') return historyBalance(party, asset);
     if (r.status !== 200) fail(`Saldo ${party}`, r);
     const b = obj(obj(r.body).Balances ?? obj(r.body).balances);
     const v = str(b[ASSET[asset]]);
     return /^\d+$/.test(v) ? BigInt(v) : 0n;
+  }
+
+  // received - sent over the party's confirmed history rows. An award's SBN is minted to the buyer by the settlement (dvp_v2_protocol.go
+  // PrepareDvPSettle), yet BI's history shows it as "sent": BI's SBN rows of a tx in which BI also received RD are not taken from BI's wallet.
+  async function historyBalance(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
+    const all = await entries(party, true);
+    if (all.length >= 1000) throw new Error(`Saldo ${PARTIES[party].name} tidak dapat dihitung: riwayat node melebihi 1000 baris`); // history.go page cap
+    const ok = all.filter((e) => e.status === 'confirmed');
+    const award = new Set(party === 'BI' ? ok.filter((e) => e.asset === ASSET.RD && e.direction === 'received').map((e) => e.transactionId) : []);
+    let sum = 0n;
+    for (const e of ok) {
+      if (e.asset !== ASSET[asset] || !/^\d+$/.test(e.units)) continue;
+      if (e.asset === ASSET.DFABI && e.direction === 'sent' && award.has(e.transactionId)) continue;
+      sum += e.direction === 'received' ? BigInt(e.units) : e.direction === 'sent' ? -BigInt(e.units) : 0n;
+    }
+    if (sum < 0n) throw new Error(`Saldo ${PARTIES[party].name} dari riwayat negatif: riwayat node tidak lengkap`);
+    return sum;
   }
 
   const issueRd = (to: BankId, units: bigint) => settle('BI', '/test/issue', { RequestID: newId('lensa-issue'), Asset: ASSET.RD, Units: units.toString(), Recipient: ORG[to] });

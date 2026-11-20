@@ -10,7 +10,7 @@ type Row = { transactionId: string; timestamp: string; asset: string; units: str
 // An in-memory token v2: asset gate closed by default and ONE lease per pod (asset_gate.go, GET reports {open}), issue/transfer/DvP only with the gate open (api.go),
 // history only for the party's own rows with ONE ROW PER MOVEMENT and no dedup (history.go): an issue shows only in the recipient's history (BI's wallet is neither
 // sender nor recipient), a DvP shows two rows per side with the same transaction id. A bank's first read of a fresh offer is 404 offer_not_found (dvp_api.go).
-function fakeTokenV2(opts: { pending?: boolean; reject?: boolean; auditLag?: boolean } = {}) {
+function fakeTokenV2(opts: { pending?: boolean; reject?: boolean; auditLag?: boolean; overflow?: PartyId[] } = {}) {
   const log: string[] = [];
   // BI's auditor (api.go AuditTransaction): one record per tx, one leg per movement, Sender '' never appears (an issue's sender is bi)
   const audits = new Map<string, { TransactionID: string; Status: string; AuditStatus: string; Timestamp: string; Kind: string; Legs: { Asset: string; Units: string; Sender: string; Recipient: string }[] }>();
@@ -33,6 +33,7 @@ function fakeTokenV2(opts: { pending?: boolean; reject?: boolean; auditLag?: boo
     const b = (body ?? {}) as Record<string, string>;
     if (path === '/test/asset-gate') { if (method === 'GET') return { status: 200, body: gate.has(party) ? { open: true, expiresAt: '2026-11-13T05:00:00Z' } : { open: false } }; if (b.Action === 'open') gate.add(party); else gate.delete(party); return { status: 200, body: { open: gate.has(party) } }; }
     if (path === '/test/session') return { status: 200, body: { organization: ORG[party] } };
+    if (path === '/test/balance' && opts.overflow?.includes(party)) return { status: 503, body: { error: 'balance_unavailable' } }; // balance.go: sum over the token precision
     if (path === '/test/balance') return { status: 200, body: { Organization: ORG[party], Balances: Object.fromEntries(Object.entries(bal[party]).map(([k, v]) => [k, String(v)])) } };
     if (path.startsWith('/test/audit?')) {
       if (party !== 'BI') return { status: 403, body: { error: 'forbidden' } };
@@ -144,6 +145,18 @@ describe('fabricx-adapter (token v2)', () => {
     await expect(a.run(req('dfabi-issue', 'BI', 'A'), 5n, () => {})).rejects.toBeInstanceOf(NotAvailableError);
     await expect(a.run(req('dvp', 'A', 'B'), 5n, () => {})).rejects.toBeInstanceOf(NotAvailableError);
     expect(t.log).toEqual([]);
+  });
+
+  it('balance: a node that cannot sum its wallet (balance_unavailable) is read from its own confirmed history; an award SBN BI never held is not counted', async () => {
+    const t = fakeTokenV2({ overflow: ['BI', 'B'] }); t.bal.A.RupiahDigital = 1_000_000_000n; const a = createFabricxTokenAdapter(t.call, fast);
+    await a.run(req('award', 'BI', 'A', '1'), 1n, () => {});
+    await a.run(req('rd-issue', 'BI', 'B', '9'), 9n, () => {});
+    await a.run(req('rd-transfer', 'B', 'C', '4'), 4n, () => {});
+    t.hist.B.push({ transactionId: 'wait', timestamp: '2026-11-13T04:00:00Z', asset: 'RupiahDigital', units: '100', direction: 'received', counterparty: 'bi', status: 'pending' });
+    expect([await a.balanceOf('BI', 'RD'), await a.balanceOf('BI', 'DFABI'), await a.balanceOf('B', 'RD')]).toEqual([1_000_000_000n, 0n, 5n]);
+    expect(await a.balanceOf('C', 'RD')).toBe(4n); // a node that answers keeps its own sum
+    t.hist.B.push(...Array.from({ length: 1000 }, (_, i) => ({ transactionId: `r${i}`, timestamp: '2026-11-13T05:00:00Z', asset: 'RupiahDigital', units: '1', direction: 'received', counterparty: 'bi', status: 'confirmed' })));
+    await expect(a.balanceOf('B', 'RD')).rejects.toThrow(/1000 baris/);
   });
 
   it('lens: participants read their own row, BI regulator and outsiders see a sealed tx', async () => {
