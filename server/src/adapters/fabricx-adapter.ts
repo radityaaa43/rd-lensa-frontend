@@ -15,7 +15,9 @@ import type { Sample } from '../stats.ts';
 // load() is null until all four gateway URLs are set, so nothing changes where the gateways do not exist yet.
 // What the token v2 API can do (apps/token/overlay/common/regulated, policy.go): issue RupiahDigital BI->bank, transfer RupiahDigital|SBN
 // owner->owner, and ONE DvP (BI sells 1 SBN to bank-a for 1.000.000.000 RupiahDigital). Lensa's DFABI is SBN here.
-// It has no block number, no per-tx on-chain trace and no auditor read through /test/*: those parts say so instead of guessing.
+// It has no block number and no per-tx on-chain trace through /test/*: those parts say so instead of guessing.
+// BI sees every transaction through ITS auditor node (token-auditor-v2, post-settlement audit): fxa-gw-1 routes GET /test/audit?from&to there
+// (deploy/k8s/fxa-gw/render.py AUDIT), and BI's lens, history and receipt read that report, not BI's own issuer wallet.
 
 export interface Reply { status: number; body: unknown }
 export type Call = (party: PartyId, method: 'GET' | 'POST', path: string, body?: unknown) => Promise<Reply>;
@@ -25,6 +27,8 @@ const PARTY_OF = Object.fromEntries(Object.entries(ORG).map(([p, o]) => [o, p]))
 const ASSET = { RD: 'RupiahDigital', DFABI: 'SBN' } as const;
 const AWARD_MONEY = '1000000000'; // token v2 DvP terms are fixed (policy.go ValidateDvP)
 const GATE_TTL_S = 120;
+const AUDIT_HISTORY_DAYS = 30; // BI's history window on the auditor report (the node refuses a period over 10000 rows: report_period_too_large)
+const AUDIT_LENS_WINDOW_MS = 60 * 60_000; // a lens asks right after run(): the tx is minutes old at most
 const AWARD_WHY = 'Award token v2 hanya BI ke Bank A, 1 SBN (dibayar 1.000.000.000 RD)';
 export const FXA_WHY = {
   'dfabi-issue': 'Token v2 hanya menerbitkan SBN ke BI sendiri, bukan ke bank',
@@ -48,6 +52,9 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 interface Entry { transactionId: string; timestamp: string; asset: string; units: string; direction: string; counterparty: string; status: string; auditStatus?: string }
 // A grouped history view of one transaction (history.go writes one row per token movement, so a DvP shows two rows per side): rdUnits = the RD payment leg of an award.
 type Tx = Entry & { rdUnits?: string };
+// One transaction as BI's auditor reports it (api.go AuditTransaction: embedded Receipt, Legs without change outputs, Kind issue|transfer|dvp).
+interface Leg { asset: 'RD' | 'DFABI' | null; units: string; from: PartyId | null; to: PartyId | null }
+interface Audit { tx: string; at: string; kind: string; status: string; auditStatus: string; legs: Leg[] }
 export interface FxaOpts { waitMs?: number; pollMs?: number; lockWaitMs?: number; historyTtlMs?: number }
 
 export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): ModelAdapter {
@@ -133,6 +140,48 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
     if (!Array.isArray(list)) throw new Error('Riwayat token v2 tidak berbentuk daftar');
     // HistoryEntry has json tags (history.go): transactionId, timestamp, asset, units, direction, counterparty, status, auditStatus
     return list.map((e) => { const o = obj(e); return { transactionId: str(o.transactionId), timestamp: str(o.timestamp), asset: str(o.asset), units: str(o.units), direction: str(o.direction), counterparty: str(o.counterparty), status: str(o.status), auditStatus: str(o.auditStatus) || undefined }; });
+  }
+
+  async function audit(from: Date, to: Date): Promise<{ confirmed: Audit[]; pending: string[] }> {
+    const r = await call('BI', 'GET', `/test/audit?from=${from.toISOString()}&to=${to.toISOString()}`);
+    if (r.status !== 200) fail('Laporan auditor BI', r);
+    const b = obj(r.body);
+    const one = (x: unknown): Audit => {
+      const o = obj(x);
+      const legs = (Array.isArray(o.Legs) ? o.Legs : []).map((l): Leg => {
+        const g = obj(l);
+        return { asset: str(g.Asset) === ASSET.RD ? 'RD' : str(g.Asset) === ASSET.DFABI ? 'DFABI' : null, units: str(g.Units), from: PARTY_OF[str(g.Sender)] ?? null, to: PARTY_OF[str(g.Recipient)] ?? null };
+      });
+      return { tx: str(o.TransactionID), at: str(o.Timestamp), kind: str(o.Kind), status: str(o.Status), auditStatus: str(o.AuditStatus), legs };
+    };
+    const list = (k: string) => (Array.isArray(b[k]) ? (b[k] as unknown[]) : []).map(one);
+    return { confirmed: list('Confirmed'), pending: list('Pending').map((a) => a.tx) };
+  }
+  // What BI's report says one transaction was: an issue (BI -> bank), a transfer, or the award DvP (SBN leg first, its RD leg as rdAmount).
+  function auditView(a: Audit) {
+    const sbn = a.legs.find((l) => l.asset === 'DFABI'), rd = a.legs.find((l) => l.asset === 'RD');
+    const main = (a.kind === 'dvp' ? sbn : a.legs[0]) ?? a.legs[0];
+    const flow: FlowId | null = a.kind === 'dvp' ? 'award'
+      : !main?.asset ? null
+      : a.kind === 'issue' ? (main.asset === 'RD' ? 'rd-issue' : 'dfabi-issue')
+      : main.asset === 'RD' ? 'rd-transfer' : 'dfabi-transfer';
+    const counterparty = main ? { from: main.from, to: main.to } : null;
+    return { flow, asset: main?.asset ?? null, amount: main?.units ?? null, rdAmount: a.kind === 'dvp' ? rd?.units ?? null : null, counterparty };
+  }
+  const auditItem = (a: Audit): HistoryItem => {
+    const v = auditView(a);
+    return { id: a.tx, at: a.at || null, block: null, flow: v.flow, asset: v.asset, role: roleFromParties('BI', v.counterparty, v.flow === 'rd-issue' || v.flow === 'dfabi-issue' || v.flow === 'award'),
+      verdict: 'clear', amount: v.amount, rdAmount: v.rdAmount, counterparty: v.counterparty };
+  };
+  const auditRows = (a: Audit) => [{ label: 'Status', value: a.status }, { label: 'Audit', value: a.auditStatus || '-' }, { label: 'Jenis', value: a.kind },
+    ...a.legs.map((l, i) => ({ label: `Kaki ${i + 1}`, value: `${l.units} ${l.asset ?? '?'} ${l.from ? PARTIES[l.from].name : '-'} -> ${l.to ? PARTIES[l.to].name : '-'}` }))];
+  async function findAudit(tx: string, sinceMs: number, wait = 0): Promise<Audit | undefined> {
+    const until = Date.now() + wait;
+    for (;;) {
+      const a = (await audit(new Date(Date.now() - sinceMs), new Date(Date.now() + 60_000))).confirmed.find((x) => x.tx === tx);
+      if (a || Date.now() >= until) return a;
+      await sleep(POLL_MS);
+    }
   }
 
   async function balanceOf(party: PartyId, asset: 'RD' | 'DFABI'): Promise<bigint> {
@@ -282,13 +331,18 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
     },
     async lens(req, result, party) {
       const role = roleOf(req, party);
-      // BI's wallet history (history.go: rows where BI is sender or recipient) never holds an RD issuance (empty sender, the bank is recipient), nor a transfer between banks: no read to wait for.
-      const blind = role === 'outsider' || (party === 'BI' && (role === 'regulator' || req.flow === 'rd-issue'));
-      const e = blind ? undefined : await findEntry(party, result.txHash, LENS_WAIT_MS);
+      if (party === 'BI') {
+        // the audit runs after finality, so the report may need a moment to hold a fresh tx
+        const a = await findAudit(result.txHash, AUDIT_LENS_WINDOW_MS, LENS_WAIT_MS);
+        if (!a) return { party, role, verdict: 'sealed', amount: null, counterparty: null, rdAmount: null, onChain: [], method: 'Laporan auditor BI belum memuat transaksi ini (audit berjalan setelah transaksi final)' };
+        const v = auditView(a);
+        return { party, role, verdict: 'clear', amount: v.amount, counterparty: v.counterparty, rdAmount: v.rdAmount, onChain: auditRows(a),
+          method: 'Laporan auditor BI (token-auditor-v2, GET /test/audit lewat fxa-gw-1)' };
+      }
+      const e = role === 'outsider' ? undefined : await findEntry(party, result.txHash, LENS_WAIT_MS);
       if (!e) {
         return { party, role, verdict: 'sealed', amount: null, counterparty: null, rdAmount: null, onChain: [],
-          method: party === 'BI' ? (role === 'issuer' && req.flow === 'rd-issue' ? 'Penerbitan RD tidak tercatat di riwayat dompet BI: baris penerbitan tidak punya pengirim, jadi tidak ada yang bisa dibaca di sini'
-            : 'BI membaca lewat auditor token v2; pembacaan itu belum tersambung di adapter ini') : `Node token ${party} hanya menampilkan transaksi yang melibatkan dompetnya sendiri` };
+          method: `Node token ${party} hanya menampilkan transaksi yang melibatkan dompetnya sendiri` };
       }
       const item = toItem(party, e);
       return { party, role, verdict: 'clear', amount: e.units, counterparty: item.counterparty, rdAmount: item.rdAmount,
@@ -296,6 +350,12 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
         method: 'Riwayat dompet token v2 milik pihak ini (GET /test/history)' };
     },
     async history(party, limit) {
+      if (party === 'BI') {
+        const r = await audit(new Date(Date.now() - AUDIT_HISTORY_DAYS * 86_400_000), new Date(Date.now() + 60_000));
+        const out = r.confirmed.sort((a, b) => b.at.localeCompare(a.at)).slice(0, Math.min(limit, HISTORY_MAX)).map(auditItem) as HistoryItem[] & { truncated?: true; pending?: string[] };
+        if (r.pending.length) out.pending = r.pending;
+        return out;
+      }
       const all = await entries(party);
       const sealed = txs(party, all).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
       const out = sealed.slice(0, Math.min(limit, HISTORY_MAX)).map((e) => toItem(party, e)) as HistoryItem[] & { truncated?: true; pending?: string[] };
@@ -311,6 +371,11 @@ export function createFabricxTokenAdapter(call: Call, opts: FxaOpts = {}): Model
       return { nodes, links: BANKS.map((b) => ({ from: 'fxa-BI', to: `fxa-${b}` })) };
     },
     async receipt(tx, party): Promise<Receipt> {
+      if (party === 'BI') {
+        const a = await findAudit(tx, AUDIT_HISTORY_DAYS * 86_400_000);
+        if (!a) throw new Error('Transaksi tidak ada di laporan auditor BI');
+        return { source: 'Laporan auditor BI (token-auditor-v2)', chain: [{ title: 'Catatan audit', rows: auditRows(a) }], node: null };
+      }
       const e = await findEntry(party, tx, 0);
       if (!e) {
         // A tx the party was not part of is sealed to it, not missing: another party's own history has it. A hash nobody holds stays an error.

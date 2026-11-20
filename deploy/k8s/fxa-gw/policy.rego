@@ -154,13 +154,3 @@ permitted if {
 	req.method == "POST"
 	req.path in buyer_posts
 }
-
-# BI's audit report for given transactions (read only, answered by the auditor node; the node checks the period and the ids itself).
-permitted if {
-	p.role == "issuer"
-	req.method == "POST"
-	req.path == "/test/audit"
-	is_array(body.Expected)
-	count(body.Expected) > 0
-	count(body.Expected) <= 1000
-}

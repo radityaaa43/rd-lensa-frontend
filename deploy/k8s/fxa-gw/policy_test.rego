@@ -101,10 +101,9 @@ test_the_bundle_check_reads_only_allow if {
 test_only_bi_reads_the_audit_report if {
 	q := "/test/audit?from=2026-11-20T00:00:00Z&to=2026-11-20T08:40:12.345Z"
 	authz.allow with input as call("GET", q, "") with data.fxa_party as issuer
-	authz.allow with input as call("POST", "/test/audit", `{"From":"2026-11-20T00:00:00Z","To":"2026-11-21T00:00:00Z","Expected":["ab12"]}`) with data.fxa_party as issuer
+	not authz.allow with input as call("POST", "/test/audit", `{"From":"2026-11-20T00:00:00Z","To":"2026-11-21T00:00:00Z","Expected":["ab12"]}`) with data.fxa_party as issuer
 	not authz.allow with input as call("GET", q, "") with data.fxa_party as owner_a
 	not authz.allow with input as call("POST", "/test/audit", `{"Expected":["ab12"]}`) with data.fxa_party as owner_b
-	not authz.allow with input as call("POST", "/test/audit", `{"Expected":[]}`) with data.fxa_party as issuer
 	not authz.allow with input as call("GET", "/test/audit", "") with data.fxa_party as issuer
 	not authz.allow with input as call("GET", concat("", [q, "&x=1"]), "") with data.fxa_party as issuer
 	not authz.allow with input as call("GET", "/test/audit?from=2026-11-20T00:00:00%2B07:00&to=2026-11-21T00:00:00Z", "") with data.fxa_party as issuer
