@@ -77,6 +77,15 @@ result := json_403({"error": "policy_denied", "reasons": sort([r | some r in rea
 	not policy_ok
 }
 
+# BI's audit report by period (fxa-gw-1 routes /test/audit to the auditor node): the ONE query string allowed, two RFC 3339 UTC instants.
+audit_period := `^/test/audit\?from=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?Z&to=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?Z$`
+
+route_ok if {
+	p.role == "issuer"
+	req.method == "GET"
+	regex.match(audit_period, req.path)
+}
+
 route_ok if {
 	not contains(req.path, "?")
 	not contains(req.path, "..")
@@ -144,4 +153,14 @@ permitted if {
 	p.buyer
 	req.method == "POST"
 	req.path in buyer_posts
+}
+
+# BI's audit report for given transactions (read only, answered by the auditor node; the node checks the period and the ids itself).
+permitted if {
+	p.role == "issuer"
+	req.method == "POST"
+	req.path == "/test/audit"
+	is_array(body.Expected)
+	count(body.Expected) > 0
+	count(body.Expected) <= 1000
 }

@@ -16,14 +16,14 @@ class Render(unittest.TestCase):
     def test_objects_and_custody(self):
         for p in PARTIES:
             k = by_kind(render.render(p))
-            self.assertEqual({a: len(b) for a, b in k.items()}, {"ConfigMap": 3, "Service": 2, "PersistentVolumeClaim": 1, "Deployment": 1, "NetworkPolicy": 2}, p)
+            self.assertEqual({a: len(b) for a, b in k.items()}, {"ConfigMap": 3, "Service": 2, "PersistentVolumeClaim": 1, "Deployment": 1, "NetworkPolicy": 3 if p == "bi" else 2}, p)
             self.assertNotIn("Secret", k, "keys are a custody step, never rendered")
             for o in sum(k.values(), []):
                 self.assertEqual(o["metadata"]["namespace"], f"fabricx-{p}")
 
     def test_network_policies_open_only_lensa_to_gateway_and_gateway_to_its_token_pod(self):
         for p in PARTIES:
-            gw, tok = by_kind(render.render(p))["NetworkPolicy"]
+            gw, tok = by_kind(render.render(p))["NetworkPolicy"][:2]
             n, role = render.PARTY_N[p], render.ROLE[p]
             self.assertEqual(gw["spec"]["podSelector"]["matchLabels"], {"app.kubernetes.io/name": f"fxa-gw-{n}"})
             self.assertEqual(gw["spec"]["ingress"], [{"from": [{"ipBlock": {"cidr": "172.24.0.0/16"}}, {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "rd-lensa"}}, "podSelector": {"matchLabels": {"app": "lensa"}}}], "ports": [{"port": 8443, "protocol": "TCP"}]}])
@@ -31,6 +31,27 @@ class Render(unittest.TestCase):
             self.assertEqual(tok["spec"]["podSelector"]["matchLabels"]["app"], f"token-{role}-v2")
             self.assertEqual(tok["spec"]["policyTypes"], ["Ingress"])
             self.assertEqual(tok["spec"]["ingress"], [{"from": [{"podSelector": {"matchLabels": {"app.kubernetes.io/name": f"fxa-gw-{n}"}}}], "ports": [{"port": 9440, "protocol": "TCP"}]}])
+
+    def test_only_bi_routes_the_audit_report_to_its_auditor(self):
+        for p in PARTIES:
+            objs = by_kind(render.render(p))
+            cfg = yaml.safe_load(objs["ConfigMap"][0]["data"]["envoy.yaml"])
+            routes = cfg["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][0]["typed_config"]["route_config"]["virtual_hosts"][0]["routes"]
+            audit = [r for r in routes if r["match"].get("path") == "/test/audit"]
+            clusters = {c["name"]: c for c in cfg["static_resources"]["clusters"]}
+            if p != "bi":
+                self.assertEqual((audit, "auditor" in clusters), ([], False), p)
+                continue
+            host = "token-auditor-v2.fabricx-bi.svc.cluster.local"
+            self.assertEqual(audit[0]["route"]["cluster"], "auditor")
+            self.assertLess(routes.index(audit[0]), next(i for i, r in enumerate(routes) if r["match"].get("prefix") == "/"))  # before the catch-all
+            self.assertIn("envoy.filters.http.ext_authz", audit[0]["typed_per_filter_config"])  # OPA still decides
+            ctx = clusters["auditor"]["transport_socket"]["typed_config"]
+            self.assertEqual((ctx["sni"], ctx["common_tls_context"]["validation_context"]["match_typed_subject_alt_names"][0]["matcher"]["exact"]), (host, host))
+            gw, _, aud = objs["NetworkPolicy"]
+            self.assertIn({"to": [{"podSelector": {"matchLabels": {"app": "token-auditor-v2", "app.kubernetes.io/part-of": "fabricx-transfer-v2"}}}], "ports": [{"port": 9440, "protocol": "TCP"}]}, gw["spec"]["egress"])
+            self.assertEqual((aud["metadata"]["name"], aud["spec"]["podSelector"]["matchLabels"]["app"]), ("fxa-gw-1-to-auditor", "token-auditor-v2"))
+            self.assertEqual(aud["spec"]["ingress"], [{"from": [{"podSelector": {"matchLabels": {"app.kubernetes.io/name": "fxa-gw-1"}}}], "ports": [{"port": 9440, "protocol": "TCP"}]}])
 
     def test_node_ports_are_distinct_and_in_the_reserved_block(self):
         ports = [by_kind(render.render(p))["Service"][1]["spec"]["ports"][0]["nodePort"] for p in PARTIES]
