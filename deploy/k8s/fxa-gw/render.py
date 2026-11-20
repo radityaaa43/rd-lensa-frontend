@@ -17,6 +17,8 @@ fxa-gw-<N>-signing (key.pem: the party's bundle signing key), fxa-gw-<N>-verify 
 fxa-gw-<N>-sink-token (token: the bearer Lensa and OPA present to the sink).
 NetworkPolicies (the namespaces run default-deny-all for Ingress and Egress): fxa-gw-<N> lets Lensa (172.24.0.0/16, Jakarta: host and rd-lensa pod) in on 8443
 and the gateway out to its own token pod on 9440 and to kube-dns; fxa-gw-<N>-to-token lets the gateway into the token pod on 9440. Allow-only, nothing else changes.
+BI only (AUDIT): /test/audit goes to token-auditor-v2:9440 of fabricx-bi with the same operator certificate (the auditor maps its fingerprint to
+{bi, report}; runtime.json Server.Operators, set 2026-11-20); fxa-gw-1 egress also reaches the auditor and fxa-gw-1-to-auditor lets it in on 9440.
 """
 import argparse, json, os, sys
 import yaml
@@ -24,6 +26,7 @@ import yaml
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARTY_N = {"bi": 1, "bank-a": 2, "bank-b": 3, "bank-c": 4}
 ROLE = {"bi": "issuer", "bank-a": "owner", "bank-b": "owner", "bank-c": "owner"}
+AUDIT = {"bi"}  # the gateways that also route /test/audit to the party's auditor node (BI reads its post-settlement audit report)
 BUYER = {"bank-a"}  # token v2 DvP: the buyer is bank-a only (policy.go ValidateDvP)
 UID = 10001
 LABELS = {"app.kubernetes.io/part-of": "fabricx-token-gw"}
@@ -55,8 +58,8 @@ def typed(t, **kw):
     return {"@type": "type.googleapis.com/envoy.extensions." + t, **kw}
 
 
-def upstream_host(party):
-    return f"token-{ROLE[party]}-v2.fabricx-{party}.svc.cluster.local"
+def upstream_host(party, role=None):
+    return f"token-{role or ROLE[party]}-v2.fabricx-{party}.svc.cluster.local"
 
 
 def sink_routes():
@@ -92,33 +95,38 @@ def envoy_config(party):
     host = upstream_host(party)
     authz = typed("filters.http.ext_authz.v3.ExtAuthz", transport_api_version="V3", with_request_body={"max_request_bytes": 65536, "allow_partial_message": False},
                   failure_mode_allow=False, grpc_service={"envoy_grpc": {"cluster_name": "opa"}, "timeout": "3s"})
+    # the Kebijakan bundles read the node from here (bi.fxa / bank.fxa: input.attributes.contextExtensions.node)
+    ctx = lambda: {"envoy.filters.http.ext_authz": typed(
+        "filters.http.ext_authz.v3.ExtAuthzPerRoute", check_settings={"context_extensions": {"node": f"node{PARTY_N[party]}", "target": "fabricx-adapter"}})}
     hcm = typed("filters.network.http_connection_manager.v3.HttpConnectionManager", stat_prefix="fxa",
                 normalize_path=True, merge_slashes=True,  # OPA sees the path envoy forwards: no //, no /./, no /../ left to hide in
-                route_config={"virtual_hosts": [{"name": "token", "domains": ["*"], "routes": sink_routes() + [{
-                    "match": {"prefix": "/"}, "route": {"cluster": "token", "timeout": "180s"},  # a transaction waits for finality
-                    # the Kebijakan bundles read the node from here (bi.fxa / bank.fxa: input.attributes.contextExtensions.node)
-                    "typed_per_filter_config": {"envoy.filters.http.ext_authz": typed(
-                        "filters.http.ext_authz.v3.ExtAuthzPerRoute", check_settings={"context_extensions": {"node": f"node{PARTY_N[party]}", "target": "fabricx-adapter"}})}}]}]},
+                route_config={"virtual_hosts": [{"name": "token", "domains": ["*"], "routes": sink_routes() + [
+                    # BI: the audit report comes from the auditor node (path match ignores the query string; OPA still sees it)
+                    *([{"match": {"path": "/test/audit"}, "route": {"cluster": "auditor", "timeout": "60s"}, "typed_per_filter_config": ctx()}] if party in AUDIT else []),
+                    {"match": {"prefix": "/"}, "route": {"cluster": "token", "timeout": "180s"},  # a transaction waits for finality
+                     "typed_per_filter_config": ctx()}]}]},
                 http_filters=[{"name": "envoy.filters.http.ext_authz", "typed_config": authz},
                               {"name": "envoy.filters.http.router", "typed_config": typed("filters.http.router.v3.Router")}])
     downstream = typed("transport_sockets.tls.v3.DownstreamTlsContext", require_client_certificate=True, common_tls_context={
         "tls_params": {"tls_minimum_protocol_version": "TLSv1_2"},
         "tls_certificates": [{"certificate_chain": {"filename": "/mtls/tls.crt"}, "private_key": {"filename": "/mtls/tls.key"}}],
         "validation_context": {"trusted_ca": {"filename": "/client-ca/ca.crt"}}})
-    upstream = typed("transport_sockets.tls.v3.UpstreamTlsContext", sni=host, common_tls_context={
+    upstream = lambda h: typed("transport_sockets.tls.v3.UpstreamTlsContext", sni=h, common_tls_context={
         "tls_params": {"tls_minimum_protocol_version": "TLSv1_3", "tls_maximum_protocol_version": "TLSv1_3"},  # the token server accepts TLS 1.3 only
         "tls_certificates": [{"certificate_chain": {"filename": "/operator/tls.crt"}, "private_key": {"filename": "/operator/tls.key"}}],
         "validation_context": {"trusted_ca": {"filename": "/upstream-ca/ca.crt"},
-                               "match_typed_subject_alt_names": [{"san_type": "DNS", "matcher": {"exact": host}}]}})
+                               "match_typed_subject_alt_names": [{"san_type": "DNS", "matcher": {"exact": h}}]}})
+    token_cluster = lambda name, h: {"name": name, "type": "STRICT_DNS", "connect_timeout": "2s", "dns_lookup_family": "V4_ONLY",
+                                     "load_assignment": {"cluster_name": name, "endpoints": [{"lb_endpoints": [{"endpoint": {"address": {"socket_address": {"address": h, "port_value": 9440}}}}]}]},
+                                     "transport_socket": {"name": "envoy.transport_sockets.tls", "typed_config": upstream(h)}}
     h2 = {"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": typed("upstreams.http.v3.HttpProtocolOptions", explicit_http_config={"http2_protocol_options": {}})}
     return {"static_resources": {
         "listeners": [{"name": "fxa", "address": {"socket_address": {"address": "0.0.0.0", "port_value": 8443}},
                        "filter_chains": [{"transport_socket": {"name": "envoy.transport_sockets.tls", "typed_config": downstream},
                                           "filters": [{"name": "envoy.filters.network.http_connection_manager", "typed_config": hcm}]}]}],
         "clusters": [
-            {"name": "token", "type": "STRICT_DNS", "connect_timeout": "2s", "dns_lookup_family": "V4_ONLY",
-             "load_assignment": {"cluster_name": "token", "endpoints": [{"lb_endpoints": [{"endpoint": {"address": {"socket_address": {"address": host, "port_value": 9440}}}}]}]},
-             "transport_socket": {"name": "envoy.transport_sockets.tls", "typed_config": upstream}},
+            token_cluster("token", host),
+            *([token_cluster("auditor", upstream_host(party, "auditor"))] if party in AUDIT else []),
             {"name": "sink", "type": "STATIC", "connect_timeout": "1s",
              "load_assignment": {"cluster_name": "sink", "endpoints": [{"lb_endpoints": [{"endpoint": {"address": {"socket_address": {"address": "127.0.0.1", "port_value": 8081}}}}]}]}},
             {"name": "opa", "type": "STATIC", "connect_timeout": "1s", "typed_extension_protocol_options": h2,
@@ -191,17 +199,22 @@ def render(party, envoy_image=ENVOY_IMAGE, opa_image=OPA_IMAGE, sink_image=SINK_
                         {"name": "tmp", "emptyDir": {"medium": "Memory", "sizeLimit": "64Mi"}},
                         {"name": "sink-py", "configMap": {"name": f"{name}-sink"}}, {"name": "tools", "emptyDir": {"sizeLimit": "128Mi"}}]}}}}
     token = {"app": f"token-{ROLE[party]}-v2", "app.kubernetes.io/part-of": "fabricx-transfer-v2"}
+    auditor = {"app": "token-auditor-v2", "app.kubernetes.io/part-of": "fabricx-transfer-v2"}
     tcp = lambda port: {"port": port, "protocol": "TCP"}
     np_gw = {"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": meta(name), "spec": {
         "podSelector": {"matchLabels": sel}, "policyTypes": ["Ingress", "Egress"],
         "ingress": [{"from": [{"ipBlock": {"cidr": LENSA_CIDR}}, LENSA_POD], "ports": [tcp(8443)]}],  # ipBlock: host and NodePort; LENSA_POD: in-cluster (terway eBPF does not match pod sources by ipBlock)
         "egress": [{"to": [{"podSelector": {"matchLabels": token}}], "ports": [tcp(9440)]},
+                   *([{"to": [{"podSelector": {"matchLabels": auditor}}], "ports": [tcp(9440)]}] if party in AUDIT else []),
                    {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}}, "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}}}],
                     "ports": [{"port": 53, "protocol": "UDP"}, tcp(53)]}]}}
     np_token = {"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": meta(f"{name}-to-token"), "spec": {
         "podSelector": {"matchLabels": token}, "policyTypes": ["Ingress"],
         "ingress": [{"from": [{"podSelector": {"matchLabels": sel}}], "ports": [tcp(9440)]}]}}
-    return [cm_envoy, cm_opa, cm_sink, svc, ext, pvc, dep, np_gw, np_token]
+    np_auditor = {"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy", "metadata": meta(f"{name}-to-auditor"), "spec": {
+        "podSelector": {"matchLabels": auditor}, "policyTypes": ["Ingress"],
+        "ingress": [{"from": [{"podSelector": {"matchLabels": sel}}], "ports": [tcp(9440)]}]}}
+    return [cm_envoy, cm_opa, cm_sink, svc, ext, pvc, dep, np_gw, np_token] + ([np_auditor] if party in AUDIT else [])
 
 
 def main():
