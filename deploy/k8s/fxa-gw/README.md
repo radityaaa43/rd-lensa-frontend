@@ -38,6 +38,10 @@ Per gateway, in its own namespace:
 Open questions, not verified: which CA signs the :9440 server cert (ConfigMap `organization-ca` is a candidate), and that Envoy's
 upstream SNI/SAN `token-<role>-v2.fabricx-<org>.svc.cluster.local` matches that cert (console-web uses the same name as `servername`).
 
+BI only: `fxa-gw-1` also routes `GET /test/audit?from=<RFC3339 UTC>&to=<RFC3339 UTC>` to `token-auditor-v2:9440` (BI's post-settlement audit report:
+every transaction with its legs) with the same operator certificate; the auditor maps that certificate's fingerprint to `{bi, report}`
+(its `runtime.json` `Server.Operators`, added 2026-11-20). Lensa's BI lens, BI history and BI receipt read this report.
+
 ## Lensa side
 
 `LENSA_FXA_GW_BI|A|B|C=https://<node-ip>:<nodePort>` and `LENSA_FXA_MTLS_DIR=<dir>/{BI,A,B,C}/{server-ca.pem,lensa.crt,lensa.key}`.

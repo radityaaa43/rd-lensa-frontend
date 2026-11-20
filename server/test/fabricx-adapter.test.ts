@@ -10,8 +10,10 @@ type Row = { transactionId: string; timestamp: string; asset: string; units: str
 // An in-memory token v2: asset gate closed by default and ONE lease per pod (asset_gate.go, GET reports {open}), issue/transfer/DvP only with the gate open (api.go),
 // history only for the party's own rows with ONE ROW PER MOVEMENT and no dedup (history.go): an issue shows only in the recipient's history (BI's wallet is neither
 // sender nor recipient), a DvP shows two rows per side with the same transaction id. A bank's first read of a fresh offer is 404 offer_not_found (dvp_api.go).
-function fakeTokenV2(opts: { pending?: boolean; reject?: boolean; } = {}) {
+function fakeTokenV2(opts: { pending?: boolean; reject?: boolean; auditLag?: boolean } = {}) {
   const log: string[] = [];
+  // BI's auditor (api.go AuditTransaction): one record per tx, one leg per movement, Sender '' never appears (an issue's sender is bi)
+  const audits = new Map<string, { TransactionID: string; Status: string; AuditStatus: string; Timestamp: string; Kind: string; Legs: { Asset: string; Units: string; Sender: string; Recipient: string }[] }>();
   const gate = new Set<PartyId>();
   const bal: Record<PartyId, Record<string, bigint>> = { BI: {}, A: {}, B: {}, C: {} };
   const hist: Record<PartyId, Row[]> = { BI: [], A: [], B: [], C: [] };
@@ -21,6 +23,9 @@ function fakeTokenV2(opts: { pending?: boolean; reject?: boolean; } = {}) {
   const move = (from: PartyId | null, to: PartyId, asset: string, units: bigint, tx: string, ts: string) => {
     if (from) { bal[from][asset] = (bal[from][asset] ?? 0n) - units; hist[from].push({ transactionId: tx, timestamp: ts, asset, units: String(units), direction: 'sent', counterparty: ORG[to], status: 'confirmed' }); }
     bal[to][asset] = (bal[to][asset] ?? 0n) + units;
+    const kind = tx === 'txdvp' ? 'dvp' : from ? 'transfer' : 'issue';
+    const rec = audits.get(tx) ?? { TransactionID: tx, Status: 'confirmed', AuditStatus: 'verified', Timestamp: `${ts.slice(0, 19)}.${String(audits.size).padStart(3, '0')}Z`, Kind: kind, Legs: [] }; // ledger time; the fake does not filter by period
+    rec.Legs.push({ Asset: asset, Units: String(units), Sender: from ? ORG[from] : 'bi', Recipient: ORG[to] }); audits.set(tx, rec);
     hist[to].push({ transactionId: tx, timestamp: ts, asset, units: String(units), direction: 'received', counterparty: from ? ORG[from] : 'bi', status: 'confirmed' });
   };
   const call: Call = async (party, method, path, body) => {
@@ -29,6 +34,13 @@ function fakeTokenV2(opts: { pending?: boolean; reject?: boolean; } = {}) {
     if (path === '/test/asset-gate') { if (method === 'GET') return { status: 200, body: gate.has(party) ? { open: true, expiresAt: '2026-11-13T05:00:00Z' } : { open: false } }; if (b.Action === 'open') gate.add(party); else gate.delete(party); return { status: 200, body: { open: gate.has(party) } }; }
     if (path === '/test/session') return { status: 200, body: { organization: ORG[party] } };
     if (path === '/test/balance') return { status: 200, body: { Organization: ORG[party], Balances: Object.fromEntries(Object.entries(bal[party]).map(([k, v]) => [k, String(v)])) } };
+    if (path.startsWith('/test/audit?')) {
+      if (party !== 'BI') return { status: 403, body: { error: 'forbidden' } };
+      const q = new URL(path, 'https://x').searchParams;
+      const [from, to] = [Date.parse(q.get('from')!), Date.parse(q.get('to')!)];
+      if (!(from < to)) return { status: 400, body: { error: 'invalid_report_period' } };
+      return { status: 200, body: { Confirmed: opts.auditLag ? [] : [...audits.values()], Pending: [], Rejected: [], Complete: false } };
+    }
     if (path === '/test/history') return { status: 200, body: { organization: ORG[party], transactions: hist[party] } };
     if (path.startsWith('/test/requests/')) return { status: 200, body: { RequestID: path.split('/').pop(), TransactionID: settled.get(path.split('/').pop()!), Status: 'confirmed' } };
     const write = (fn: (tx: string) => void) => {
@@ -45,7 +57,7 @@ function fakeTokenV2(opts: { pending?: boolean; reject?: boolean; } = {}) {
     if (path.startsWith('/test/dvp/')) return { status: 200, body: { Receipt: { Status: 'confirmed', TransactionID: 'txdvp' } } };
     return { status: 404, body: { error: 'route_not_found' } };
   };
-  return { call, log, gate, bal, hist };
+  return { call, log, gate, bal, hist, audits };
 }
 const fast = { waitMs: 2000, pollMs: 5 };
 const req = (flow: string, from: PartyId, to: PartyId, amount = '5') => ({ model: 'fabricx-adapter', flow, from, to, amount }) as never;
@@ -141,7 +153,8 @@ describe('fabricx-adapter (token v2)', () => {
     expect(await a.lens(rq, r, 'A')).toMatchObject({ role: 'sender', verdict: 'clear', amount: '7' });
     expect(await a.lens(rq, r, 'B')).toMatchObject({ role: 'receiver', verdict: 'clear', amount: '7' });
     expect(await a.lens(rq, r, 'C')).toMatchObject({ role: 'outsider', verdict: 'sealed', amount: null });
-    expect(await a.lens(rq, r, 'BI')).toMatchObject({ role: 'regulator', verdict: 'sealed', amount: null });
+    expect(await a.lens(rq, r, 'BI')).toMatchObject({ role: 'regulator', verdict: 'clear', amount: '7', counterparty: { from: 'A', to: 'B' },
+      method: expect.stringContaining('auditor BI') });
   });
 
   it('history holds back pending rows, newest first', async () => {
@@ -239,15 +252,37 @@ describe('fabricx-adapter (token v2)', () => {
     expect(h[0]).toMatchObject({ id: 'multi', flow: 'rd-transfer', amount: '7' });
   });
 
-  it('lens: BI on rd-issue is sealed at once with an honest method and never reads its own history', async () => {
+  it('lens: BI reads an rd-issue from its auditor report, never from its own wallet history', async () => {
     const t = fakeTokenV2(); const a = createFabricxTokenAdapter(t.call, { waitMs: 2000, pollMs: 5 });
     const rq = req('rd-issue', 'BI', 'A', '10'); const r = await a.run(rq, 10n, () => {});
     t.log.length = 0;
-    const t0 = Date.now(); const l = await a.lens(rq, r, 'BI');
-    expect(Date.now() - t0).toBeLessThan(500);
-    expect(l).toMatchObject({ role: 'issuer', verdict: 'sealed', amount: null, method: expect.stringContaining('Penerbitan RD tidak tercatat') });
-    expect(t.log).toEqual([]);
+    const l = await a.lens(rq, r, 'BI');
+    expect(l).toMatchObject({ role: 'issuer', verdict: 'clear', amount: '10', counterparty: { from: 'BI', to: 'A' } });
+    expect(l.onChain).toContainEqual({ label: 'Audit', value: 'verified' });
+    expect(t.log.every((x) => x.startsWith('BI GET /test/audit?from='))).toBe(true);
     expect(t.hist.BI).toEqual([]); // history.go: an issuance row has no sender, BI's wallet never appears in it
+  });
+
+  it('lens: BI is sealed with an honest method while the post-settlement audit has not reported the tx yet', async () => {
+    const t = fakeTokenV2({ auditLag: true }); const a = createFabricxTokenAdapter(t.call, { waitMs: 200, pollMs: 5 });
+    const rq = req('rd-transfer', 'A', 'B', '1'); await a.run(req('rd-issue', 'BI', 'A', '1'), 1n, () => {}); const r = await a.run(rq, 1n, () => {});
+    expect(await a.lens(rq, r, 'BI')).toMatchObject({ role: 'regulator', verdict: 'sealed', amount: null, method: expect.stringContaining('belum memuat') });
+  });
+
+  it('BI history and receipt come from the auditor report: issues, bank-to-bank transfers and the award, newest first', async () => {
+    const t = fakeTokenV2(); t.bal.A.RupiahDigital = 1_000_000_000n; const a = createFabricxTokenAdapter(t.call, fast);
+    await a.run(req('rd-issue', 'BI', 'B', '9'), 9n, () => {});
+    const x = await a.run(req('rd-transfer', 'B', 'C', '4'), 4n, () => {});
+    await a.run(req('award', 'BI', 'A', '1'), 1n, () => {});
+    const h = await a.history('BI', 10);
+    expect(h.map((i) => [i.flow, i.role, i.amount, i.rdAmount, i.counterparty])).toEqual(expect.arrayContaining([
+      ['rd-issue', 'issuer', '9', null, { from: 'BI', to: 'B' }],
+      ['rd-transfer', 'regulator', '4', null, { from: 'B', to: 'C' }],
+      ['award', 'issuer', '1', '1000000000', { from: 'BI', to: 'A' }]]));
+    expect(h).toHaveLength(3);
+    const rows = (await a.receipt(x.txHash, 'BI')).chain[0]!.rows;
+    expect(rows).toContainEqual({ label: 'Kaki 1', value: '4 RD Bank Nusantara -> Bank Sejahtera' });
+    await expect(a.receipt('nope', 'BI')).rejects.toThrow(/auditor BI/);
   });
 
   it('lens: a participant that never sees the row waits only a few seconds, not the full wait', async () => {
