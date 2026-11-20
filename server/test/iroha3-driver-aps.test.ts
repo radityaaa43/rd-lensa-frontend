@@ -107,6 +107,9 @@ describe('driverClient APS', () => {
     await expect(f.client.apsSubmit('A', pay)).rejects.toThrow(/403.*intent mismatch|intent mismatch.*403/);
     f = await fleet(() => ({ status: 409, json: { error: 'intent exists with other terms' } }));
     await expect(f.client.apsIntent('A', { intent: INTENT, asset: 'rd', to: 'B', amount: 1n })).rejects.toThrow(/409.*intent exists with other terms|intent exists with other terms.*409/);
+    // 422 = the driver found no pool arrangement for the amount (nothing proved, nothing sent): say why, not just the code
+    f = await fleet(() => ({ status: 422, json: { error: 'no pool arrangement covers the payment' } }));
+    await expect(f.client.apsSubmit('BI', { ...pay, from: 'BI' })).rejects.toThrow(/422.*no pool arrangement covers the payment.*saldo/);
     f = await fleet(() => ({ status: 502, json: { error: 'insufficient' } }));
     await expect(f.client.apsSubmit('A', pay)).rejects.toThrow('Rantai menolak: insufficient');
     f = await fleet(() => ({ status: 502, json: { error: 'no terminal receipt on all nodes: [finalized, pending, finalized, finalized]' } }));
